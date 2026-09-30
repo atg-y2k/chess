@@ -11,7 +11,7 @@ import type { AnalysisResult, Score } from '../engine/types';
 import { parseUci, uciToSan } from '../chess/utils';
 import type { Classification, MoveClass } from './types';
 import { accuracyWin, moveAccuracy } from './accuracy';
-import { capturedFreeMaterial, detectSacrifice, MIN_SACRIFICE, type Sacrifice } from './sacrifice';
+import { capturedFreeMaterial, detectSacrifice, isObviousEscape, MIN_SACRIFICE, type Sacrifice } from './sacrifice';
 import { childToMover, CP_CEILING, cpToWin, scoreToWin, type TerminalKind } from './winprob';
 
 /** Upper bounds (exclusive) of EP loss per class, from chess.com's table. Loss >= mistake is a blunder. */
@@ -45,13 +45,15 @@ export interface RatingTier {
 
 /** Thresholds for Brilliant / Great by player rating (unknown rating = club tier). */
 export function ratingTier(rating?: number): RatingTier {
+  // winningAnyway: EP 0.90 / 0.88 / 0.86 is about +6.0 / +5.4 / +4.9 pawns, so a queen up always
+  // counts as "already winning".
   if (rating != null && rating < 1200) {
-    return { brilliantMaxLoss: 0.03, brilliantMinAfter: 0.45, winningAnyway: 0.95, greatGap: 0.08, greatMinAfter: 0.4 };
+    return { brilliantMaxLoss: 0.03, brilliantMinAfter: 0.45, winningAnyway: 0.9, greatGap: 0.08, greatMinAfter: 0.4 };
   }
   if (rating != null && rating >= 2000) {
-    return { brilliantMaxLoss: 0.01, brilliantMinAfter: 0.5, winningAnyway: 0.9, greatGap: 0.12, greatMinAfter: 0.45 };
+    return { brilliantMaxLoss: 0.01, brilliantMinAfter: 0.5, winningAnyway: 0.86, greatGap: 0.12, greatMinAfter: 0.45 };
   }
-  return { brilliantMaxLoss: 0.02, brilliantMinAfter: 0.5, winningAnyway: 0.93, greatGap: 0.1, greatMinAfter: 0.45 };
+  return { brilliantMaxLoss: 0.02, brilliantMinAfter: 0.5, winningAnyway: 0.88, greatGap: 0.1, greatMinAfter: 0.45 };
 }
 
 /** Base class for an EP loss (0..1), from Excellent to Blunder. */
@@ -121,10 +123,16 @@ export interface ClassifyFacts {
   inCheckBefore: boolean;
   isBook?: boolean;
   isPromotion?: boolean;
-  /** Net material the move leaves en prise (see `detectSacrifice`), or null. */
-  sacrifice?: { netValue: number } | null;
+  /**
+   * Net material the move newly leaves en prise (see `detectSacrifice`), or null. `ignoresThreat`:
+   * the piece was attacked by the opponent's last move and the move leaves it (Brilliant only as
+   * the top move, when it is also the only good one).
+   */
+  sacrifice?: { netValue: number; ignoresThreat?: boolean } | null;
   /** The move won material by static exchange or was a plain recapture (never Great). */
   capturedFreeMaterial?: boolean;
+  /** The move only takes an attacked piece to its one safe square (never Great). */
+  obviousEscape?: boolean;
   /** EP loss of the opponent's previous move (for Miss). */
   opponentPrevWinLoss?: number;
   rating?: number;
@@ -246,9 +254,12 @@ export function classifyFromEvals(f: ClassifyFacts): ClassifyVerdict {
   const winningAnyway = alt == null || epAlt == null || isMateFor(alt.score) || epAlt >= t.winningAnyway;
 
   // 2. Brilliant: a sound piece sacrifice, (near-)best, not bad afterwards, not winning anyway.
+  //    Leaving a piece the opponent just attacked en prise must also be the only good move.
+  const criticalTop = isTop && epAlt != null && epBest - epAlt >= t.greatGap;
   if (
     f.sacrifice &&
     f.sacrifice.netValue >= MIN_SACRIFICE &&
+    (!f.sacrifice.ignoresThreat || criticalTop) &&
     loss <= t.brilliantMaxLoss &&
     (base === 'best' || base === 'excellent' || base === 'good') &&
     !f.isPromotion &&
@@ -261,13 +272,17 @@ export function classifyFromEvals(f: ClassifyFacts): ClassifyVerdict {
   }
 
   // 3. Great: the top move, and it is critical (only good move, or it changes the outcome).
+  //    Obvious moves are not Great: escaping check, promoting, winning or recapturing material,
+  //    or moving an attacked piece to its only safe square.
   if (
     base === 'best' &&
     isTop &&
     epAlt != null &&
     !f.inCheckBefore &&
+    !f.isPromotion &&
     f.legalMoveCount >= GREAT_MIN_LEGAL_MOVES &&
     !f.capturedFreeMaterial &&
+    !f.obviousEscape &&
     epPlayed >= t.greatMinAfter &&
     !winningAnyway
   ) {
@@ -319,6 +334,12 @@ export interface ClassifyMoveInput {
   playerRating?: number;
   /** The opponent's previous move; a recapture on its square is never "great". */
   prevMove?: { to: string };
+  /**
+   * The position before the opponent's previous move. Lets a move that ignores a threat the
+   * opponent just made count as a sacrifice; without it, only material the move itself newly puts
+   * en prise counts.
+   */
+  prevFenBefore?: string;
 }
 
 export interface ClassifyMoveDetail {
@@ -359,7 +380,7 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
   else if (inLines) played = inLines.score;
   else if (childBest) played = childToMover(childBest.score);
 
-  const sacrifice = playedSan ? detectSacrifice(p.fenBefore, p.moveUci) : null;
+  const sacrifice = playedSan ? detectSacrifice(p.fenBefore, p.moveUci, p.prevFenBefore) : null;
   const v = classifyFromEvals({
     lines,
     playedUci: p.moveUci,
@@ -370,6 +391,7 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
     isPromotion,
     sacrifice,
     capturedFreeMaterial: playedSan ? capturedFreeMaterial(p.fenBefore, p.moveUci, p.prevMove?.to) : false,
+    obviousEscape: playedSan ? isObviousEscape(p.fenBefore, p.moveUci) : false,
     opponentPrevWinLoss: p.opponentPrevWinLoss,
     rating: p.playerRating,
   });

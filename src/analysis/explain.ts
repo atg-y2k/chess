@@ -12,6 +12,7 @@ import { Chess, type Color, type PieceSymbol, type Square } from 'chess.js';
 import type { AnalysisResult, PvLine, Score } from '../engine/types';
 import { PIECE_NAMES, pvToSan, sideToMove, uciToSan } from '../chess/utils';
 import type { Arrow, ArrowBrush, Classification, Explanation, MoveClass } from './types';
+import { detectSacrifice } from './sacrifice';
 import { scoreToWin } from './winprob';
 import {
   VALUE,
@@ -127,28 +128,62 @@ export function materialNoun(o: MaterialOutcome): string | null {
   if (o.net < 1) return null;
   const W = o.won;
   const L = o.lost;
-  if (worth(W) === 0) return o.promotions ? 'a new queen' : null;
+  if (worth(W) === 0) return o.promoted?.length ? `a new ${NAME[o.promoted[0]]}` : null;
   if (worth(L) === 0) return nounList(W);
   if (isExchange(W, L)) return `the exchange${W.p ? ` and ${nounList({ p: W.p })}` : ''}`;
   return `${nounList(W)} for ${nounList(L)}`;
 }
 
+/** "promotes to a queen" / "promotes to a knight" for the promotions of one side, or ''. */
+function promotesTo(xs: readonly PieceSymbol[] | undefined): string {
+  if (!xs?.length) return '';
+  return xs.length === 1 ? `promotes to a ${NAME[xs[0]]}` : `promotes ${NUM[Math.min(xs.length, 8)]} pawns`;
+}
+
 /**
  * The material result of a line as a verb phrase: "wins a knight", "wins the exchange",
- * "wins the queen for a rook", "promotes to a queen", "loses a pawn"; null when about even.
+ * "wins the queen for a rook", "promotes to a queen", "loses a pawn", "lets White make a new
+ * queen"; null when about even. `opponent` names the other side ("White").
  */
-export function describeMaterial(o: MaterialOutcome): string | null {
-  const promo = o.promotions ? 'promotes to a queen' : '';
-  if (Math.abs(o.net) < 1 && !promo) return null;
+export function describeMaterial(o: MaterialOutcome, opponent = 'the opponent'): string | null {
+  const promo = promotesTo(o.promoted);
+  const they = o.theirPromoted ?? [];
+  const theirs = they.length
+    ? `lets ${opponent} ${they.length === 1 ? `make a new ${NAME[they[0]]}` : 'promote twice'}`
+    : '';
+  if (Math.abs(o.net) < 1 && !promo && !theirs) return null;
   if (o.net <= -1) {
     const W = o.won;
     const L = o.lost;
-    if (worth(W) === 0) return `loses ${nounList(L)}`;
-    return `loses ${isExchange(L, W) ? 'the exchange' : `${nounList(L)} for ${nounList(W)}`}`;
+    if (worth(L) === 0) return theirs || 'loses material';
+    const loss =
+      worth(W) === 0
+        ? `loses ${nounList(L)}`
+        : `loses ${isExchange(L, W) ? 'the exchange' : `${nounList(L)} for ${nounList(W)}`}`;
+    return theirs ? `${loss} and ${theirs}` : loss;
   }
-  if (worth(o.won) === 0) return promo || null;
-  const noun = materialNoun({ ...o, promotions: 0 }) ?? nounList(o.won);
-  return `wins ${noun}${promo ? ` and ${promo}` : ''}`;
+  if (o.net < 1) return promo || null;
+  const but = theirs ? `, but it ${theirs}` : '';
+  if (worth(o.won) === 0) return promo ? `${promo}${but}` : null;
+  const noun = materialNoun({ ...o, promotions: 0, promoted: [] }) ?? nounList(o.won);
+  return `wins ${noun}${promo ? ` and ${promo}` : ''}${but}`;
+}
+
+/**
+ * The outcome of a recapture counted from before the opponent's capture: the piece they took
+ * (`piece`) is added back to what was lost, so taking it back is not a gain.
+ */
+function countFromBeforeCapture(o: MaterialOutcome, piece: PieceSymbol): MaterialOutcome {
+  const won: Partial<Counts> = { ...o.won };
+  const lost: Partial<Counts> = { ...o.lost };
+  const minor = piece === 'b' || piece === 'n';
+  if (won[piece]) won[piece] = won[piece]! - 1;
+  else if (minor && (won.b || won.n)) {
+    if (won.b) won.b--;
+    else won.n = (won.n ?? 1) - 1;
+  } else lost[piece] = (lost[piece] ?? 0) + 1;
+  for (const w of [won, lost]) for (const k of Object.keys(w) as PieceSymbol[]) if (!w[k]) delete w[k];
+  return { ...o, won, lost, net: o.net - VALUE[piece] };
 }
 
 /** A verb phrase for what a motif does, e.g. "attacks the king and the rook on a8 at once (a fork)". */
@@ -162,7 +197,7 @@ function motifClause(m: Motif, poss: string): string | null {
       return `threatens both ${joinAnd(m.threats.map((t) => t.san))} (a double attack)`;
     case 'pin':
       if (m.exploit) return `attacks ${theOn(m.pinned, poss)}, which is pinned to the ${NAME[m.behind.type]}`;
-      return `pins ${theOn(m.pinned, poss)} to the ${NAME[m.behind.type]}${m.behind.type === 'k' ? KING_PIN : ''}`;
+      return `pins ${theOn(m.pinned, poss)} to the ${NAME[m.behind.type]}${m.frozen ? KING_PIN : ''}`;
     case 'skewer':
       return `skewers ${theOn(m.front, poss)}: once it moves, ${theOn(m.back, poss)} behind it falls`;
     case 'discovered':
@@ -247,9 +282,9 @@ function principleText(p: Principle): string {
     case 'develops':
       return `develops the ${NAME[p.piece]}`;
     case 'centrePawn':
-      return 'takes space in the centre';
+      return 'takes space in the center';
     case 'centreControl':
-      return 'fights for the centre';
+      return 'fights for the center';
     case 'earlyQueen':
       return 'brings the queen out early, where enemy pieces can chase it';
     case 'edgePawn':
@@ -261,7 +296,7 @@ function principleText(p: Principle): string {
     case 'luft':
       return 'gives the king an escape square';
     case 'passedPawn':
-      return 'pushes a passed pawn towards promotion';
+      return 'pushes a passed pawn toward promotion';
     case 'rookSeventh':
       return 'puts the rook on the seventh rank';
     case 'openFile':
@@ -279,7 +314,7 @@ function principleText(p: Principle): string {
     case 'bishopPair':
       return 'gives up the bishop pair';
     case 'kingActive':
-      return 'brings the king towards the centre';
+      return 'brings the king toward the center';
     case 'activates':
       return `brings the ${NAME[p.piece]} to a more active square`;
   }
@@ -351,7 +386,11 @@ interface Reason {
   fallback: boolean;
 }
 
-function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove): Reason | null {
+/**
+ * Why the first move of `line` (an engine line for `fen`, mover's POV) is good. `nested`: this is
+ * the follow-up move of an outer line (no further look-ahead).
+ */
+function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove, nested = false): Reason | null {
   const uci = line.pv[0];
   if (!uci) return null;
   const mm = moveMotifs(fen, uci);
@@ -395,47 +434,74 @@ function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove): Reason
       mate === -1 ? [`${opp} mates next move.`] : mate < 0 ? [`${opp} still has a forced mate in ${-mate}.`] : [];
     if (pre.moves().length === 1) return res('Only move', 'is the only legal move', rest, { motifs: ['onlyMove'] });
     if (pre.inCheck()) return res('Check', escapeText(move.captured, move.piece), rest, { motifs: ['escapesCheck'] });
-    return res('Forced mate', 'is the most stubborn defence', rest, { motifs: ['mated'] });
+    return res('Forced mate', 'is the most stubborn defense', rest, { motifs: ['mated'] });
   }
 
-  // Material won along the line, with the tactic that explains it.
+  // Material won along the line, with the tactic that explains it. A recapture is counted from
+  // before the opponent's capture: taking the piece back is not a gain.
   const out = materialOutcome(fen, line.pv, me);
-  const mat = describeMaterial(out);
+  const Opp = SIDE[other(me)];
   const recapture = !!(prev?.captured && prev.to === move.to && move.captured);
-  const prevValue = recapture ? (VALUE[prev!.captured as PieceSymbol] ?? 0) : 0;
-  const balance = materialBalance(pre, me);
-  const matAfter = balance + out.net;
+  const prevPiece = recapture ? (prev!.captured as PieceSymbol) : null;
+  const prevValue = prevPiece ? (VALUE[prevPiece] ?? 0) : 0;
+  const gained = prevPiece && VALUE[prevPiece] !== undefined ? countFromBeforeCapture(out, prevPiece) : out;
+  const mat = describeMaterial(gained, Opp);
+  const balance = materialBalance(pre, me) + prevValue;
+  const matAfter = balance + gained.net;
   // If the line "wins" a lot but the eval is far below the resulting material balance, the other
   // side is sacrificing for compensation: don't claim a win (Stockfish compresses big advantages).
   const evalPawns = line.score?.kind === 'cp' ? line.score.value / 100 : undefined;
   const compensated =
     evalPawns !== undefined &&
-    out.net >= 2 &&
+    gained.net >= 2 &&
     matAfter > 0 &&
     evalPawns < matAfter - 2.5 &&
     evalPawns < 0.6 * matAfter &&
     canWin(out.fen, me);
-  if (out.net - prevValue >= 1 && mat && !compensated) {
-    const hot = [...out.captureSquares, ...(move.captured ? [move.to] : [])];
-    // Only motifs that explain where the material actually comes from.
-    const explains = (m: Motif) => {
-      if (m.kind === 'freeCapture') return VALUE[m.captured.type] >= out.net - 1;
-      if (m.kind === 'mateThreat' || m.kind === 'promotion' || m.kind === 'promotionThreat') return true;
-      return motifSquares(m).some((q) => out.captureSquares.includes(q));
-    };
-    const relevant = rankMotifs(
-      motifs.filter((m) => TACTICAL_KINDS.includes(m.kind)),
-      hot,
-    ).filter(explains);
-    const top = relevant.find((m) => motifClause(m, v.victim));
-    if (top) arrows.push(...motifArrows(top, move.to));
-    const back = balance < 0 && out.net <= -balance + 0.5 && worth(out.lost) === 0;
-    const reason = back ? mat.replace(/^wins /, 'wins back ') : mat;
+  const hot = [...out.captureSquares, ...(move.captured ? [move.to] : [])];
+  // Only motifs that explain where the material actually comes from (not the piece taken back).
+  const explains = (m: Motif) => {
+    if (m.kind === 'freeCapture') return !recapture && VALUE[m.captured.type] >= gained.net - 1;
+    if (m.kind === 'mateThreat' || m.kind === 'promotion' || m.kind === 'promotionThreat') return true;
+    return motifSquares(m).some((q) => out.captureSquares.includes(q));
+  };
+  const relevant = rankMotifs(
+    motifs.filter((m) => TACTICAL_KINDS.includes(m.kind)),
+    hot,
+  ).filter(explains);
+  const tactic = relevant.find((m) => motifClause(m, v.victim));
+  // A quiet move does not "win" the pawn the opponent gives up for play (a gambit line) unless a
+  // tactic explains the gain or the evaluation backs it up.
+  const gambit =
+    evalPawns !== undefined &&
+    !move.captured &&
+    !move.promotion &&
+    !tactic &&
+    gained.net < 2 &&
+    evalPawns < matAfter - 0.7 &&
+    evalPawns < 0.5;
+  if (gained.net >= 1 && mat && !compensated && !gambit) {
+    if (tactic) arrows.push(...motifArrows(tactic, move.to));
+    const back = balance < 0 && gained.net <= -balance + 0.5 && worth(gained.lost) === 0;
+    let reason = back ? mat.replace(/^wins /, 'wins back ') : mat;
+    if (!move.promotion && gained.promoted?.length) {
+      // The promotion comes later in the line, not with this move.
+      const promo = out.sans.find((x, i) => i % 2 === 0 && x.includes('='));
+      reason =
+        worth(gained.won) === 0
+          ? `lets ${v.own} pawn promote${promo ? ` with ${promo}` : ''}`
+          : reason.replace(/(and )?promotes to/, (_, and) => `${and ?? ''}then promotes to`);
+    }
     const keyLine = out.sans.length > 1 ? `Key line: ${out.sans.slice(0, 6).join(' ')}.` : null;
-    const detail = top ? `It ${motifClause(top, v.victim)}.` : keyLine;
-    return res(top ? (MOTIF_TITLE[top.kind] ?? 'Wins material') : 'Wins material', reason, detail ? [detail] : [], {
-      motifs: ['winsMaterial', ...(top ? [top.kind] : [])],
-    });
+    // "promotes to a queen" already says what the promotion motif would.
+    const said = tactic?.kind === 'promotion' && /promotes/.test(reason);
+    const detail = tactic && !said ? `It ${motifClause(tactic, v.victim)}.` : keyLine;
+    return res(
+      tactic ? (MOTIF_TITLE[tactic.kind] ?? 'Wins material') : 'Wins material',
+      reason,
+      detail ? [detail] : [],
+      { motifs: ['winsMaterial', ...(tactic ? [tactic.kind] : [])] },
+    );
   }
   if (recapture) return res('Recapture', `recaptures the ${NAME[move.captured!]}`, [], { motifs: ['recapture'] });
   if (pre.inCheck()) return res('Check', escapeText(move.captured, move.piece), [], { motifs: ['escapesCheck'] });
@@ -444,12 +510,29 @@ function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove): Reason
   const stopped = stoppedThreat(fen, uci);
   if (stopped) {
     arrows.push(...arrow(stopped.from + stopped.to, 'threat'));
-    return res('Defence', stoppedText(stopped, v.own), [], { motifs: ['defence'] });
+    return res('Defense', stoppedText(stopped, v.own), [], { motifs: ['defence'] });
   }
 
-  // Strong tactics first, then principles, then minor motifs (a simple threat or attack).
-  const top = rankMotifs(motifs).find((m) => motifClause(m, v.victim));
-  const good = principles(fen, uci).filter((p) => p.good);
+  // Material given up along the line: a sacrifice (this move puts it en prise), or returning part
+  // of a big lead while staying winning. A pawn given back is only mentioned when nothing else is.
+  const keyLine = out.sans.length > 1 ? [`Key line: ${out.sans.slice(0, 6).join(' ')}.`] : [];
+  const givenUp = givenUpReason(fen, uci, line, out, matAfter, Opp, v);
+  if (givenUp && (givenUp.title === 'Promotion' || worth(out.lost) - worth(out.won) >= 2)) {
+    return res(givenUp.title, givenUp.reason, keyLine, { motifs: givenUp.motifs });
+  }
+
+  // Strong tactics first, then principles, then minor motifs (a simple threat or attack). When the
+  // engine line shows the move wins nothing, a "winning" tactic (fork, double attack, skewer, trap)
+  // is not real: the opponent has a defence.
+  const lineWins = gained.net >= 1 || line.pv.length < 3;
+  const top = rankMotifs(motifs).find(
+    (m) => (lineWins || !WINNING_KINDS.includes(m.kind)) && motifClause(m, v.victim),
+  );
+  // For a capture, what was traded matters more than development or the center.
+  const tradeFirst = (p: Principle) => (move.captured && (p.kind === 'trade' || p.kind === 'tradeAhead') ? 0 : 1);
+  const good = principles(fen, uci)
+    .filter((p) => p.good)
+    .sort((a, b) => tradeFirst(a) - tradeFirst(b));
   const strong = !!top && !MINOR_KINDS.includes(top.kind);
   const parts: { text: string; tag: string; motif?: Motif }[] = good.map((p) => ({
     text: principleText(p),
@@ -470,10 +553,105 @@ function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove): Reason
         : 'Positional';
     return res(title, joinAnd(used.map((x) => x.text)), [], { motifs: used.map((x) => x.tag) });
   }
+
+  // Nothing about the move itself: say what it prepares (the mover's next move in the line).
+  const checks = motifs.some((m) => m.kind === 'check');
+  if (!nested && out.net > -1) {
+    const next = followUp(fen, line, v);
+    if (next) {
+      const reason = checks
+        ? `gives check, and then ${next.san} ${next.reason}`
+        : `prepares ${next.san}, which ${next.reason}`;
+      return res(next.title, reason, next.details.slice(0, 1), { motifs: ['prepares', ...next.motifs] });
+    }
+  }
+  if (givenUp) return res(givenUp.title, givenUp.reason, keyLine, { motifs: givenUp.motifs });
   const main = playLine(fen, line.pv, 5).sans;
   const mainLine = main.length > 1 ? [`Main line: ${main.join(' ')}.`] : [];
+  if (checks) return res('Check', 'gives check', mainLine, { fallback: true, motifs: ['check'] });
   return res('Positional', 'improves the position', mainLine, { fallback: true });
 }
+
+/**
+ * The line gives material away: "sacrifices a knight for a pawn" (the move puts it en prise) or
+ * "gives up the exchange and keeps a winning position" (returning part of a big lead); else null.
+ */
+function givenUpReason(
+  fen: string,
+  uci: string,
+  line: Line,
+  out: MaterialOutcome,
+  matAfter: number,
+  Opp: string,
+  v: Voice,
+): { title: string; reason: string; motifs: string[] } | null {
+  if (out.net > -1 || !out.settled || !line.score || line.pv.length < 2) return null;
+  const first = playLine(fen, line.pv, 2).moves;
+  if (first[0]?.promotion && first[1]?.to === first[0].to) {
+    const piece = NAME[first[0].promotion];
+    return { title: 'Promotion', reason: `promotes, but the new ${piece} is taken at once`, motifs: ['promotion'] };
+  }
+  const loss = describeMaterial(out, Opp);
+  const given = loss?.startsWith('loses ') ? loss.slice('loses '.length) : null;
+  if (!given) return null;
+  const winning = scoreToWin(line.score) >= WINNING;
+  const givesBack = {
+    title: 'Gives back material',
+    reason: `gives up ${given} and keeps a winning position`,
+    motifs: ['givesBack'],
+  };
+  if (winning && matAfter >= 3) return givesBack;
+  // Giving material up in a lost position is not a sacrifice.
+  const sac = scoreToWin(line.score) > 1 - WINNING ? detectSacrifice(fen, uci) : null;
+  if (sac) {
+    // Name the piece offered when the line wins part of it back ("sacrifices the knight on d6").
+    const piece = sac.piece as PieceSymbol;
+    const what = out.lost[piece] ? given : theOn({ square: sac.square, type: piece, color: sideToMove(fen) }, v.own);
+    return { title: 'Sacrifice', reason: `sacrifices ${what}`, motifs: ['sacrifice'] };
+  }
+  return winning ? givesBack : null;
+}
+
+/** Tactics that claim to win material (not real when the engine line wins nothing). */
+const WINNING_KINDS: readonly MotifKind[] = ['fork', 'doubleThreat', 'skewer', 'trapped'];
+
+/** Reasons a follow-up move may give ("prepares Qh5, which threatens mate with Qh7#"). */
+const FOLLOW_TITLES = new Set([
+  'Checkmate',
+  'Forced mate',
+  'Wins material',
+  'Fork',
+  'Double attack',
+  'Pin',
+  'Skewer',
+  'Discovered attack',
+  'Trapped piece',
+  'Mate threat',
+  'Promotion',
+  'Threat',
+  'Sacrifice',
+]);
+
+/** The reason for the mover's next move in `line` (two plies on), when it is a concrete one. */
+function followUp(fen: string, line: Line, v: Voice): Reason | null {
+  if (line.pv.length < 3) return null;
+  const pl = playLine(fen, line.pv, 2);
+  if (pl.moves.length < 2) return null;
+  const reply = pl.moves[1];
+  // Two plies later the same side is to move: a mate score is one move shorter.
+  const score: Score | undefined =
+    line.score?.kind === 'mate' && line.score.value > 1 ? { kind: 'mate', value: line.score.value - 1 } : line.score;
+  const prev = reply.captured ? { to: reply.to, captured: reply.captured } : undefined;
+  const r = explainLine(pl.fens[2], { pv: line.pv.slice(2), score }, v, prev, true);
+  if (!r || r.fallback) return null;
+  return FOLLOW_TITLES.has(r.title) || r.motifs.some((k) => FOLLOW_PRINCIPLES.has(k)) ? r : null;
+}
+
+/** Principles worth preparing ("Be2 prepares O-O, which castles the king to safety …"). */
+const FOLLOW_PRINCIPLES = new Set<string>(['castles', 'trade', 'tradeAhead', 'rookSeventh', 'passedPawn']);
+
+/** Expected score at or above which the mover is winning (about +3). */
+const WINNING = 0.75;
 
 /** Red arrows from the piece that makes a tactic to what it hits. */
 function motifArrows(m: Motif, movedTo: string): Arrow[] {
@@ -705,7 +883,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
       return done(`${move.san} is forced: it's the only legal move.`, [`${mateIn}.`], 'Only move', ['onlyMove']);
     }
     if (isBest || (bestMate !== null && oppMates >= -bestMate)) {
-      return done(`${move.san} is the most stubborn defence.`, [`${mateIn}.`], 'Forced mate', ['mated']);
+      return done(`${move.san} is the most stubborn defense.`, [`${mateIn}.`], 'Forced mate', ['mated']);
     }
     arrows.push(...arrow(bestUci, 'best'));
     const longer = bestSan && `${bestSan} would have lasted longer.`;
@@ -726,27 +904,27 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     );
   }
 
-  // 3. Good moves: praise with the reason, plus the better move when there was one.
-  if (!BAD.includes(cl.cls)) return praise();
-
-  // 4. Bad moves.
-  const playedOut = materialOutcome(fenBefore, playedLine.pv, me);
-  const bestOut = bestLine ? materialOutcome(fenBefore, bestLine.pv, me) : null;
+  // Material along the played line and the best line (mover's POV), computed on demand.
+  let outs: { played: MaterialOutcome; best: MaterialOutcome | null } | undefined;
+  const lineOutcomes = () =>
+    (outs ??= {
+      played: materialOutcome(fenBefore, playedLine.pv, me),
+      best: bestLine ? materialOutcome(fenBefore, bestLine.pv, me) : null,
+    });
   const replyMove = refutation.moves[0];
   const recapture = !!(p.prevMove?.captured && p.prevMove.to === move.to);
   const grab = move.captured && !recapture ? `${move.san} grabs ${withArticle(move.captured)}, but it` : null;
-  const details: (string | null | false | undefined)[] = [];
-  let headline: string;
-  let title: string;
-  let motifs: string[];
+  /** `direct`: the reply simply takes a piece the move left hanging. */
+  type Verdict = { headline: string; details: string[]; title: string; motifs: string[]; direct?: boolean };
 
-  if (reply && replyMove && playedOut.net <= -1 && playedOut.net < (bestOut?.net ?? 0) - 0.5) {
-    // 4a. Material lost to the reply.
-    arrows.push(...arrow(reply.pv[0], 'threat'));
+  /** The move loses material to the reply that the best move would not have lost. */
+  function materialLost(): Verdict | null {
+    const { played, best } = lineOutcomes();
+    if (!reply || !replyMove || played.net > -1 || played.net >= (best?.net ?? 0) - 0.5) return null;
     const oppOut = materialOutcome(fenAfter, reply.pv, opp);
     // After "Nxe5 grabs a pawn, but it …" name only what is lost, not the trade balance.
     const noun = (grab ? (worth(oppOut.won) > 0 ? nounList(oppOut.won) : null) : materialNoun(oppOut)) ?? 'material';
-    const gains = describeMaterial(oppOut) ?? 'wins material';
+    const gains = describeMaterial(oppOut, SIDE[me]) ?? 'wins material';
     const replyMotifs = moveMotifs(fenAfter, reply.pv[0])?.motifs ?? [];
     const relevant = (m: Motif) =>
       REPLY_KINDS.includes(m.kind) &&
@@ -760,24 +938,55 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
       (h) => h.piece.square === replyMove.to || oppOut.captureSquares.includes(h.piece.square),
     );
     if (mf) {
-      headline = `${grab ?? 'This'} loses ${noun} to ${motifNoun(mf)}.`;
-      details.push(`${Opp} answers ${replyMove.san}, which ${motifClause(mf, v.own)}.`);
-      title = MOTIF_TITLE[mf.kind] ?? 'Loses material';
-      motifs = [mf.kind];
-    } else if (hang) {
+      return {
+        headline: `${grab ?? 'This'} loses ${noun} to ${motifNoun(mf)}.`,
+        details: [`${Opp} answers ${replyMove.san}, which ${motifClause(mf, v.own)}.`],
+        title: MOTIF_TITLE[mf.kind] ?? 'Loses material',
+        motifs: [mf.kind],
+      };
+    }
+    if (hang) {
       const moved = hang.piece.square === move.to;
-      headline = `${grab ?? 'This'} ${hangingVerb(hang, fenBefore, fenAfter, move.from, move.to, v)}.`;
       const lower = moved && hang.defenders > 0 ? hang.lowerAttacker : undefined;
       const byLower = lower ? `Even though it is defended, ${withArticle(lower.type)} can take it: ` : '';
-      details.push(`${byLower}${Opp} plays ${replyMove.san} and ${gains}.`);
-      title = 'Hanging piece';
-      motifs = ['hanging'];
-    } else {
-      headline = `${grab ?? 'This'} loses ${noun}.`;
-      details.push(`After ${oppOut.sans.slice(0, 4).join(' ')}, ${Opp} ${gains}.`);
-      title = 'Loses material';
-      motifs = ['losesMaterial'];
+      return {
+        headline: `${grab ?? 'This'} ${hangingVerb(hang, fenBefore, fenAfter, move.from, move.to, v)}.`,
+        details: [`${byLower}${Opp} plays ${replyMove.san} and ${gains}.`],
+        title: 'Hanging piece',
+        motifs: ['hanging'],
+        direct: hang.piece.square === replyMove.to && hang.piece.type !== 'p',
+      };
     }
+    return {
+      headline: `${grab ?? 'This'} loses ${noun}.`,
+      details: [`After ${oppOut.sans.slice(0, 4).join(' ')}, ${Opp} ${gains}.`],
+      title: 'Loses material',
+      motifs: ['losesMaterial'],
+    };
+  }
+
+  // 3. Good moves: praise with the reason, plus the better move when there was one.
+  if (!BAD.includes(cl.cls)) return praise();
+
+  // 4. Bad moves.
+  const { played: playedOut, best: bestOut } = lineOutcomes();
+  const details: (string | null | false | undefined)[] = [];
+  let headline: string;
+  let title: string;
+  let motifs: string[];
+  const lost = materialLost();
+  const under = move.promotion && move.promotion !== 'q' && bestUci === move.from + move.to + 'q';
+
+  if (under) {
+    // 4u. Underpromotion where a queen was best.
+    headline = `${move.san} promotes to a ${NAME[move.promotion!]} instead of a queen.`;
+    title = 'Promotion';
+    motifs = ['underpromotion'];
+  } else if (lost) {
+    // 4a. Material lost to the reply.
+    arrows.push(...arrow(reply?.pv[0], 'threat'));
+    ({ headline, title, motifs } = lost);
+    details.push(...lost.details);
   } else if (bestOut && bestSan && bestLine && !isBest && bestOut.net >= 1 && bestOut.net - playedOut.net >= 1) {
     // 4b. Missed a tactic or free material.
     const br = bestReason();
@@ -803,7 +1012,8 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     else if (cl.cls === 'miss') headline = `${v.subject} missed a chance to punish ${Opp}'s mistake.`;
     else headline = evalHeadline(cl, v, Opp);
     // Only mention the reply when it does something concrete (a tactic, a threat, winning material).
-    const useReply = !!rr && !rr.fallback && !['Recapture', 'Positional', 'Opening principle'].includes(rr.title);
+    const useReply =
+      !!rr && !rr.fallback && !['Recapture', 'Positional', 'Opening principle', 'Check'].includes(rr.title);
     if (useReply) {
       details.push(`${Opp} can answer ${rr.san}, which ${rr.reason}.`);
       arrows.push(...arrow(reply?.pv[0], 'threat'));
@@ -819,34 +1029,84 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
 
   /** Explanation for a good move (best, excellent, good, great, brilliant, book, forced). */
   function praise(): Explanation {
-    const r = explainLine(fenBefore, playedLine, v, p.prevMove);
+    // In a decided position a lost piece barely moves the expected score, so an Excellent or Good
+    // move can still simply hang a piece: say so instead of praising it.
+    const decided = cl.winBefore >= WINNING || cl.winBefore <= 1 - WINNING;
+    const quietMove = !move.captured && !move.promotion && !iStillMate;
+    if ((cl.cls === 'good' || cl.cls === 'excellent') && !isBest && decided && quietMove) {
+      const lost = materialLost();
+      if (lost?.direct) {
+        const still =
+          cl.winAfter >= WINNING
+            ? `${v.subject} ${v.you ? 'are' : 'is'} still winning.`
+            : cl.winBefore <= 1 - WINNING
+              ? 'The position was already lost.'
+              : null;
+        arrows.push(...arrow(reply?.pv[0], 'threat'), ...(bestSan ? arrow(bestUci, 'best') : []));
+        const details = [...lost.details, still, bestSan && bestSentence('Best was')];
+        return done(lost.headline, details, lost.title, lost.motifs);
+      }
+    }
+    // The best move is explained with the same engine line as the hint, so the two agree.
+    const own = isBest && beforeLines[0]?.pv[0] === moveUci ? asLine(beforeLines[0]) : null;
+    const r = explainLine(fenBefore, own ?? playedLine, v, p.prevMove);
     const neg = isBest ? undefined : principles(fenBefore, moveUci).find((x) => !x.good);
     let headline = r ? `${r.san} ${r.reason}.` : `${move.san} is a reasonable move.`;
     const details: (string | null | false | undefined)[] = r && !r.fallback ? [r.details[0]] : [];
+    const onlyMove = isBest && onlyGoodMove(beforeLines);
+    const sac =
+      cl.cls === 'brilliant' || cl.cls === 'great'
+        ? sacrificeDetail(cl.cls, fenBefore, moveUci, fenAfter, reply, refutation.sans, me, v)
+        : null;
+    if (r?.fallback && r.title === 'Positional') headline = `${move.san} ${plainReason(r.reason)}.`;
     if (neg && (!r || r.fallback || r.title === 'Positional' || r.title === 'Opening principle')) {
       headline = `${move.san} is playable, but it ${principleText(neg)}.`;
       details.length = 0;
     }
     if (r) arrows.push(...r.arrows);
+    if (sac && r?.title === 'Sacrifice') details.length = 0; // the sacrifice sentence shows the line
     if (iHadMate && iStillMate > iHadMate && bestSan) {
       details.push(`${bestSan} was even quicker: mate in ${iHadMate}.`);
       arrows.push(...arrow(bestUci, 'best'));
     } else if (!isBest && bestSan && (cl.cls === 'good' || neg)) {
       const br = bestReason();
-      const better = br && !br.fallback && br.reason !== r?.reason;
+      const same =
+        !!br &&
+        !!r &&
+        (br.reason === r.reason ||
+          r.details.includes(`It ${br.reason}.`) ||
+          br.motifs.some((k) => TACTICAL_KINDS.includes(k as MotifKind) && r.motifs.includes(k)));
+      const better = br && !br.fallback && !same;
       details.push(better ? `${bestSan} was better: it ${br.reason}.` : `${bestSan} was slightly more accurate.`);
       arrows.push(...arrow(bestUci, 'best'));
     }
-    if (cl.cls === 'brilliant' || cl.cls === 'great') {
-      const sac = sacrificeDetail(fenAfter, reply, refutation.sans, me, v);
-      if (sac) details.push(sac);
-      else if (cl.cls === 'great' && isBest && onlyGoodMove(beforeLines)) {
-        details.push('It was the only good move here.');
-      }
+    if (sac) details.push(sac);
+    else if (cl.cls === 'great' && onlyMove && !headline.includes('the only move')) {
+      details.push('It was the only good move here.');
     }
     if (r?.fallback && details.length === 0) details.push(...r.details);
     return done(headline, details, r?.title ?? 'Good move', r?.motifs ?? []);
+
+    /** What kind of move it is when nothing specific was found, instead of "improves the position". */
+    function plainReason(fallback: string): string {
+      const sacked = cl.cls === 'brilliant' ? sacrificedPiece(fenBefore, moveUci, fenAfter, me, true) : null;
+      if (sacked) return `sacrifices ${theOn(sacked, v.own)}`;
+      if (onlyMove && bestLine?.score) return onlyMoveReason(bestLine.score);
+      if (cl.cls === 'book') return 'is a known opening move';
+      if (isBest) return fallback;
+      if (cl.winAfter <= 1 - WINNING) return 'is a reasonable try in a difficult position';
+      if (cl.winAfter >= WINNING) return `keeps ${v.own} winning position`;
+      return cl.cls === 'good' ? 'is playable' : 'is a solid move';
+    }
   }
+}
+
+/** "is the only move that keeps the advantage" (a Great only move without a concrete reason). */
+function onlyMoveReason(best: Score): string {
+  const w = scoreToWin(best);
+  if (w >= 0.6) return 'is the only move that keeps the advantage';
+  if (w >= 0.4) return 'is the only move that keeps the balance';
+  return 'is the only move that keeps the game going';
 }
 
 /**
@@ -890,10 +1150,11 @@ function mateSentence(lead: string, sans: readonly string[], mateIn: number): st
 function evalHeadline(cl: Classification, v: Voice, Opp: string): string {
   const b = cl.winBefore;
   const a = cl.winAfter;
+  // Where the game ends up comes first: "back into the game" undersells a swing to the other side.
   if (a <= 0.2 && b > 0.3) return `This gives ${Opp} a winning position.`;
+  if (a < 0.45 && b >= 0.45) return `This gives ${Opp} the better game.`;
   if (b >= 0.7 && a < 0.6) return `This throws away most of ${v.own} advantage.`;
   if (b > 0.55 && a <= 0.55) return `This lets ${Opp} back into the game.`;
-  if (a < 0.45 && b >= 0.45) return `This gives ${Opp} the better game.`;
   if (b > 0.55) return `This gives away part of ${v.own} advantage.`;
   return b - a < 0.1 ? `This makes ${v.own} position a little worse.` : `This makes ${v.own} position worse.`;
 }
@@ -909,29 +1170,52 @@ function onlyGoodMove(lines: readonly PvLine[]): boolean {
  * e.g. "If Black takes with Bxd1, Bxf7+ Ke7 Nd5# is checkmate."
  */
 function sacrificeDetail(
+  cls: MoveClass,
+  fenBefore: string,
+  moveUci: string,
   fenAfter: string,
   reply: Line | null,
   refutation: string[],
   me: Color,
   v: Voice,
 ): string | null {
-  const h = hangingPieces(fenAfter, me).find((x) => x.see >= 2);
+  const h = sacrificedPiece(fenBefore, moveUci, fenAfter, me, cls === 'brilliant');
   if (!h) return null;
   const Opp = SIDE[other(me)];
-  const name = NAME[h.piece.type];
-  const accepted = reply?.pv[0]?.slice(2, 4) === h.piece.square;
+  const name = NAME[h.type];
+  const accepted = reply?.pv[0]?.slice(2, 4) === h.square;
   if (accepted) {
     return refutation.length >= 2
       ? `The ${name} sacrifice pays off: ${refutation.slice(0, 4).join(' ')}.`
       : `Giving up the ${name} pays off.`;
   }
-  const take = winningCaptures(fenAfter).find((w) => w.to === h.piece.square);
+  // Only a legal capture can "be a mistake" (not while the opponent is in check and cannot take).
+  const board = new Chess(fenAfter);
+  if (!board.moves({ verbose: true }).some((m) => m.to === h.square)) return null;
+  const take = winningCaptures(fenAfter).find((w) => w.to === h.square);
   if (take) {
     const c = new Chess(fenAfter);
     c.move({ from: take.from, to: take.to, promotion: 'q' });
     const mate = forcedMateLine(c.fen(), 2);
     if (mate) return `If ${Opp} takes with ${take.san}, ${mate.join(' ')} is checkmate.`;
   }
-  return `Taking ${v.own} ${on(h.piece)} would be a mistake for ${Opp}.`;
+  return `Taking ${v.own} ${on(h)} would be a mistake for ${Opp}.`;
+}
+
+/**
+ * The piece a sacrifice leaves en prise: the one the move newly offers (see `detectSacrifice`), or
+ * with `anyLoose` (a move classified Brilliant) any piece the opponent could win.
+ */
+function sacrificedPiece(
+  fenBefore: string,
+  moveUci: string,
+  fenAfter: string,
+  me: Color,
+  anyLoose: boolean,
+): PieceOn | null {
+  const hanging = hangingPieces(fenAfter, me).filter((x) => x.see >= 2);
+  const sq = detectSacrifice(fenBefore, moveUci)?.square;
+  const offered = hanging.find((x) => x.piece.square === sq) ?? (anyLoose ? hanging[0] : undefined);
+  return offered?.piece ?? null;
 }
 

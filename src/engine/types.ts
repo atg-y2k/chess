@@ -69,12 +69,20 @@ export interface SearchOptions {
   signal?: AbortSignal;
 }
 
+/** Download progress of the engine's `.wasm` (bytes). */
+export interface DownloadProgress {
+  loaded: number;
+  total: number;
+}
+
 /** Abstracts how UCI text reaches the engine (Web Worker in the browser, child process in tests). */
 export interface EngineTransport {
   post(command: string): void;
   onLine(callback: (line: string) => void): void;
   /** Optional: reports a crashed/unloadable engine (worker `error` event, child process exit). */
   onError?(callback: (error: Error) => void): void;
+  /** Optional: `.wasm` download progress while the engine loads (`loaded === total` when complete). */
+  onProgress?(callback: (progress: DownloadProgress) => void): void;
   terminate(): void;
 }
 

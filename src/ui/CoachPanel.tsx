@@ -62,7 +62,7 @@ export function CoachPanel({ cls, title, lines, busy = false, actions, collapsed
   const meta = cls ? CLASS_META[cls] : undefined;
   const tone = meta ? { '--coach-tone': meta.color } : undefined;
   const badge = busy ? (
-    <span class="coach-spin" role="img" aria-label="Analysing" />
+    <span class="coach-spin" role="img" aria-label="Analyzing" />
   ) : cls ? (
     <ClassIcon cls={cls} size={collapsed ? 18 : 20} />
   ) : null;

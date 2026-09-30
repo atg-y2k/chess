@@ -17,6 +17,8 @@ export interface PlayerStripProps {
   active: boolean;
   /** Bot thinking indicator (animated dots). */
   thinking?: boolean;
+  /** The game no longer counts for this player's rating (takebacks, hints or arrows were used). */
+  unrated?: boolean;
 }
 
 export interface CapturedGroup {
@@ -57,10 +59,13 @@ export function PlayerStrip({
   materialDiff,
   active,
   thinking = false,
+  unrated = false,
 }: PlayerStripProps) {
   const groups = groupCaptured(captured);
   const status = thinking ? 'thinking' : active ? 'to move' : '';
-  const label = [name, rating != null ? `rating ${rating}` : '', status].filter(Boolean).join(', ');
+  const label = [name, rating != null ? `rating ${rating}` : '', unrated ? 'unrated game' : '', status]
+    .filter(Boolean)
+    .join(', ');
   const capLabel = groups.length ? `Captured ${capturedLabel(groups)}` : '';
   const diff = Math.round(materialDiff);
 
@@ -79,6 +84,11 @@ export function PlayerStrip({
         <div class="pstrip-top">
           <span class="pstrip-name">{name}</span>
           {rating != null && <span class="pstrip-rating">({Math.round(rating)})</span>}
+          {unrated && (
+            <span class="pstrip-unrated" title="Takebacks, hints or best-move arrows were used: this game won’t change your rating">
+              Unrated
+            </span>
+          )}
         </div>
         <div class="pstrip-caps" aria-label={capLabel || undefined} role={capLabel ? 'img' : undefined}>
           {groups.map(({ piece, count }) => (

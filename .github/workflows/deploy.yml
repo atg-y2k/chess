@@ -1,4 +1,6 @@
-# Builds the app and publishes it to GitHub Pages at https://<owner>.github.io/chess/.
+# Tests the app, builds it and publishes it to GitHub Pages at https://<owner>.github.io/chess/.
+# Nothing is published unless the unit tests and the Playwright end-to-end tests (run against a
+# /chess/ build, like the published one) pass: installed apps pick up a new version by themselves.
 # One-time setup: repository Settings > Pages > Build and deployment > Source = "GitHub Actions".
 # (Pages needs a public repository on GitHub Free.)
 name: Deploy to GitHub Pages
@@ -53,8 +55,47 @@ jobs:
         with:
           path: ./dist
 
+  # Same end-to-end tests as ci.yml, against the Pages layout. Playwright builds the app itself
+  # (playwright.config.ts) with the same settings as the build job.
+  e2e:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright e2e tests
+        run: npx playwright test
+        env:
+          BASE_PATH: /chess/
+          # Fail if the app does not register its service worker itself (src/main.tsx).
+          E2E_REQUIRE_APP_SW: '1'
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
   deploy:
-    needs: build
+    needs: [build, e2e]
     runs-on: ubuntu-latest
     environment:
       name: github-pages

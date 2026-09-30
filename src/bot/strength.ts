@@ -14,11 +14,24 @@
  *    move (Fairy-Stockfish idea) so strength changes smoothly with Elo.
  *  - 3200 `full`: the engine's best move.
  *
+ * Decided positions deliberately deviate from the weakening above (and from upstream pick_best, which
+ * picks almost uniformly between mate-in-1 and mate-in-2 lines and so never finishes a won ending):
+ *  - Skill band: a forced mate among the lines is always played, shortest first.
+ *  - Conversion (a lone king, or king + pawns / one minor piece, against at least a rook's worth
+ *    more material, with a clearly winning score): an extra deep search (`conversionSearchFor`) gives a
+ *    move that makes progress. The skill band plays it; the custom band plays it with an
+ *    Elo-dependent probability and otherwise stays human-ish but only among moves that keep the win
+ *    (never hanging the queen to a bare king, never stalemating).
+ *  - Repetition guard: the engine searches the bare FEN, so it cannot see that a move repeats an
+ *    earlier position. When the bot is clearly better, moves that complete a threefold repetition
+ *    (or let the opponent complete one with a single reply) are avoided, using the game's position
+ *    counts (`ChooseContext.positions`; BotPlayer replays the move history for them).
+ *
  * Searches are depth/node limited, never `movetime`: iOS freezes workers in the background and a
  * wall-clock limit would return a shallow move on resume. Node caps are sized for ~0.5-0.8 Mnps
  * (iPhone estimate) so the strongest levels think at most ~2.5 s.
  */
-import { Chess, type Move } from 'chess.js';
+import { Chess, type Move, type Square } from 'chess.js';
 import type { AnalysisResult, PvLine, Score, SearchOptions } from '../engine/types';
 
 export const MIN_ELO = 100;
@@ -37,11 +50,32 @@ export const FULL_NODES = 1_200_000;
 const FULL_DEPTH = 30;
 
 /**
+ * Conversion search (see `conversionSearchFor`): deep enough to make progress in K+Q/K+R vs K and
+ * similar endings (a few thousand to ~300k nodes there, ~0.1-0.5 s on an iPhone).
+ */
+export const CONVERT_DEPTH = 14;
+export const CONVERT_NODES = 300_000;
+/**
+ * Conversion mode needs at least this score (cp, bot's POV; damped with the 50-move counter like
+ * Stockfish's eval). Shallow KRK scores are only ~+300..+500.
+ */
+export const CONVERT_MIN_CP = 200;
+/** Custom band in conversion mode: only moves within this many cp of the best one are considered. */
+const CONVERT_SAFE_CP = 150;
+/** The repetition guard is active when the bot's best score is at least this (cp, damped likewise). */
+export const REPETITION_GUARD_CP = 150;
+
+/**
  * Nominal Elo of integer Skill Level L: Stockfish's own fit (src/search.h, struct Skill) evaluated
- * at L; L0 = 1347 ... L19 = 3212. Anchored to CCRL 40/4 (engine scale, not human ratings).
+ * at L; L1 = 1444 ... L19 = 3212. Anchored to CCRL 40/4 (engine scale, not human ratings).
+ *
+ * L0 is re-fitted to our own custom band instead (Stockfish's fit says 1347): in bot-vs-bot games
+ * pure Level 0 (a depth-1 search) scored only ~40% against custom 1300/1319, i.e. it plays ~70 Elo
+ * below the top of the custom band. Anchoring it at 1250 makes 1320 a Level 0/1 mix (36% Level 1)
+ * so strength keeps rising across the band switch.
  */
 export const SF_LEVEL_ELO = [
-  1347, 1444, 1566, 1729, 1953, 2197, 2383, 2518, 2624, 2711, 2786, 2851, 2910, 2963, 3012, 3057, 3099, 3139, 3176, 3212,
+  1250, 1444, 1566, 1729, 1953, 2197, 2383, 2518, 2624, 2711, 2786, 2851, 2910, 2963, 3012, 3057, 3099, 3139, 3176, 3212,
 ];
 
 /** Custom band (Elo < 1320): the engine scores every legal move and the bot errs like a human. */
@@ -67,6 +101,8 @@ export interface CustomPlan {
   mateSeeDepth: number;
   /** ...with this probability per move. */
   mateSeeProb: number;
+  /** Conversion mode: probability of playing the deep search's move (else a safe human-ish move). */
+  convertProb: number;
 }
 
 /** Skill band: Stockfish Skill Level, stochastically rounded between `lo` and `hi` per move. */
@@ -106,6 +142,7 @@ export type MoveReason =
   | 'engine' // full strength best move
   | 'skill' // emulated Stockfish pick_best
   | 'mate' // saw a short forced mate
+  | 'convert' // deep-search move in a won ending (conversion mode)
   | 'oversight' // surface-appeal move ignoring the reply
   | 'softmax' // normal human-like choice
   | 'fallback'; // no usable engine lines
@@ -118,17 +155,17 @@ export interface ChosenMove {
 // -------------------------------------------------------------------------------------------------
 // Plans
 
-//             elo  depth    T    Tcp   sal  blunder maxBL appealT mateD mateP
+//             elo  depth    T    Tcp   sal  blunder maxBL appealT mateD mateP convP
 const KNOTS: number[][] = [
-  [100, 2, 80.0, 5.0, 0.3, 0.6, 100, 2.0, 1, 0.25],
-  [250, 2, 58.0, 5.0, 0.5, 0.5, 100, 1.8, 1, 0.28],
-  [400, 2, 39.0, 5.0, 0.7, 0.39, 100, 1.55, 1, 0.33],
-  [550, 2, 24.0, 4.0, 0.6, 0.3, 100, 1.4, 1, 0.5],
-  [700, 2, 17.1, 3.4, 0.49, 0.234, 82, 1.3, 1, 0.62],
-  [850, 2, 13.0, 2.95, 0.4, 0.181, 67, 1.22, 2, 0.71],
-  [1000, 2, 10.3, 2.62, 0.32, 0.135, 54, 1.16, 2, 0.79],
-  [1150, 2, 8.3, 2.35, 0.26, 0.093, 43, 1.09, 3, 0.87],
-  [1320, 2, 6.7, 2.11, 0.18, 0.051, 31, 1.03, 3, 0.94],
+  [100, 2, 80.0, 5.0, 0.3, 0.6, 100, 2.0, 1, 0.25, 0.3],
+  [250, 2, 58.0, 5.0, 0.5, 0.5, 100, 1.8, 1, 0.28, 0.35],
+  [400, 2, 39.0, 5.0, 0.7, 0.39, 100, 1.55, 1, 0.33, 0.4],
+  [550, 2, 24.0, 4.0, 0.6, 0.3, 100, 1.4, 1, 0.5, 0.47],
+  [700, 2, 17.1, 3.4, 0.49, 0.234, 82, 1.3, 1, 0.62, 0.55],
+  [850, 2, 13.0, 2.95, 0.4, 0.181, 67, 1.22, 2, 0.71, 0.62],
+  [1000, 2, 10.3, 2.62, 0.32, 0.135, 54, 1.16, 2, 0.79, 0.7],
+  [1150, 2, 8.3, 2.35, 0.26, 0.093, 43, 1.09, 3, 0.87, 0.8],
+  [1320, 2, 6.7, 2.11, 0.18, 0.051, 31, 1.03, 3, 0.94, 0.9],
 ];
 
 function interp(elo: number, col: number): number {
@@ -186,6 +223,7 @@ export function planForElo(eloIn: number): BotPlan {
     appealTemp: interp(elo, 7),
     mateSeeDepth: Math.round(interp(elo, 8)),
     mateSeeProb: interp(elo, 9),
+    convertProb: interp(elo, 10),
   };
 }
 
@@ -267,6 +305,171 @@ function sfPickBest(cands: Cand[], level: number, rng: () => number, fen: string
     }
   }
   return best;
+}
+
+// -------------------------------------------------------------------------------------------------
+// Decided positions: mates, conversion, repetitions
+
+const PIECE_VALUE: Record<string, number> = { n: 3, b: 3, r: 5, q: 9 };
+
+/**
+ * Material test for conversion mode: the side to move has at least a rook's worth more piece
+ * material than the opponent, who has at most one minor piece (plus pawns), and enough to mate
+ * (a queen, a rook, or a bishop with another minor piece).
+ */
+export function isConversionMaterial(fen: string): boolean {
+  const [placement, turn] = fen.split(' ');
+  if (!placement || (turn !== 'w' && turn !== 'b')) return false;
+  const mine: Record<string, number> = { n: 0, b: 0, r: 0, q: 0 };
+  let myValue = 0;
+  let theirValue = 0;
+  for (const ch of placement) {
+    const t = ch.toLowerCase();
+    const v = PIECE_VALUE[t];
+    if (!v) continue;
+    if ((ch === t) === (turn === 'b')) {
+      mine[t]++;
+      myValue += v;
+    } else {
+      theirValue += v;
+    }
+  }
+  if (theirValue > 3 || myValue - theirValue < 5) return false;
+  return mine.q > 0 || mine.r > 0 || (mine.b > 0 && mine.b + mine.n >= 2);
+}
+
+/**
+ * A score threshold (cp) for this position, damped the way Stockfish damps its evaluation as the
+ * 50-move counter rises (roughly by clock/200), so a won ending stays "won" near move 50.
+ */
+function damped(threshold: number, fen: string): number {
+  const clock = Math.min(100, Math.max(0, Number(fen.split(' ')[4]) || 0));
+  return threshold * (1 - clock / 200);
+}
+
+/** Conversion mode: a conversion ending (see `isConversionMaterial`) with a clearly winning best line. */
+function isConverting(fen: string, cands: readonly Cand[]): boolean {
+  return (
+    cands.length > 0 && Math.max(...cands.map((c) => c.cp)) >= damped(CONVERT_MIN_CP, fen) && isConversionMaterial(fen)
+  );
+}
+
+/** The shortest forced mate for the side to move among the lines, if any. */
+function shortestMate(cands: readonly Cand[]): Cand | undefined {
+  let best: Cand | undefined;
+  for (const c of cands) if (c.mate !== undefined && c.mate > 0 && (!best || c.mate < (best.mate ?? 0))) best = c;
+  return best;
+}
+
+/**
+ * The extra search conversion mode needs, or null: the bot is clearly winning a conversion ending
+ * (and, in the skill band, has no forced mate among its lines) while its own search is shallower
+ * than CONVERT_DEPTH. BotPlayer runs it after the normal search and passes the result to
+ * `chooseMove` as `ctx.deep`.
+ */
+export function conversionSearchFor(fen: string, result: AnalysisResult, mp: MovePlan): SearchOptions | null {
+  if (mp.mode === 'full' || result.terminal || (searchOptionsFor(mp).depth ?? 0) >= CONVERT_DEPTH) return null;
+  const info = legalInfo(fen);
+  if (!info || info.moves.length < 2) return null;
+  const cands = usableCands(result.lines ?? [], new Map(info.moves.map((m) => [uciOf(m), m] as const)));
+  if (!isConverting(fen, cands) || (mp.mode === 'skillMove' && shortestMate(cands))) return null;
+  return { depth: CONVERT_DEPTH, nodes: CONVERT_NODES, multiPv: 1 };
+}
+
+/**
+ * Conversion mode, human-ish moves: does this move keep the win? It must not stalemate, nor leave a
+ * queen or rook capturable for less (by a pawn or minor piece, or by the king when undefended).
+ * Checked with chess.js: shallow MultiPV scores are not reliable enough for this (a depth-2 search
+ * has been seen scoring a stalemating rook move at +6.5).
+ */
+function keepsTheWin(m: Move): boolean {
+  const c = new Chess(m.after);
+  if (c.isStalemate()) return false;
+  const us = m.color;
+  const them = us === 'w' ? 'b' : 'w';
+  for (const row of c.board()) {
+    for (const sq of row) {
+      if (!sq || sq.color !== us || (sq.type !== 'q' && sq.type !== 'r')) continue;
+      const attackers = c.attackers(sq.square, them);
+      if (!attackers.length) continue;
+      if (!c.isAttacked(sq.square, us) || attackers.some((a) => c.get(a)?.type !== 'k')) return false;
+    }
+  }
+  return true;
+}
+
+/** First move of a (possibly partial) deep search, if legal here. */
+function deepMoveOf(deep: AnalysisResult | undefined, legal: ReadonlyMap<string, Move>): string | undefined {
+  if (!deep || deep.terminal) return undefined;
+  const first = [...(deep.lines ?? [])].sort((a, b) => a.multipv - b.multipv)[0]?.pv?.[0];
+  for (const uci of [deep.bestMove, first]) if (uci && legal.has(uci)) return uci;
+  return undefined;
+}
+
+/** Repetition key of a FEN: placement, side to move, castling and en passant (no move counters). */
+export function positionKey(fen: string): string {
+  return fen.split(' ').slice(0, 4).join(' ');
+}
+
+/** The 64 squares of a FEN placement, a8..h8, a7..h1 ('' = empty). */
+function expandPlacement(placement: string): string[] {
+  const out: string[] = [];
+  for (const ch of placement) {
+    if (ch === '/') continue;
+    if (ch >= '1' && ch <= '8') for (let i = 0; i < Number(ch); i++) out.push('');
+    else out.push(ch);
+  }
+  return out;
+}
+
+const squareName = (i: number): Square => `${'abcdefgh'[i % 8]}${8 - Math.floor(i / 8)}` as Square;
+
+/**
+ * Legal moves (verbose, all from the same position) after which the game can end in a threefold
+ * repetition: the move itself reaches a position already seen twice, or the opponent can with one
+ * reply. `counts` = occurrences of each `positionKey` in the game so far.
+ */
+function repetitionMoves(moves: readonly Move[], counts: ReadonlyMap<string, number>): Set<string> {
+  const out = new Set<string>();
+  const twice = [...counts].filter(([, n]) => n >= 2).map(([k]) => k);
+  if (!twice.length || !moves.length) return out;
+  const twiceSet = new Set(twice);
+  const me = moves[0].color;
+  // Positions the opponent's reply could reach have us to move again.
+  const targets = twice
+    .map((key) => key.split(' '))
+    .filter((f) => f[1] === me)
+    .map((f) => ({ key: f.join(' '), board: expandPlacement(f[0]) }));
+  for (const m of moves) {
+    if (twiceSet.has(positionKey(m.after))) {
+      out.add(uciOf(m));
+      continue;
+    }
+    if (!targets.length) continue;
+    const board = expandPlacement(m.after.split(' ')[0]);
+    for (const t of targets) {
+      // A repeating reply is a quiet piece move (captures and pawn moves are irreversible): exactly
+      // one opponent piece on a different, previously empty square.
+      const diff: number[] = [];
+      for (let i = 0; i < 64 && diff.length <= 2; i++) if (board[i] !== t.board[i]) diff.push(i);
+      if (diff.length !== 2) continue;
+      const [from, to] = board[diff[0]] ? diff : [diff[1], diff[0]];
+      const piece = board[from];
+      if (!piece || board[to] || t.board[from] || t.board[to] !== piece) continue;
+      if ((piece === piece.toLowerCase()) === (me === 'b')) continue; // our own piece: not a reply
+      try {
+        const c = new Chess(m.after);
+        c.move({ from: squareName(from), to: squareName(to) });
+        if (positionKey(c.fen()) === t.key) {
+          out.add(uciOf(m));
+          break;
+        }
+      } catch {
+        /* not a legal reply */
+      }
+    }
+  }
+  return out;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -355,13 +558,30 @@ function fallbackMove(legal: readonly Move[], color: 'w' | 'b', ply: number, rng
   return { uci: uciOf(legal[sampleIndex(w, rng)]), reason: 'fallback' };
 }
 
+/** Optional game context for `chooseMove` (both parts are optional; without them it still works). */
+export interface ChooseContext {
+  /** Result of the `conversionSearchFor` search, when one was run. */
+  deep?: AnalysisResult;
+  /**
+   * Occurrences of each `positionKey` in the game so far, the current position included. Enables the
+   * repetition guard (the engine searches the bare FEN and cannot see earlier positions).
+   */
+  positions?: ReadonlyMap<string, number>;
+}
+
 /**
  * Chooses the bot's move from a full-strength search of `fen` (see `searchOptionsFor`).
  * Pure and deterministic given `rng`. Never returns an illegal move: engine lines are checked
  * against chess.js, and without usable lines (aborted search, engine failure) it falls back to a
  * human-ish heuristic move. Returns null only when `fen` has no legal moves (or is invalid).
  */
-export function chooseMove(fen: string, result: AnalysisResult, mp: MovePlan, rng: () => number): ChosenMove | null {
+export function chooseMove(
+  fen: string,
+  result: AnalysisResult,
+  mp: MovePlan,
+  rng: () => number,
+  ctx: ChooseContext = {},
+): ChosenMove | null {
   const info = legalInfo(fen);
   if (!info || !info.moves.length) return null;
   const legalList = info.moves;
@@ -375,10 +595,33 @@ export function chooseMove(fen: string, result: AnalysisResult, mp: MovePlan, rn
     const best = result.bestMove && legal.has(result.bestMove) ? result.bestMove : cands[0]?.uci;
     return best ? { uci: best, reason: 'engine' } : fallbackMove(legalList, color, ply, rng);
   }
+
+  const converting = isConverting(fen, cands);
+  // Repetition guard: while clearly better, avoid moves that let the game end in a threefold
+  // repetition, as long as a clearly better line remains.
+  const guardCp = damped(REPETITION_GUARD_CP, fen);
+  let repeat = new Set<string>();
+  if (ctx.positions && cands.length && Math.max(...cands.map((c) => c.cp)) >= guardCp) {
+    repeat = repetitionMoves(legalList, ctx.positions);
+    const keep = cands.filter((c) => !repeat.has(c.uci));
+    if (repeat.size && keep.length && Math.max(...keep.map((c) => c.cp)) >= guardCp) cands = keep;
+    else repeat = new Set();
+  }
+
   if (mp.mode === 'skillMove') {
-    if (cands.length) return { uci: sfPickBest(cands, mp.level, rng, fen), reason: 'skill' };
-    if (result.bestMove && legal.has(result.bestMove)) return { uci: result.bestMove, reason: 'skill' };
-    return fallbackMove(legalList, color, ply, rng);
+    if (!cands.length) {
+      if (result.bestMove && legal.has(result.bestMove)) return { uci: result.bestMove, reason: 'skill' };
+      return fallbackMove(legalList, color, ply, rng);
+    }
+    // A seen forced mate is always played, shortest first (pick_best would dither between mates).
+    const mate = shortestMate(cands);
+    if (mate) return { uci: mate.uci, reason: 'mate' };
+    if (converting) {
+      // Our own lines are deep enough at high levels; otherwise the extra conversion search.
+      const deep = (searchOptionsFor(mp).depth ?? 0) >= CONVERT_DEPTH ? cands[0].uci : deepMoveOf(ctx.deep, legal);
+      if (deep && !repeat.has(deep)) return { uci: deep, reason: 'convert' };
+    }
+    return { uci: sfPickBest(cands, mp.level, rng, fen), reason: 'skill' };
   }
 
   // Custom band.
@@ -395,7 +638,7 @@ export function chooseMove(fen: string, result: AnalysisResult, mp: MovePlan, rn
     if (blind.size < cands.length) cands = cands.filter((c) => !blind.has(c.uci));
     else blind = new Set();
   }
-  const pool0 = legalList.filter((m) => !blind.has(uciOf(m)));
+  let pool0 = legalList.filter((m) => !blind.has(uciOf(m)) && !repeat.has(uciOf(m)));
 
   const bestCp = Math.max(...cands.map((c) => c.cp));
   const bestW = winPct(bestCp);
@@ -404,6 +647,16 @@ export function chooseMove(fen: string, result: AnalysisResult, mp: MovePlan, rn
   const cpOf = (m: Move) => known.get(uciOf(m)) ?? worstCp - 50;
   const dW = (m: Move) => bestW - winPct(cpOf(m));
   const dCp = (m: Move) => Math.min(bestCp - cpOf(m), 1500);
+
+  // Conversion mode: often the deep search's move; otherwise only moves that keep the win (no
+  // hanging the queen to a bare king, no stalemate), still chosen the human-ish way below.
+  if (converting) {
+    const deep = deepMoveOf(ctx.deep, legal);
+    if (deep && !blind.has(deep) && !repeat.has(deep) && rng() < mp.convertProb) return { uci: deep, reason: 'convert' };
+    const close = pool0.filter((m) => dCp(m) <= CONVERT_SAFE_CP);
+    const sound = close.filter(keepsTheWin);
+    pool0 = sound.length ? sound : close;
+  }
 
   // 2) Oversight: a surface-appeal move that ignores the reply; loss capped by maxBlunderLoss.
   if (rng() < mp.blunderChance) {

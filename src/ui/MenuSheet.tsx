@@ -4,6 +4,7 @@ import type { BotPersona } from '../bot/types';
 import type { GameSettings } from '../game/types';
 import type { GameRecord, PlayerProfile } from '../rating/types';
 import type { ThemePref } from '../theme';
+import { About } from './About';
 import { IconChart, IconCoach, IconEye, IconFlag, IconFlip, IconPlus, IconShare, IconSound } from './icons';
 import { Sheet } from './Sheet';
 import { Toggle } from './Toggle';
@@ -210,6 +211,11 @@ export function MenuSheet({
           </div>
         )}
       </section>
+
+      <section class="sheet-section">
+        <h3 class="sheet-label">About</h3>
+        <About />
+      </section>
     </Sheet>
   );
 }
@@ -252,7 +258,7 @@ const THEMES: { value: ThemePref; label: string }[] = [
   { value: 'system', label: 'Automatic' },
 ];
 
-/** Three-way segmented control (radio group) for the colour theme. */
+/** Three-way segmented control (radio group) for the color theme. */
 function ThemePicker({
   value,
   onChange,

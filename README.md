@@ -35,12 +35,20 @@ Using takebacks, hints or best-move arrows makes a game **unrated**; your rating
 ## Install it on an iPhone
 
 1. Open <https://atg-y2k.github.io/chess/> in **Safari** (iOS 16.4 or later).
-2. Tap the **Share** button, then **Add to Home Screen**, then **Add**.
-3. Start Chess Coach from its Home Screen icon. It opens full-screen, like an app.
+2. Tap **⋯** next to the address bar, then **Share**. (On older iOS, or with Safari's *Bottom* tab
+   layout, tap the **Share** button directly.)
+3. Tap **Add to Home Screen**, leave **Open as Web App** switched on, and tap **Add**.
+4. Start Chess Coach from its Home Screen icon. It opens full-screen, like an app.
 
-The first visit downloads everything, including the 1.8 MB chess engine. After that it works
-**offline** (flight mode included). Updates download in the background and take effect the next time
-you open the app (never in the middle of a game or a review).
+Chrome and the other iOS browsers can also add it to the Home Screen from their share menu. The Home
+Screen app keeps its own rating and saved game, separate from Safari's: progress made in a Safari tab
+before installing does not carry over.
+
+The first visit downloads everything, about 3 MB (most of it the chess engine and the opening book).
+After that it works **offline** (flight mode included). Updates download in the background, and the
+app switches to a new version only between games and when you are not using it: when you open it or
+come back to it (before you touch anything), or while it is in the background. It never reloads in the
+middle of a game or a review, or while you are choosing your next game.
 
 ## How the opponent strength works
 
@@ -105,10 +113,11 @@ If the app shows "The chess engine could not start", the phone probably runs iOS
 
 The app is a static site: `npm run build` writes it to `dist/`.
 
-- **GitHub Pages (set up).** `.github/workflows/deploy.yml` tests, builds with `BASE_PATH=/chess/` and
-  publishes on every push to `main`. One-time setup: repository **Settings → Pages → Build and
-  deployment → Source: GitHub Actions**. GitHub Pages on the **Free plan requires a public
-  repository**; this repository is private, so either make it public, upgrade to GitHub Pro (or a
+- **GitHub Pages (set up).** On every push to `main`, `.github/workflows/deploy.yml` runs the unit
+  tests and the end-to-end tests (against a `BASE_PATH=/chess/` build), builds with
+  `BASE_PATH=/chess/` and publishes; nothing is published if a test fails. One-time setup:
+  repository **Settings → Pages → Build and deployment → Source: GitHub Actions**. GitHub Pages on
+  the **Free plan requires a public repository**; this repository is private, so either make it public, upgrade to GitHub Pro (or a
   paid organisation plan), or use one of the hosts below.
 - **Cloudflare Pages or Netlify** (both free for private repositories): connect the repository,
   set the build command to `npm run build`, the output directory to `dist`, and the environment
@@ -117,6 +126,16 @@ The app is a static site: `npm run build` writes it to `dist/`.
 - A custom domain or a `<user>.github.io` repository also needs `BASE_PATH=/`.
 
 Whatever the host, open the site once in Safari and add it to the Home Screen as above.
+
+**A public site must offer its source code.** Everyone who opens the site receives GPL-3.0 code (the
+app itself, chessground and Stockfish), so they must also be able to get the source. The app points
+to <https://github.com/atg-y2k/chess> (in the Menu's About section and in `THIRD-PARTY-LICENSES.txt`
+next to the app), which is enough once that repository is public; the GitHub Pages route needs that
+anyway. To host publicly from a private repository instead, publish the source next to the app: use
+the build command `npm run build && npm run build:source` (it adds `chess-coach-source.tar.gz`, the
+source of the commit being deployed, to `dist/`) and set `VITE_SOURCE_URL=chess-coach-source.tar.gz`
+so the app points there. Or keep the site to yourself (for example with Cloudflare Access or Netlify's
+password protection), so that nobody else receives the app.
 
 ## Development
 
@@ -128,6 +147,7 @@ npm run dev            # dev server with hot reload (http://localhost:5173)
 npm test               # unit tests (Vitest, ~420 tests)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
+npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting
 npm run preview        # serve dist/
 npm run e2e            # Playwright: builds, serves and runs e2e/ on an emulated iPhone 15 Pro
 npm run build:openings # regenerate src/data/openings.json from the lichess chess-openings data
@@ -158,6 +178,10 @@ Chess Coach is free software under the **GNU General Public License v3.0 or late
 - [lichess chess-openings](https://github.com/lichess-org/chess-openings) (opening names and book):
   **CC0**.
 - [Preact](https://preactjs.com/) and [@preact/signals](https://github.com/preactjs/signals): MIT.
+- [Workbox](https://github.com/GoogleChrome/workbox) (the service worker and its registration): MIT.
 - Win-probability and accuracy formulas follow lichess's published ones. Move-classification names
   are inspired by chess.com's; this app is not affiliated with chess.com or lichess.org, and its bots
   are original characters.
+
+The build writes the licence texts of every package it includes to `THIRD-PARTY-LICENSES.txt` next to
+the app (the engine's are in `engine/`), and keeps the packages' licence comments in the minified code.

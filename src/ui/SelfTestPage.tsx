@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { copyText } from '../clipboard';
 import { runEngineSelfTest } from '../engine/selfTest';
+import { LegalFooter } from './About';
 import './SelfTestPage.css';
 
 type Status = 'running' | 'pass' | 'fail';
@@ -101,6 +102,7 @@ export function SelfTestPage({ run = runEngineSelfTest, copy = copyText }: SelfT
           Open app
         </a>
       </div>
+      <LegalFooter />
     </div>
   );
 }

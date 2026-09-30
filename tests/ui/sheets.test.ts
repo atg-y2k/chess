@@ -113,3 +113,19 @@ describe('GameOverSheet helpers', () => {
     expect(gameOverReason(o('1-0', 'w', ''), 'w', 'Bao')).toBe('');
   });
 });
+
+describe('NewGameSheet / ConfirmSheet wording', () => {
+  it('warns that starting a new game ends the one in progress', async () => {
+    const { abandonNote } = await import('../../src/ui/NewGameSheet');
+    expect(abandonNote(null)).toBeNull();
+    expect(abandonNote({ rated: true })).toMatch(/count as a loss/);
+    expect(abandonNote({ rated: false })).toMatch(/rating stays the same/);
+  });
+  it('asks before help that makes a game unrated', async () => {
+    const { assistPrompt } = await import('../../src/ui/ConfirmSheet');
+    for (const kind of ['hint', 'undo', 'retry'] as const) {
+      expect(assistPrompt(kind).message).toMatch(/unrated/);
+    }
+    expect(assistPrompt('hint').confirmLabel).toBe('Show hint');
+  });
+});

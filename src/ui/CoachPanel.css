@@ -212,6 +212,14 @@
   font-size: 14px;
   line-height: 1;
 }
+/* Three actions (e.g. after the game): tighter pills, so they fit on one row of a phone-width bubble. */
+.coach-actions:has(> :nth-child(3)) {
+  gap: 6px;
+}
+.coach-actions:has(> :nth-child(3)) .coach-action {
+  padding: 0 10px;
+  font-size: 13.5px;
+}
 /* Extend the tap target to 44px without making the pill taller. */
 .coach .coach-action::after {
   content: '';

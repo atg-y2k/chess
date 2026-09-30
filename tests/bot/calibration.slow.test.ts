@@ -6,6 +6,12 @@
  *   CALIBRATE=1 npx vitest run tests/bot/calibration.slow.test.ts
  *   CALIBRATE=1 CALIBRATE_GAMES=10 CALIBRATE_PAIRS=400:1000,1000:1600,1600:2400 npx vitest run tests/bot/calibration.slow.test.ts
  *
+ * The switch from the custom band to the skill band (1320) is the seam most likely to break
+ * monotonicity; check it with dozens of games per pair (1319 should score ~50% against 1320, and
+ * the lower side should score under 50% in the other two):
+ *
+ *   CALIBRATE=1 CALIBRATE_GAMES=100 CALIBRATE_PAIRS=1319:1320,1300:1350,1350:1400 npm run calibrate
+ *
  * CALIBRATE_GAMES = games per pairing (colours alternate, default 2); CALIBRATE_PAIRS = comma
  * separated `eloA:eloB` pairings. Games are capped at 200 plies and then adjudicated by a depth-12
  * search (|eval| >= 400 cp wins). This is a smoke test of the whole pipeline, not a rating

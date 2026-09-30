@@ -3,17 +3,22 @@ import {
   DEFAULT_RATING,
   HISTORY_LIMIT,
   PROFILE_KEY,
+  MIN_K,
+  STARTING_LEVELS,
   applyGameResult,
   clampRating,
   defaultProfile,
+  effectiveGames,
   expectedScore,
   kFactor,
   loadProfile,
   playerScoreFor,
   saveProfile,
+  setStartingRating,
   suggestedOpponentElo,
   updateGameRecord,
 } from '../../src/rating/rating';
+import { mulberry32 } from '../../src/bot/strength';
 import type { GameRecordInput } from '../../src/rating/rating';
 import type { PlayerProfile } from '../../src/rating/types';
 
@@ -65,13 +70,16 @@ function profile(over: Partial<PlayerProfile> = {}): PlayerProfile {
 }
 
 describe('Elo maths', () => {
-  it('kFactor: 60 for the first 10 games, 32 up to game 30, then 16', () => {
-    expect(kFactor(0)).toBe(60);
-    expect(kFactor(9)).toBe(60);
-    expect(kFactor(10)).toBe(32);
-    expect(kFactor(29)).toBe(32);
-    expect(kFactor(30)).toBe(16);
-    expect(kFactor(5000)).toBe(16);
+  it('kFactor: Glicko-1 provisional K, large for a new rating, down to 16 once established', () => {
+    expect(kFactor(0)).toBeCloseTo(350, 0);
+    expect(kFactor(10)).toBeCloseTo(58, 0);
+    expect(kFactor(30)).toBeCloseTo(21.7, 1);
+    expect(kFactor(42)).toBe(MIN_K);
+    expect(kFactor(5000)).toBe(MIN_K);
+    for (let n = 1; n < 60; n++) expect(kFactor(n)).toBeLessThanOrEqual(kFactor(n - 1));
+    // A lopsided pairing tells less per game, so it may move a new rating further per point.
+    expect(kFactor(0, 0.1)).toBeGreaterThan(kFactor(0, 0.5));
+    expect(kFactor(Number.NaN, Number.NaN)).toBeCloseTo(350, 0);
   });
 
   it('expectedScore follows the Elo logistic and is symmetric', () => {
@@ -105,35 +113,57 @@ describe('applyGameResult', () => {
     expect(defaultProfile()).toEqual({ rating: 800, gamesPlayed: 0, peak: 800, wins: 0, draws: 0, losses: 0, history: [] });
   });
 
-  it('a win against an equal bot with K = 60 gains 30 points', () => {
+  it('a first win against an equal bot gains 175 points (K = 350 while the rating is new)', () => {
     const before = profile();
     const { profile: p, record } = applyGameResult(before, game({ botElo: 800 }));
-    expect(p.rating).toBe(830);
+    expect(p.rating).toBe(975);
     expect(p.gamesPlayed).toBe(1);
-    expect(p.peak).toBe(830);
+    expect(p.peak).toBe(975);
     expect([p.wins, p.draws, p.losses]).toEqual([1, 0, 0]);
     expect(record.ratingBefore).toBe(800);
-    expect(record.ratingAfter).toBe(830);
+    expect(record.ratingAfter).toBe(975);
     expect(p.history[0]).toEqual(record);
     expect(before).toEqual(defaultProfile()); // input is not mutated
   });
 
   it('a draw against a stronger bot gains, a loss to a weaker bot costs', () => {
     const draw = applyGameResult(profile(), game({ botElo: 1000, result: '1/2-1/2', playerScore: 0.5 }));
-    // 60 * (0.5 - 0.2403) = 15.58
-    expect(draw.profile.rating).toBe(816);
+    // K(0, E = 0.2403) = 405: 405 * (0.5 - 0.2403) = 105.2
+    expect(draw.profile.rating).toBe(905);
     expect([draw.profile.wins, draw.profile.draws, draw.profile.losses]).toEqual([0, 1, 0]);
 
     const loss = applyGameResult(profile(), game({ botElo: 600, result: '0-1', playerScore: 0 }));
-    // 60 * (0 - 0.7597) = -45.58
-    expect(loss.profile.rating).toBe(754);
+    // 405 * (0 - 0.7597) = -307.7
+    expect(loss.profile.rating).toBe(492);
     expect(loss.profile.peak).toBe(800); // peak never drops
     expect([loss.profile.wins, loss.profile.draws, loss.profile.losses]).toEqual([0, 0, 1]);
   });
 
   it('uses the K-factor of the number of rated games played so far', () => {
-    expect(applyGameResult(profile({ gamesPlayed: 10 }), game()).profile.rating).toBe(816);
-    expect(applyGameResult(profile({ gamesPlayed: 30 }), game()).profile.rating).toBe(808);
+    expect(applyGameResult(profile({ gamesPlayed: 10 }), game()).profile.rating).toBe(829);
+    expect(applyGameResult(profile({ gamesPlayed: 30 }), game()).profile.rating).toBe(811);
+    expect(applyGameResult(profile({ gamesPlayed: 100 }), game()).profile.rating).toBe(808);
+  });
+
+  it('makes the rating provisional again after a run of results far from expectations', () => {
+    // An established player (100 games) wins six in a row against bots at their own rating.
+    let p = profile({ gamesPlayed: 100 });
+    const steps: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      const before = p.rating;
+      p = applyGameResult(p, game({ botElo: suggestedOpponentElo(p) })).profile;
+      steps.push(p.rating - before);
+    }
+    expect(steps.slice(0, 6).every((d) => d >= 7 && d <= 9)).toBe(true); // K = 16
+    expect(steps[6]).toBeGreaterThan(25); // K of game 8 after the streak
+    expect(effectiveGames(p)).toBe(8);
+    // Mixed results keep the established K; unrated games do not count.
+    let q = profile({ gamesPlayed: 100 });
+    for (let i = 0; i < 12; i++) {
+      q = applyGameResult(q, game({ botElo: suggestedOpponentElo(q), result: i % 2 ? '1-0' : '0-1', playerScore: i % 2 ? 1 : 0 })).profile;
+    }
+    for (let i = 0; i < 5; i++) q = applyGameResult(q, game({ rated: false })).profile;
+    expect(effectiveGames(q)).toBe(q.gamesPlayed);
   });
 
   it('unrated games keep the rating and game count but are recorded', () => {
@@ -186,6 +216,71 @@ describe('applyGameResult', () => {
     expect(patched.rating).toBe(p.rating);
     expect(p.history[0].accuracy).toBeUndefined();
     expect(updateGameRecord(p, 'nope', { accuracy: 1 })).toBe(p);
+  });
+});
+
+describe('starting level and convergence', () => {
+  it('offers ascending starting levels within the rating range', () => {
+    expect(STARTING_LEVELS.length).toBeGreaterThanOrEqual(4);
+    for (let i = 1; i < STARTING_LEVELS.length; i++) expect(STARTING_LEVELS[i].rating).toBeGreaterThan(STARTING_LEVELS[i - 1].rating);
+    for (const l of STARTING_LEVELS) expect(clampRating(l.rating)).toBe(l.rating);
+    expect(STARTING_LEVELS.some((l) => l.rating === DEFAULT_RATING)).toBe(true);
+  });
+
+  it('setStartingRating sets a provisional rating and keeps the record', () => {
+    const fresh = setStartingRating(defaultProfile(), 1600);
+    expect(fresh).toEqual({ ...defaultProfile(), rating: 1600, peak: 1600 });
+    expect(setStartingRating(defaultProfile(), 400).peak).toBe(400); // nothing earned yet
+    let p = profile();
+    for (let i = 0; i < 40; i++) p = applyGameResult(p, game({ botElo: 800 })).profile;
+    const reset = setStartingRating(p, 1200);
+    expect(reset).toMatchObject({ rating: 1200, gamesPlayed: 0, wins: 40, peak: p.peak });
+    expect(reset.history).toBe(p.history);
+    expect(setStartingRating(p, 99999).rating).toBe(3200);
+    expect(p.gamesPlayed).toBe(40); // input not mutated
+  });
+
+  /** Mean rating after each game when a player of true strength `strength` always plays "Match my rating". */
+  function simulate(strength: number, start: PlayerProfile, games: number, trials = 600): number[] {
+    const rng = mulberry32(strength);
+    const sum = Array<number>(games + 1).fill(0);
+    for (let t = 0; t < trials; t++) {
+      let p = start;
+      sum[0] += p.rating;
+      for (let g = 1; g <= games; g++) {
+        const bot = suggestedOpponentElo(p);
+        const e = expectedScore(strength, bot);
+        const x = rng();
+        const score = x < e - 0.04 ? 1 : x < e + 0.04 ? 0.5 : 0;
+        const result = score === 1 ? '1-0' : score === 0 ? '0-1' : '1/2-1/2';
+        p = applyGameResult(p, game({ botElo: bot, playerScore: score, result })).profile;
+        sum[g] += p.rating;
+      }
+    }
+    return sum.map((s) => s / trials);
+  }
+
+  it('"Match my rating" converges within a couple of dozen games from the default 800', () => {
+    // Was 1082 / 1219 / 1383 after 10 / 20 / 40 games for a 1600 player with K = 60 / 32 / 16.
+    const strong = simulate(1600, profile(), 20);
+    expect(strong[10]).toBeGreaterThan(1350);
+    expect(strong[20]).toBeGreaterThan(1450);
+    const weak = simulate(300, profile(), 20);
+    expect(weak[10]).toBeLessThan(450);
+    const matched = simulate(800, profile(), 20);
+    expect(Math.abs(matched[20] - 800)).toBeLessThan(30);
+  });
+
+  it('a starting level puts a player near their strength at once, and late swings stay small', () => {
+    const level = (r: number) => setStartingRating(defaultProfile(), r);
+    expect(Math.abs(simulate(2000, level(2000), 5)[5] - 2000)).toBeLessThan(60);
+    expect(Math.abs(simulate(1700, level(1600), 15)[15] - 1700)).toBeLessThan(60);
+    // Established (60 games, mixed results): one game moves the rating by about +-8.
+    let p = profile({ gamesPlayed: 60 });
+    for (let i = 0; i < 6; i++) p = applyGameResult(p, game({ result: i % 2 ? '1-0' : '0-1', playerScore: i % 2 ? 1 : 0 })).profile;
+    const win = applyGameResult(p, game({ botElo: suggestedOpponentElo(p) })).profile.rating - p.rating;
+    expect(win).toBeGreaterThan(0);
+    expect(win).toBeLessThanOrEqual(10);
   });
 });
 
@@ -264,7 +359,7 @@ describe('profile persistence', () => {
   it('recovers a missing rating from the newest game', () => {
     const { profile: p } = applyGameResult(profile(), game());
     storage.setItem(PROFILE_KEY, JSON.stringify({ version: 1, profile: { ...p, rating: 'oops' } }));
-    expect(loadProfile().rating).toBe(830);
+    expect(loadProfile().rating).toBe(975);
   });
 
   it('accepts a bare (unversioned) profile object', () => {

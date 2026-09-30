@@ -14,9 +14,13 @@
  *  - A load timeout, a heartbeat (`isready` ping when the engine goes quiet) and a stop timeout
  *    detect a dead engine; `CRITICAL ERROR` output or a transport error do too. The engine is
  *    then respawned and re-initialised; the in-flight search resolves `aborted: true`.
+ *  - The load timeout measures silence, not total time: `.wasm` download progress (when the
+ *    transport reports it) counts as a sign of life, so a slow connection is not a dead engine.
+ *    A failed first start rejects `init()` with an `EngineLoadError` saying why.
  */
 import { Chess, type Square } from 'chess.js';
-import type { AnalysisResult, ChessEngine, EngineTransport, PvLine, SearchOptions } from './types';
+import { EngineLoadError } from './errors';
+import type { AnalysisResult, ChessEngine, DownloadProgress, EngineTransport, PvLine, SearchOptions } from './types';
 import { MultiPvCollector, goCommand, parseUciLine, setOptionCommand, toPvLine, type OptionValue } from './uci';
 
 export interface StockfishEngineOptions {
@@ -24,8 +28,14 @@ export interface StockfishEngineOptions {
   hashMb?: number;
   /** Report win/draw/loss (`UCI_ShowWDL`). Default false. */
   showWdl?: boolean;
-  /** Max time from spawn to `readyok` (the WASM may fail to load without any error event). Default 15000. */
+  /**
+   * Max silence while loading (the WASM may fail to load without any error event): from spawn,
+   * or from the last download-progress event, to `uciok`; and from `uciok` to `readyok`.
+   * Default 15000.
+   */
   loadTimeoutMs?: number;
+  /** `.wasm` download progress while the engine (re)loads, when the transport reports it. */
+  onProgress?: (progress: DownloadProgress) => void;
   /** Heartbeat tuning (tests shorten these). */
   watchdog?: Partial<WatchdogOptions>;
   /** Max automatic respawns per minute before the engine is declared broken. Default 3. */
@@ -121,11 +131,14 @@ export class StockfishEngine implements ChessEngine {
   private readonly maxRespawns: number;
   private readonly name: string;
   private readonly tap?: (line: string, direction: 'in' | 'out') => void;
+  private readonly progressCb?: (progress: DownloadProgress) => void;
 
   private transport: EngineTransport | null = null;
   private gen = 0;
   private phase: Phase = 'down';
   private phaseSince = 0;
+  /** Last download progress of the current spawn (null: none reported). */
+  private download: DownloadProgress | null = null;
   private everReady = false;
   private terminated = false;
   private fatal: Error | null = null;
@@ -163,6 +176,7 @@ export class StockfishEngine implements ChessEngine {
     this.maxRespawns = opts.maxRespawnsPerMinute ?? 3;
     this.name = opts.name ?? 'engine';
     this.tap = opts.onLine;
+    this.progressCb = opts.onProgress;
   }
 
   /** Number of automatic respawns so far (diagnostics). */
@@ -280,6 +294,7 @@ export class StockfishEngine implements ChessEngine {
     this.readyQueue = [];
     this.pingSentAt = 0;
     this.stopSentAt = 0;
+    this.download = null;
     this.lastLineAt = Date.now();
     this.setPhase('starting');
     let t: EngineTransport;
@@ -295,6 +310,9 @@ export class StockfishEngine implements ChessEngine {
     });
     t.onError?.((err) => {
       if (gen === this.gen) this.handleCrash(err);
+    });
+    t.onProgress?.((p) => {
+      if (gen === this.gen) this.onDownloadProgress(p);
     });
     this.send('uci');
     this.ensureTicking();
@@ -327,7 +345,7 @@ export class StockfishEngine implements ChessEngine {
       this.newGamePending = true;
     }
     if (!this.everReady) {
-      this.fail(err);
+      this.fail(err instanceof EngineLoadError ? err : new EngineLoadError(err.message, 'crash'));
       return;
     }
     const now = Date.now();
@@ -433,6 +451,18 @@ export class StockfishEngine implements ChessEngine {
         return;
       default:
         return;
+    }
+  }
+
+  /** Bytes are arriving: the engine is loading, not hung. Restarts the load timeout. */
+  private onDownloadProgress(p: DownloadProgress): void {
+    if (this.phase !== 'starting') return;
+    this.download = p;
+    this.phaseSince = this.lastLineAt = Date.now();
+    try {
+      this.progressCb?.(p);
+    } catch (e) {
+      console.error(`[${this.name}] onProgress callback failed`, e);
     }
   }
 
@@ -584,7 +614,16 @@ export class StockfishEngine implements ChessEngine {
       case 'starting':
       case 'syncing':
         if (now - this.phaseSince > this.loadTimeoutMs) {
-          this.handleCrash(new Error(`Engine "${this.name}" did not start within ${this.loadTimeoutMs} ms`));
+          const d = this.download;
+          this.handleCrash(
+            this.phase === 'starting' && d && d.loaded < d.total
+              ? new EngineLoadError(
+                  `Engine "${this.name}" download stalled at ${Math.floor((100 * d.loaded) / d.total)}% ` +
+                    `(no data for ${this.loadTimeoutMs} ms)`,
+                  'download',
+                )
+              : new EngineLoadError(`Engine "${this.name}" did not start within ${this.loadTimeoutMs} ms`, 'timeout'),
+          );
         }
         return;
       case 'preparing':

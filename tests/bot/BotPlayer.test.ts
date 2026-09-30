@@ -2,8 +2,8 @@ import { Chess } from 'chess.js';
 import { describe, expect, it } from 'vitest';
 import { BotPlayer } from '../../src/bot/BotPlayer';
 import { bookMoves, loadOpenings } from '../../src/bot/book';
-import { mulberry32 } from '../../src/bot/strength';
-import type { AnalysisResult, ChessEngine, PvLine, SearchOptions } from '../../src/engine/types';
+import { CONVERT_DEPTH, CONVERT_NODES, mulberry32 } from '../../src/bot/strength';
+import type { AnalysisResult, ChessEngine, PvLine, Score, SearchOptions } from '../../src/engine/types';
 
 const START = new Chess().fen();
 /** Out-of-book middlegame (random-ish position), White to move. */
@@ -67,6 +67,30 @@ class FakeEngine implements ChessEngine {
   }
 
   terminate(): void {}
+}
+
+/** FakeEngine that answers with fixed lines for the given positions (by FEN). */
+class ScriptedEngine extends FakeEngine {
+  constructor(private readonly script: Record<string, [string, Score][]>) {
+    super();
+  }
+
+  override async search(fen: string, opts: SearchOptions = {}): Promise<AnalysisResult> {
+    const entries = this.script[fen];
+    if (!entries) return super.search(fen, opts);
+    this.searches.push({ fen, opts });
+    const lines: PvLine[] = entries
+      .slice(0, opts.multiPv ?? 1)
+      .map(([uci, score], i) => ({ multipv: i + 1, depth: opts.depth ?? 10, score, pv: [uci] }));
+    return { fen, depth: opts.depth ?? 10, lines, bestMove: lines[0].pv[0], done: true };
+  }
+}
+
+/** Plays UCI moves from `start` and returns the FEN reached. */
+function play(start: string, moves: string[]): string {
+  const chess = new Chess(start);
+  for (const m of moves) chess.move({ from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] });
+  return chess.fen();
 }
 
 const isLegal = (fen: string, uci: string) =>
@@ -246,5 +270,52 @@ describe('BotPlayer', () => {
     const bot = new BotPlayer(engine, { rng: mulberry32(5), thinkDelay: false });
     const m = (await bot.move(START, 1200, []))!;
     expect(m.source).toBe('book');
+  });
+
+  it('runs a deep conversion search in a won simplified ending', async () => {
+    const krk = '8/8/3k4/8/8/8/8/R3K3 w - - 0 1';
+    for (const elo of [700, 1600]) {
+      const engine = new FakeEngine();
+      const bot = new BotPlayer(engine, { rng: mulberry32(elo), thinkDelay: false });
+      await bot.newGame(elo);
+      const m = (await bot.move(krk, elo, Array(60).fill('e2e4')))!;
+      expect(isLegal(krk, m.uci)).toBe(true);
+      expect(engine.searches).toHaveLength(2);
+      expect(engine.searches[1].opts).toMatchObject({ depth: CONVERT_DEPTH, nodes: CONVERT_NODES, multiPv: 1 });
+    }
+  });
+
+  it('replays the game history and does not walk into a threefold repetition while winning', async () => {
+    const start = '8/8/8/4k3/8/8/8/R3K3 w - - 0 1';
+    // Ra2 Kd5 Ra3 Ke5 Ra2 Kd5 Ra3 Ke5: Ra2 now would be the third occurrence.
+    const direct = ['a1a2', 'e5d5', 'a2a3', 'd5e5', 'a3a2', 'e5d5', 'a2a3', 'd5e5'];
+    // Ra2 Ke6 Ra1 Ke5 Ra2 Ke6: after Ra1, Ke5 would be the third occurrence.
+    const reply = ['a1a2', 'e5e6', 'a2a1', 'e6e5', 'a1a2', 'e5e6'];
+    const cases = [
+      { history: direct, fen: play(start, direct), bad: 'a3a2' },
+      { history: reply, fen: play(start, reply), bad: 'a2a1' },
+    ];
+    // The history-blind engine ranks the repeating move first, far ahead of the rest.
+    const script = Object.fromEntries(
+      cases.map((c) => [
+        c.fen,
+        [c.bad, 'e1d2', 'e1f2', 'e1d1'].map((u, i) => [u, { kind: 'cp', value: i ? 300 - 10 * i : 520 }] as [string, Score]),
+      ]),
+    );
+    for (let seed = 1; seed <= 10; seed++) {
+      const bot = new BotPlayer(new ScriptedEngine(script), { rng: mulberry32(seed), thinkDelay: false });
+      await bot.newGame(3150);
+      // Alternating between the two games also exercises the replay cache being rebuilt.
+      for (const c of [...cases, ...cases]) {
+        const m = (await bot.move(c.fen, 3150, c.history, undefined, start))!;
+        expect(m.uci).not.toBe(c.bad);
+        expect(isLegal(c.fen, m.uci)).toBe(true);
+      }
+    }
+    // Without the right start position the history cannot be replayed: the guard is off, nothing breaks.
+    const blind = new BotPlayer(new ScriptedEngine(script), { rng: mulberry32(1), thinkDelay: false });
+    await blind.newGame(3150);
+    expect((await blind.move(cases[0].fen, 3150, cases[0].history))!.uci).toBe('a3a2');
+    expect((await blind.move(cases[0].fen, 3150, Array(8).fill('e2e4'), undefined, start))!.uci).toBe('a3a2');
   });
 });

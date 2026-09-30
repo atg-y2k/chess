@@ -34,6 +34,7 @@ import {
   KEY_CLASSES,
   RETRY_CLASSES,
   TOP_CLASSES,
+  answerFreeLines,
   classLabel,
   classSentence,
   coachTip,
@@ -47,8 +48,18 @@ import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings, type
 
 /** Screen phase. 'setup' = no game yet (NewGameSheet); 'over' = finished game, not reviewing. */
 export type Phase = 'boot' | 'error' | 'setup' | 'playing' | 'over' | 'review';
-export type SheetName = 'new' | 'menu' | 'gameOver';
+export type SheetName = 'new' | 'menu' | 'gameOver' | 'assist';
 export type EngineMode = 'dual' | 'single';
+
+/** Help that makes a rated game unrated; the first use in a rated game asks for confirmation. */
+export type AssistKind = 'hint' | 'undo' | 'retry';
+
+/** An assist waiting for the player's confirmation (the 'assist' sheet). */
+export interface PendingAssist {
+  kind: AssistKind;
+  /** Retry: the human ply to take back. */
+  index?: number;
+}
 
 /** Depth below which the live eval is shown as "still thinking". */
 export const SHALLOW_DEPTH = 12;
@@ -73,7 +84,10 @@ export interface GameInfo {
   startedAt: string;
   /** Takebacks, hints or best-move arrows were used: the game will not be rated. */
   assisted: boolean;
-  /** Settings the game was started with (colour resolved); rematch starts from these. */
+  /**
+   * Settings the game was started with (colour resolved). A rematch keeps its opponent and colour;
+   * the assistance options come from the current settings.
+   */
   settings: GameSettings;
 }
 
@@ -138,6 +152,10 @@ export interface AppState {
   /** User override of the coach panel's collapsed state (null = automatic). */
   coachCollapsed: Signal<boolean | null>;
   reviewState: Signal<ReviewState | null>;
+  /** Help waiting for confirmation because it would make a rated game unrated. */
+  pendingAssist: Signal<PendingAssist | null>;
+  /** `annotationKey`s of plies whose analysis failed (the coach offers to try again). */
+  failedAnnotations: Signal<ReadonlySet<string>>;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -166,7 +184,8 @@ export type CoachActionId =
   | 'review'
   | 'newGame'
   | 'rematch'
-  | 'retryBoot';
+  | 'retryBoot'
+  | 'retryAnalysis';
 
 export interface CoachActionView {
   id: CoachActionId;
@@ -207,7 +226,15 @@ export type ToolbarView = Record<ToolbarId, ToolState>;
 
 export interface SheetsView {
   open: SheetName | null;
-  newGame: { initial: GameSettings; playerRating: number; bots: BotPersona[] };
+  newGame: {
+    initial: GameSettings;
+    playerRating: number;
+    bots: BotPersona[];
+    /** A game the human has moved in is still going: starting another ends it (a loss unless unrated). */
+    inProgress: { rated: boolean } | null;
+  };
+  /** The unrated-help confirmation (null unless one is pending). */
+  assist: { kind: AssistKind } | null;
   menu: { settings: GameSettings; profile: PlayerProfile; canResign: boolean };
   /** Null until a game has finished. */
   gameOver: {
@@ -281,6 +308,11 @@ const HUMAN_EMOJI = '🙂';
 /** Shared empty values, so unchanged view models keep their identity (fewer chessground updates). */
 const NO_DESTS: Map<string, string[]> = new Map();
 const NO_ARROWS: Arrow[] = [];
+
+/** Identifies one ply of one game (move and position), e.g. for failed analyses. */
+export function annotationKey(gameId: string, p: Pick<Ply, 'index' | 'fenBefore' | 'uci'>): string {
+  return `${gameId}|${p.index}|${p.fenBefore}|${p.uci}`;
+}
 
 /** Legal-move map, check and game-over state of a FEN (never throws). */
 export function positionInfo(fen: string): PositionInfo {
@@ -362,6 +394,8 @@ export function createState(init: { settings?: GameSettings; profile: PlayerProf
     coachMode: signal<CoachMode>({ kind: 'idle' }),
     coachCollapsed: signal<boolean | null>(null),
     reviewState: signal<ReviewState | null>(null),
+    pendingAssist: signal<PendingAssist | null>(null),
+    failedAnnotations: signal<ReadonlySet<string>>(new Set()),
   };
 }
 
@@ -444,7 +478,18 @@ export function createStore(state: AppState): Store {
   });
 
   const badge = computed<BoardView['badge']>(() => {
-    if (coachMode.value.kind === 'showBest') return undefined;
+    const m = coachMode.value;
+    if (m.kind === 'showBest') return undefined;
+    if (m.kind === 'feedback' && phase.value === 'playing' && isLive.value && settings.value.coach) {
+      // The verdict on your last move stays on its square after the bot's reply (unless the reply
+      // landed there), until your next move.
+      const fb = plies.value[m.index];
+      const cls = fb?.classification?.cls;
+      if (!fb || !cls) return undefined;
+      const square = fb.uci.slice(2, 4);
+      if (plies.value[m.index + 1]?.uci.slice(2, 4) === square) return undefined;
+      return { square, cls };
+    }
     const ply = displayedPly.value;
     const cls = ply?.classification?.cls;
     if (!ply || !cls) return undefined;
@@ -487,6 +532,9 @@ export function createStore(state: AppState): Store {
       depth = r.depth;
     }
     const k = current.value;
+    // A drawn game's final position is 0.0, whatever the engine (which does not see repetitions) says.
+    const o = outcome.value;
+    const drawnEnd = !!o && o.winner === null && k === plies.value.length;
     if (!score) {
       const known = k > 0 ? plies.value[k - 1] : null;
       if (known?.evalWhite) {
@@ -497,27 +545,32 @@ export function createStore(state: AppState): Store {
         depth = SHALLOW_DEPTH;
       }
     }
+    const final = !!pos.terminal || drawnEnd;
     if (pos.terminal) {
       score = pos.terminal === 'checkmate' ? { kind: 'mate', value: 0 } : { kind: 'cp', value: 0 };
       score = toWhitePov(score, fen);
+    } else if (drawnEnd) {
+      score = { kind: 'cp', value: 0 };
     }
     if (!score) {
-      // Unknown yet: keep the nearest earlier eval so the bar does not jump back to 50%.
+      // Unknown yet: keep the nearest earlier eval (bar and number, pulsing) so neither jumps
+      // back to 50% / blank after every move.
       for (let i = k - 1; i >= 0 && !score; i--) {
         const e = i > 0 ? plies.value[i - 1].evalWhite : state.startEval.value;
         if (e) score = e;
       }
       const whiteWinProb = score ? whiteBarFraction(score) : 0.5;
       const thinking = phase.value === 'playing' || phase.value === 'over' || phase.value === 'review';
-      return { visible: evalsVisible.value, whiteWinProb, label: '', orientation: orientation.value, thinking, depth: 0 };
+      const label = score ? formatScore(score) : '';
+      return { visible: evalsVisible.value, whiteWinProb, label, orientation: orientation.value, thinking, depth: 0 };
     }
     return {
       visible: evalsVisible.value,
       whiteWinProb: whiteBarFraction(score, pos.turn),
       label: formatScore(score, pos.turn),
       orientation: orientation.value,
-      thinking: !pos.terminal && depth < SHALLOW_DEPTH,
-      depth: pos.terminal ? 0 : depth,
+      thinking: !final && depth < SHALLOW_DEPTH,
+      depth: final ? 0 : depth,
     };
   });
 
@@ -537,6 +590,8 @@ export function createStore(state: AppState): Store {
     const start = state.startEval.value;
     const points: (number | null)[] = [start ? winForWhite(start, startFen) : liveWin(startFen)];
     for (const p of ps) points.push(p.evalWhite ? winForWhite(p.evalWhite, p.fenAfter) : liveWin(p.fenAfter));
+    const o = outcome.value;
+    if (o && o.winner === null) points[points.length - 1] = 0.5;
     const markers = ps
       .filter((p) => p.classification && KEY_CLASSES.has(p.classification.cls) && showsClass(p))
       .map((p) => ({ index: p.index + 1, cls: p.classification!.cls }));
@@ -576,13 +631,13 @@ export function createStore(state: AppState): Store {
       case 'error': {
         const e = state.error.value;
         return status(
-          'The engine could not start',
-          [e?.message ?? 'Something went wrong.', e?.advice ?? ''].filter(Boolean),
+          e?.message ?? 'The engine could not start.',
+          [e?.advice ?? 'Something went wrong.'],
           [{ id: 'retryBoot', label: 'Try again', primary: true }],
         );
       }
       case 'setup':
-        return status('Ready when you are', ['Pick an opponent and a colour to start a game.'], [
+        return status('Ready when you are', ['Pick an opponent and a color to start a game.'], [
           { id: 'newGame', label: 'New game', primary: true },
         ]);
       case 'review':
@@ -653,7 +708,18 @@ export function createStore(state: AppState): Store {
       };
     }
     const cl = ply.classification;
-    if (!cl) return { kind: 'review', title: moveLabel(ply), lines: [], busy: true, actions: [] };
+    if (!cl) {
+      if (analysisFailed(ply)) {
+        return {
+          kind: 'review',
+          title: moveLabel(ply),
+          lines: ['This move could not be analyzed.'],
+          busy: false,
+          actions: [{ id: 'retryAnalysis', label: 'Try again', primary: true }],
+        };
+      }
+      return { kind: 'review', title: moveLabel(ply), lines: [], busy: true, actions: [] };
+    }
     const lines = explanationLines(ply.explanation, cl.bestMoveSan && !TOP_CLASSES.has(cl.cls) ? `Best was ${cl.bestMoveSan}.` : null);
     const actions: CoachActionView[] =
       !TOP_CLASSES.has(cl.cls) && cl.bestMoveUci && cl.bestMoveUci !== ply.uci ? [{ id: 'showBest', label: 'Show best' }] : [];
@@ -680,11 +746,13 @@ export function createStore(state: AppState): Store {
       const back: CoachActionView[] = [{ id: 'backToGame', label: 'Back to game', primary: true }];
       if (ply && s.coach && ply.color === g.playerColor && ply.classification) {
         const cl = ply.classification;
+        // The move the coach is discussing may still be retried: keep its answer hidden here too.
+        const hide = m.kind === 'feedback' && m.index === ply.index && canRetry(ply);
         return {
           kind: 'coach',
           cls: cl.cls,
           title: classSentence(moveLabel(ply), cl.cls),
-          lines: explanationLines(ply.explanation),
+          lines: hide ? answerFreeLines(ply.explanation, cl) : explanationLines(ply.explanation),
           busy: false,
           actions: back,
         };
@@ -708,18 +776,32 @@ export function createStore(state: AppState): Store {
       if (ply) {
         const cl = ply.classification;
         if (!cl || !ply.explanation) {
+          if (analysisFailed(ply)) {
+            return {
+              kind: 'coach',
+              title: `Couldn’t check ${ply.san}`,
+              lines: ['The engine did not finish analyzing this move.'],
+              busy: false,
+              actions: [{ id: 'retryAnalysis', label: 'Try again', primary: true }],
+            };
+          }
           return { kind: 'coach', title: `Checking ${ply.san}…`, lines: [], busy: true, actions: [] };
         }
-        const lines = explanationLines(ply.explanation);
+        const retry = canRetry(ply);
+        // While Retry is on offer, the text must not give the better move away ("Show best" does).
+        const lines = retry ? answerFreeLines(ply.explanation, cl) : explanationLines(ply.explanation);
         const reply = plies.value[m.index + 1];
         const rc = reply?.classification?.cls;
-        if (reply && rc && (rc === 'mistake' || rc === 'blunder')) {
+        // Pointing out the bot's mistake is a live hint, so only in games that are unrated anyway.
+        if (g.assisted && reply && rc && (rc === 'mistake' || rc === 'blunder')) {
           lines.push(`${g.bot.name}’s ${reply.san} was a ${classLabel(rc).toLowerCase()}. Look for a way to punish it!`);
         }
         const actions: CoachActionView[] = [];
-        if (!TOP_CLASSES.has(cl.cls) && cl.bestMoveUci) actions.push({ id: 'showBest', label: 'Show best' });
-        if (canRetry(ply)) actions.push({ id: 'retry', label: 'Retry', primary: true });
-        return { kind: 'coach', cls: cl.cls, title: classLabel(cl.cls), lines, busy: false, actions };
+        // In a rated game Retry costs the rating, so the free "Show best" is the main action.
+        if (!TOP_CLASSES.has(cl.cls) && cl.bestMoveUci) actions.push({ id: 'showBest', label: 'Show best', primary: !g.assisted });
+        if (retry) actions.push({ id: 'retry', label: 'Retry', primary: g.assisted });
+        if (!actions.some((a) => a.primary) && actions.length) actions[0] = { ...actions[0], primary: true };
+        return { kind: 'coach', cls: cl.cls, title: classSentence(moveLabel(ply), cl.cls), lines, busy: false, actions };
       }
     }
     return idleCoach();
@@ -754,6 +836,11 @@ export function createStore(state: AppState): Store {
     return { kind: 'minimal', title, lines, busy: false, actions: [] };
   }
 
+  function analysisFailed(ply: Ply): boolean {
+    const g = game.value;
+    return !!g && state.failedAnnotations.value.has(annotationKey(g.id, ply));
+  }
+
   function humanTurnLive(): boolean {
     const g = game.value;
     return !!g && liveTurn.value === g.playerColor && !botThinking.value;
@@ -780,6 +867,7 @@ export function createStore(state: AppState): Store {
       materialDiff: Math.max(0, mat[c] - mat[otherColor(c)]),
       active: playing && !!g && turn === c,
       thinking: !isHuman && botThinking.value,
+      ...(isHuman && g?.assisted ? { unrated: true } : {}),
     });
     const humanStrip = strip(human, true);
     const botStrip = strip(otherColor(human), false);
@@ -819,9 +907,15 @@ export function createStore(state: AppState): Store {
     const g = game.value;
     const o = outcome.value;
     const rc = state.ratingChange.value;
+    const inProgress =
+      g && phase.value === 'playing' && !o && plies.value.some((p) => p.color === g.playerColor)
+        ? { rated: !g.assisted }
+        : null;
+    const pending = state.pendingAssist.value;
     return {
       open: state.sheet.value,
-      newGame: { initial: settings.value, playerRating: profile.value.rating, bots: BOTS },
+      newGame: { initial: settings.value, playerRating: profile.value.rating, bots: BOTS, inProgress },
+      assist: pending ? { kind: pending.kind } : null,
       menu: {
         settings: settings.value,
         profile: profile.value,

@@ -14,7 +14,7 @@ import {
   type ClassifyFacts,
   type MoverEval,
 } from '../../src/analysis/classify';
-import { capturedFreeMaterial, detectSacrifice, see, unsafePieces } from '../../src/analysis/sacrifice';
+import { capturedFreeMaterial, detectSacrifice, isObviousEscape, see, unsafePieces } from '../../src/analysis/sacrifice';
 import { resultScore } from '../../src/analysis/winprob';
 
 const cp = (value: number): Score => ({ kind: 'cp', value });
@@ -88,7 +88,7 @@ describe('classifyFromEvals: reference vectors', () => {
     { id: 'X11', desc: 'throws away a mate into a lost position', f: { lines: [L('a', mate(2))], playedUci: 'x', played: mate(-3) }, exp: 'blunder' },
     { id: 'X12', desc: 'no Great with three legal moves or fewer', f: { lines: [L('a', cp(20)), L('b', cp(-250))], playedUci: 'a', played: cp(20), legalMoveCount: 3 }, exp: 'best' },
     { id: 'X13', desc: 'no Great when escaping check', f: { lines: [L('a', cp(20)), L('b', cp(-250))], playedUci: 'a', played: cp(20), inCheckBefore: true }, exp: 'best' },
-    { id: 'X14', desc: 'no Brilliant for a promotion', f: { lines: [L('s', cp(150)), L('q', cp(-100))], playedUci: 's', played: cp(150), sacrifice: { netValue: 3 }, isPromotion: true }, exp: 'great' },
+    { id: 'X14', desc: 'no Brilliant or Great for a promotion', f: { lines: [L('s', cp(150)), L('q', cp(-100))], playedUci: 's', played: cp(150), sacrifice: { netValue: 3 }, isPromotion: true }, exp: 'best' },
     { id: 'X15', desc: 'near-best sacrifice at rating 2200 is not brilliant', f: { lines: [L('q', cp(100)), L('s', cp(85))], playedUci: 's', played: cp(85), sacrifice: { netValue: 3 }, rating: 2200 }, exp: 'excellent' },
     { id: 'X16', desc: 'near-best sacrifice (loss .013) at club level is brilliant', f: { lines: [L('q', cp(100)), L('s', cp(85))], playedUci: 's', played: cp(85), sacrifice: { netValue: 3 } }, exp: 'brilliant' },
     { id: 'X17', desc: 'small sacrifice (net 1) is not brilliant', f: { lines: [L('s', cp(150)), L('q', cp(-100))], playedUci: 's', played: cp(150), sacrifice: { netValue: 1 } }, exp: 'great' },
@@ -100,6 +100,11 @@ describe('classifyFromEvals: reference vectors', () => {
     { id: 'X23', desc: 'no engine data at all', f: { lines: [], playedUci: 'x', played: null }, exp: 'good', reason: 'no_data' },
     { id: 'X24', desc: 'no data but forced', f: { lines: [], playedUci: 'x', played: null, legalMoveCount: 1 }, exp: 'forced' },
     { id: 'X25', desc: 'top move uses the top line value even if another eval is passed', f: { lines: [L('a', cp(40)), L('b', cp(-300))], playedUci: 'a', played: cp(-500) }, exp: 'great' },
+    { id: 'X26', desc: 'ignoring a fresh threat is brilliant only as the top move', f: { lines: [L('q', cp(100)), L('s', cp(85))], playedUci: 's', played: cp(85), sacrifice: { netValue: 3, ignoresThreat: true } }, exp: 'excellent' },
+    { id: 'X27', desc: 'ignoring a fresh threat as the only good move is brilliant', f: { lines: [L('s', cp(150)), L('q', cp(-40))], playedUci: 's', played: cp(150), sacrifice: { netValue: 3, ignoresThreat: true } }, exp: 'brilliant', reason: 'sacrifice' },
+    { id: 'X27b', desc: 'ignoring a fresh threat as the top move among equals is only best', f: { lines: [L('s', cp(449)), L('q', cp(436))], playedUci: 's', played: cp(449), sacrifice: { netValue: 2, ignoresThreat: true } }, exp: 'best' },
+    { id: 'X28', desc: 'a queen up (+6.3) is winning anyway, even below 1200', f: { lines: [L('q', cp(632)), L('s', cp(576))], playedUci: 's', played: cp(576), sacrifice: { netValue: 4 }, rating: 100 }, exp: 'excellent' },
+    { id: 'X29', desc: 'no Great for moving an attacked piece to its only safe square', f: { lines: [L('a', cp(-54)), L('b', cp(-555))], playedUci: 'a', played: cp(-54), obviousEscape: true }, exp: 'best' },
   ];
 
   const base = { legalMoveCount: 30, inCheckBefore: false, isBook: false };
@@ -143,6 +148,8 @@ const fenAfter = (sans: string[], fen?: string) => {
   return c.fen();
 };
 
+const RAD1 = '8/3k1nb1/1rpp2p1/pN6/4P3/6PN/PPP2K1P/R6R w - - 0 30';
+
 describe('sacrifice detection (legal-move SEE)', () => {
   const cases: [string, string, string, string | null][] = [
     ["Legall: 5.Nxe5 leaves the queen to Bxd1", fenAfter(['e4', 'e5', 'Nf3', 'd6', 'Bc4', 'Bg4', 'Nc3', 'g6']), 'f3e5', 'q@d1 net 5'],
@@ -156,6 +163,15 @@ describe('sacrifice detection (legal-move SEE)', () => {
     ['Same knight move without the pin', '4k3/8/2p5/8/1N6/8/8/B3K3 w - - 0 1', 'b4d5', 'n@d5 net 3'],
     ['Promotion is never a sacrifice', '8/4P3/8/8/8/8/k7/4K2r w - - 0 1', 'e7e8q', null],
     ['Illegal move does not throw', fenAfter(['e4', 'e5']), 'e1e5', null],
+    // A piece that was already en prise and stays en prise is not a new offer.
+    ['Quiet move while a knight is already attacked', '4k3/8/8/2p5/3N4/8/P7/4K3 w - - 0 1', 'a2a3', null],
+    ['Rad1 with the knight on b5 already hanging', RAD1, 'a1d1', null],
+    ['Kg2 with the knight on b5 already hanging', RAD1, 'f2g2', null],
+    ['Raf1 with the knight on b5 already hanging', RAD1, 'a1f1', null],
+    ['Be2 with the rook on d2 already attacked', 'r2qk2r/1b3ppp/p3pn2/1p6/1bP4P/3PPNP1/1B1R1P2/1N1QKB1R w Kkq - 0 18', 'f1e2', null],
+    ['Qc3 with the rook on g8 already attacked', '2r2kr1/5p1p/p3pN2/qb2Q2P/8/3PP1P1/5P2/3R2K1 b - - 4 29', 'a5c3', null],
+    // A move that takes away a defender newly offers the piece.
+    ['Removing the only defender of a knight', '4k3/8/8/3r4/3N4/8/8/3RK3 w - - 0 1', 'd1a1', 'n@d4 net 3'],
   ];
   for (const [name, fen, uci, exp] of cases) {
     it(name, () => {
@@ -163,6 +179,32 @@ describe('sacrifice detection (legal-move SEE)', () => {
       expect(s ? `${s.piece}@${s.square} net ${s.netValue}` : null).toBe(exp);
     });
   }
+
+  it('counts an ignored threat only when the opponent has just made it', () => {
+    const fmt = (x: ReturnType<typeof detectSacrifice>) => (x ? `${x.piece}@${x.square} net ${x.netValue}${x.ignoresThreat ? ' ignores' : ''}` : null);
+    // Rad1: the knight on b5 was already hanging before Black's last move (after Kf2).
+    expect(fmt(detectSacrifice(RAD1, 'a1d1', '8/2pk1nb1/1r1p2p1/pN6/4P3/6PN/PPP2K1P/R6R b - - 1 29'))).toBeNull();
+    // 3...a6 attacks the knight on b5 (defended by the bishop): h3 ignores that new threat.
+    const beforeA6 = fenAfter(['e4', 'e5', 'Nc3', 'Nc6', 'Nb5']);
+    const afterA6 = fenAfter(['a6'], beforeA6);
+    expect(fmt(detectSacrifice(afterA6, 'h2h3'))).toBeNull();
+    expect(fmt(detectSacrifice(afterA6, 'h2h3', beforeA6))).toBe('n@b5 net 2 ignores');
+    // A pawn fork: saving the queen is not a sacrifice of the knight, even though the threat is new.
+    const fork = '4k3/8/8/2p5/1N1Q4/8/8/4K3 w - - 0 1';
+    expect(fmt(detectSacrifice(fork, 'd4e4', '4k3/8/2p5/8/1N1Q4/8/8/4K3 b - - 0 1'))).toBeNull();
+  });
+
+  it('isObviousEscape: an attacked piece moved to its only safe square', () => {
+    // 4.b4 attacks the bishop on a5: b6 is its only safe square (Bxb4 loses it to axb4).
+    const bb6 = 'rnbqk1nr/pppp1ppp/8/b3p3/1P2P3/P1N5/2PP1PPP/R1BQKBNR b KQkq - 0 4';
+    expect(isObviousEscape(bb6, 'a5b6')).toBe(true);
+    // A knight attacked by a pawn with several safe squares: choosing one is not obvious.
+    expect(isObviousEscape('4k3/8/8/8/3p4/4N3/8/4K3 w - - 0 1', 'e3c4')).toBe(false);
+    // Not attacked, a capture, or an illegal move.
+    expect(isObviousEscape(fenAfter(['e4', 'e5']), 'g1f3')).toBe(false);
+    expect(isObviousEscape(bb6, 'a5b4')).toBe(false);
+    expect(isObviousEscape(bb6, 'a5a1')).toBe(false);
+  });
 
   it('see() plays least valuable attacker first and may stop', () => {
     // Rook on e5 attacked by a pawn and defended by a pawn: the pawn wins the rook for a pawn.
@@ -302,6 +344,37 @@ describe('classifyMove on real positions', () => {
     expect(classifyMove({ fenBefore: fen, moveUci: 'f3e5', before, playerRating: 1500 }).cls).toBe('good');
     const detail = classifyMoveDetailed({ fenBefore: fen, moveUci: 'f3e5', before, playerRating: 900 });
     expect(detail.sacrifice).toEqual({ netValue: 5, square: 'd1', piece: 'q' });
+  });
+
+  it('does not call leaving an already hanging piece Brilliant (Rad1)', () => {
+    // Na3 saves the knight; Rad1 leaves it hanging (+5 -> +4.8 is still within the <1200 tier).
+    const before = analysis(RAD1, [line(1, cp(504), ['b5a3', 'b6b2']), line(2, cp(499), ['a1e1']), line(3, cp(492), ['b5d6'])]);
+    const after = analysis(fenAfter(['Rad1'], RAD1), [line(1, cp(-479), ['b6b5'])]);
+    const d = classifyMoveDetailed({ fenBefore: RAD1, moveUci: 'a1d1', before, after, playerRating: 800 });
+    expect(d.classification.cls).toBe('excellent');
+    expect(d.sacrifice).toBeNull();
+  });
+
+  it('does not call giving back material a queen up Brilliant (Rxe4+ at 100)', () => {
+    const fen = 'rnbqkb2/ppppppp1/7n/8/2B1P2r/2N2N2/PPPP1PPP/R1B1K2R b KQq - 5 5';
+    const before = analysis(fen, [line(1, cp(632), ['h4g4']), line(2, cp(627), ['h4h5']), line(3, cp(604), ['d7d5'])]);
+    const after = analysis(fenAfter(['Rxe4+'], fen), [line(1, cp(-576), ['c3e4', 'd7d5'])]);
+    const d = classifyMoveDetailed({ fenBefore: fen, moveUci: 'h4e4', before, after, playerRating: 100 });
+    expect(d.sacrifice).toMatchObject({ square: 'e4', piece: 'r' });
+    expect(d.classification.cls).toBe('excellent');
+  });
+
+  it('does not call queening or an obvious escape Great', () => {
+    const kpkr = '8/4P3/8/8/8/k7/7r/4K3 w - - 0 1';
+    const promo = analysis(kpkr, [line(1, cp(247), ['e7e8q', 'h2b2']), line(2, cp(0), ['e7e8r']), line(3, cp(-14), ['e7e8n'])]);
+    expect(classifyMove({ fenBefore: kpkr, moveUci: 'e7e8q', before: promo }).cls).toBe('best');
+    const bb6 = 'rnbqk1nr/pppp1ppp/8/b3p3/1P2P3/P1N5/2PP1PPP/R1BQKBNR b KQkq - 0 4';
+    const esc = analysis(bb6, [line(1, cp(-54), ['a5b6', 'g1f3']), line(2, cp(-555), ['d7d5']), line(3, cp(-561), ['g8f6'])]);
+    expect(classifyMove({ fenBefore: bb6, moveUci: 'a5b6', before: esc }).cls).toBe('best');
+    // Still Great when the attacked piece had to find the one good square among several safe ones.
+    const kn = '4k3/8/8/8/3p4/4N3/8/4K3 w - - 0 1';
+    const knight = analysis(kn, [line(1, cp(200), ['e3c4']), line(2, cp(-100), ['e3f5']), line(3, cp(-120), ['e3g4'])]);
+    expect(classifyMove({ fenBefore: kn, moveUci: 'e3c4', before: knight }).cls).toBe('great');
   });
 
   it('never throws on missing or odd input', () => {

@@ -8,7 +8,7 @@
 import { Chess } from 'chess.js';
 import { START_FEN, pvToSan, toWhitePov } from '../chess/utils';
 import { AnalysisService } from './AnalysisService';
-import { createEngines, type EngineSet } from './createEngines';
+import { createEngines, rememberedEngineMode, type EngineLoadProgress, type EngineSet } from './createEngines';
 import type { AnalysisResult, PvLine, Score } from './types';
 import { engineSupported } from './workerTransport';
 
@@ -82,14 +82,30 @@ export async function runEngineSelfTest(log: (line: string) => void, opts: SelfT
 
   let set: EngineSet;
   const tInit = performance.now();
+  const downloads = new Map<EngineLoadProgress['engine'], number>();
+  const onProgress = (p: EngineLoadProgress) => {
+    if (!downloads.has(p.engine)) downloads.set(p.engine, performance.now());
+    if (p.loaded >= p.total) {
+      const took = Math.round(performance.now() - (downloads.get(p.engine) ?? tInit));
+      say(`${p.engine} engine .wasm: ${(p.total / 1048576).toFixed(2)} MB loaded (${took} ms after the first bytes)`);
+    }
+  };
   try {
-    set = await createEngines({ forceSingle: opts.forceSingle });
+    set = await createEngines({ forceSingle: opts.forceSingle, onProgress });
   } catch (e) {
     check(false, `engines start: ${e instanceof Error ? e.message : String(e)}`);
     say('RESULT: FAIL');
     return false;
   }
   check(true, `engines ready in ${Math.round(performance.now() - tInit)} ms (mode: ${set.mode})`);
+  const remembered = rememberedEngineMode();
+  if (remembered) {
+    const day = (t: number) => new Date(t).toISOString().slice(0, 10);
+    say(
+      `one shared engine since ${day(remembered.since)} (a two-engine start did not complete); ` +
+        `two engines are tried again after ${day(remembered.until)}, or now with ?engines=2`,
+    );
+  }
 
   try {
     // 1. Depth 12 from the start position.

@@ -7,7 +7,8 @@ import { Chess } from 'chess.js';
 import { describe, expect, it } from 'vitest';
 import type { AnalysisResult, Score } from '../../src/engine/types';
 import type { Classification, Explanation, MoveClass } from '../../src/analysis/types';
-import { describeThreat, explainBestMove, explainMove, type ExplainMoveInput } from '../../src/analysis/explain';
+import { describeMaterial, describeThreat, explainBestMove, explainMove, type ExplainMoveInput } from '../../src/analysis/explain';
+import { materialOutcome, moveMotifs, principles, stoppedThreat } from '../../src/analysis/motifs';
 import { parseUci } from '../../src/chess/utils';
 
 interface Fixture {
@@ -93,6 +94,8 @@ function expectWellFormed(e: Explanation) {
   expect(e.details.length).toBeLessThanOrEqual(3);
   for (const s of text(e)) {
     expect(s).toMatch(/[.!]$/);
+    // American spelling for an American user.
+    expect(s).not.toMatch(/centre|towards|defence/i);
     expect(s).not.toMatch(/undefined|null|NaN|\[object|\s{2}/);
     // Starts with a capital letter, or with a move in SAN (pawn moves are lower case).
     expect(s).toMatch(/^([A-Z]|[a-h][1-8x])/);
@@ -149,12 +152,12 @@ describe('explainBestMove (hints)', () => {
     [S.blackburne, 'Nxd4 trades knights.', []],
     [S.morphy, 'Qb3 wins a pawn.', ['It threatens both Qxb7 and Bxf7+ (a double attack).']],
     [S.promotion, 'a8=Q leads to a forced mate in 9.', ['It promotes the pawn to a queen.']],
-    [S.start, 'e4 takes space in the centre and opens a diagonal for the bishop on f1.', []],
+    [S.start, 'e4 takes space in the center and opens a diagonal for the bishop on f1.', []],
     [S.trapped, 'Bb7 wins back a knight.', ['It traps the knight on a8: every square it can go to loses it.']],
     [S.backRank, 'f3 gives the king an escape square.', []],
     [fenOf('e4 e5 Qh5 Nc6'), 'Bc4 threatens mate with Qxf7# and develops the bishop.', []],
     [S.queenFork, 'Qe3+ wins a knight.', ['It attacks the king and the knight on f4 at once (a fork).']],
-    [S.pawnEnding, 'Ke3 brings the king towards the centre.', []],
+    [S.pawnEnding, 'Ke3 brings the king toward the center.', []],
   ] as [string, string, string[]][])('%s', (fen, headline, details) => {
     const e = hint(fen);
     expect(e.headline).toBe(headline);
@@ -274,7 +277,7 @@ describe('explainMove: mistakes and blunders', () => {
     expect(text(e)).toEqual([
       'This hangs your queen on g4.',
       'Black plays Nxg4 and wins the queen.',
-      'Best was Nf3, which develops the knight and fights for the centre.',
+      'Best was Nf3, which develops the knight and fights for the center.',
     ]);
     expect(e.arrows).toEqual([
       { from: 'f6', to: 'g4', brush: 'threat' },
@@ -338,7 +341,7 @@ describe('explainMove: mistakes and blunders', () => {
     expect(text(explain(fenOf('e4 e5'), 'Qh5'))).toEqual([
       'Qh5 brings the queen out early, where enemy pieces can chase it.',
       "Black can answer d6, which saves Black's pawn on e5 from Qxe5+.",
-      'Best was Nf3, which develops the knight and fights for the centre.',
+      'Best was Nf3, which develops the knight and fights for the center.',
     ]);
     expect(explain(fenOf('f3 e5'), 'g4').headline).toBe('This allows Qh4#, checkmate.');
   });
@@ -366,7 +369,7 @@ describe('explainMove: mistakes and blunders', () => {
 describe('explainMove: good moves', () => {
   it('praises with the reason', () => {
     expect(text(explain(S.start, 'e4'))).toEqual([
-      'e4 takes space in the centre and opens a diagonal for the bishop on f1.',
+      'e4 takes space in the center and opens a diagonal for the bishop on f1.',
     ]);
     expect(text(explain(S.castle, 'O-O'))).toEqual(['O-O castles the king to safety and brings the rook into play.']);
     expect(text(explain(S.scholar, 'g6'))).toEqual(['g6 stops the threat of mate with Qxf7#.']);
@@ -374,7 +377,7 @@ describe('explainMove: good moves', () => {
       'Nxe5 wins a pawn.',
       'It uncovers an attack by the queen on d1 on the bishop on h5.',
     ]);
-    expect(text(explain(S.pawnEnding, 'd6'))).toEqual(['d6 pushes a passed pawn towards promotion.']);
+    expect(text(explain(S.pawnEnding, 'd6'))).toEqual(['d6 pushes a passed pawn toward promotion.']);
     expect(text(explain(S.backRank, 'h3'))).toEqual(['h3 gives the king an escape square.']);
   });
 
@@ -433,7 +436,7 @@ describe('explainMove: robustness', () => {
     const uci = before.lines[1].pv[0]; // d2d4
     const classification = classify(fen, uci, before, undefined, 'excellent');
     const e = explainMove({ fenBefore: fen, moveUci: uci, classification, before });
-    expect(e.headline).toBe('d4 takes space in the centre and opens a diagonal for the bishop on c1.');
+    expect(e.headline).toBe('d4 takes space in the center and opens a diagonal for the bishop on c1.');
   });
 
   it('works with no engine lines at all', () => {
@@ -443,7 +446,7 @@ describe('explainMove: robustness', () => {
     const empty: AnalysisResult = { fen, depth: 0, lines: [], bestMove: null, done: false };
     const e = explainMove({ fenBefore: fen, moveUci: uci, classification: cl, before: empty });
     expectWellFormed(e);
-    expect(e.details.at(-1)).toBe('Best was Nf3, which develops the knight and fights for the centre.');
+    expect(e.details.at(-1)).toBe('Best was Nf3, which develops the knight and fights for the center.');
   });
 
   it('falls back instead of throwing on bad input', () => {
@@ -462,6 +465,305 @@ describe('explainMove: robustness', () => {
     expect(text(illegal)).toEqual(['There was a better move than a3.', 'Best was e4.']);
     const garbage = () => explainMove({ fenBefore: 'garbage', moveUci: 'e2e4', classification: cl, before: empty });
     expect(garbage).not.toThrow();
+  });
+});
+
+// ------------------------------------------------------------------ regression cases (hand-made PVs)
+
+const cp = (value: number): Score => ({ kind: 'cp', value });
+const pvLine = (score: Score, pv: string[], multipv = 1) => ({ multipv, depth: 16, score, pv });
+const result = (fen: string, lines: ReturnType<typeof pvLine>[]): AnalysisResult => ({
+  fen,
+  depth: 16,
+  lines,
+  bestMove: lines[0]?.pv[0] ?? null,
+  done: true,
+});
+const hintOf = (fen: string, score: Score, pv: string[], opts?: Parameters<typeof explainBestMove>[2]) =>
+  explainBestMove(fen, pvLine(score, pv), opts);
+/** explainMove with hand-made engine lines and a given class and expected scores. */
+function explainWith(
+  fen: string,
+  uci: string,
+  cls: MoveClass,
+  before: ReturnType<typeof pvLine>[],
+  after: ReturnType<typeof pvLine>[],
+  win: [number, number],
+  extra: Partial<ExplainMoveInput> = {},
+): Explanation {
+  const c = new Chess(fen);
+  const m = c.move(parseUci(uci));
+  const best = before[0].pv[0];
+  const classification: Classification = {
+    cls,
+    winBefore: win[0],
+    winAfter: win[1],
+    winLoss: Math.max(0, win[0] - win[1]),
+    accuracy: 90,
+    bestMoveUci: best,
+    bestMoveSan: new Chess(fen).move(parseUci(best)).san,
+    playedMoveSan: m.san,
+  };
+  const e = explainMove({
+    fenBefore: fen,
+    moveUci: uci,
+    classification,
+    before: result(fen, before),
+    after: result(c.fen(), after),
+    ...extra,
+  });
+  expectWellFormed(e);
+  return e;
+}
+
+const FRIED_LIVER = 'r1bqkb1r/ppp2ppp/2n5/3np1N1/2B5/8/PPPP1PPP/RNBQK2R w KQkq - 0 6';
+
+describe('"saves" is only said for a real defence', () => {
+  it('a sacrifice is not a save (Fried Liver Nxf7)', () => {
+    const e = hintOf(FRIED_LIVER, cp(136), ['g5f7', 'e8f7', 'd1f3', 'f7e6', 'b1c3']);
+    expect(e.headline).toBe('Nxf7 sacrifices a knight for a pawn.');
+    const brilliant = explainWith(
+      FRIED_LIVER,
+      'g5f7',
+      'brilliant',
+      [pvLine(cp(136), ['g5f7', 'e8f7', 'd1f3', 'f7e6', 'b1c3']), pvLine(cp(67), ['d2d4', 'c6d4'], 2)],
+      [pvLine(cp(-136), ['e8f7', 'd1f3', 'f7e6', 'b1c3'])],
+      [0.62, 0.62],
+    );
+    expect(text(brilliant)).toEqual([
+      'Nxf7 sacrifices a knight for a pawn.',
+      'The knight sacrifice pays off: Kxf7 Qf3+ Ke6 Nc3.',
+    ]);
+  });
+
+  it('a pawn move that brings a defender still saves the piece', () => {
+    expect(hintOf(FRIED_LIVER, cp(67), ['d2d4', 'c6d4', 'c2c3']).headline).toBe('d4 saves your knight on g5 from Qxg5.');
+  });
+
+  it('a trade is a trade, and a piece moved into a capture is not saved', () => {
+    const rooks = hintOf('8/8/3r1ppk/4p2p/2K1P3/3R4/8/8 b - - 0 1', cp(707), ['d6d3', 'c4d3', 'h5h4', 'd3c4']);
+    expect(rooks.headline).toMatch(/^Rxd3 trades /);
+    expect(stoppedThreat('3k4/8/6p1/2R3b1/P3P1K1/6PN/P6P/7R b - - 0 1', 'g5h4')).toBeNull();
+    expect(stoppedThreat('3k4/8/6p1/2R3b1/P3P1K1/6PN/P6P/7R b - - 0 1', 'g5h6')?.san).toBe('Rxg5');
+    const nxc6 = 'rnbqkb1r/2pn1pp1/1pBp4/p2Pp3/4P2p/2N1B3/PPP2PPP/R1Q1K1NR b KQkq - 0 1';
+    expect(stoppedThreat(nxc6, 'b8c6')).toBeNull();
+  });
+
+  it('does not claim a save while a bigger threat is left (Blackburne Shilling)', () => {
+    const fen = 'r1b1kbnr/pppp1Npp/8/8/2BnP3/8/PPPP1PqP/RNBQK2R w KQkq - 0 1';
+    expect(stoppedThreat(fen, 'd2d3')).toBeNull();
+    expect(hintOf(fen, cp(-586), ['d2d3', 'd7d5', 'c4b5', 'e8f7', 'd1h5']).headline).not.toMatch(/saves/);
+  });
+});
+
+describe('promotions in material lines', () => {
+  it("counts the opponent's new queen, not a pawn won", () => {
+    const fen = '4r3/1P1k4/8/8/8/8/8/K7 b - - 0 1';
+    const out = materialOutcome(fen, ['d7c6', 'b7b8q'], 'b');
+    expect(out).toMatchObject({ net: -8, won: {}, lost: {}, theirPromoted: ['q'] });
+    expect(describeMaterial(out, 'White')).toBe('lets White make a new queen');
+    expect(hintOf(fen, cp(-517), ['d7c6', 'b7b8q']).headline).not.toMatch(/wins/);
+    expect(hintOf('8/1P6/8/8/8/8/6k1/K7 b - - 0 1', cp(-598), ['g2f3', 'b7b8q', 'f3e4']).headline).not.toMatch(/wins/);
+  });
+
+  it('counts an underpromotion as the piece it makes', () => {
+    const fen = '8/5P1k/8/8/8/8/8/5K2 w - - 0 1';
+    const say = (u: string) => {
+      const o = materialOutcome(fen, [u, 'h7g7', 'f1g2'], 'w');
+      return `${o.net} ${describeMaterial(o)}`;
+    };
+    expect([say('f7f8q'), say('f7f8r'), say('f7f8n'), say('f7f8b')]).toEqual([
+      '8 promotes to a queen',
+      '4 promotes to a rook',
+      '2 promotes to a knight',
+      '2 promotes to a bishop',
+    ]);
+    const fork = materialOutcome('8/2k1P1q1/8/8/8/7K/8/8 w - - 0 1', ['e7e8n', 'c7d7', 'e8g7'], 'w');
+    expect(describeMaterial(fork)).toBe('wins the queen and promotes to a knight');
+    // A new queen taken at once is a pawn lost, not a queen.
+    const taken = (pov: 'w' | 'b') => describeMaterial(materialOutcome('r3k3/1P6/8/8/8/8/8/4K3 w - - 0 1', ['b7b8q', 'a8b8', 'e1e2'], pov));
+    expect([taken('w'), taken('b')]).toEqual(['loses a pawn', 'wins a pawn']);
+  });
+
+  it('explains an underpromotion that throws away the win', () => {
+    const fen = '8/5P1k/8/8/8/8/8/5K2 w - - 0 1';
+    const e = explainWith(
+      fen,
+      'f7f8n',
+      'blunder',
+      [pvLine(cp(844), ['f7f8q', 'h7g6']), pvLine(cp(479), ['f7f8r', 'h7g7'], 2), pvLine(cp(13), ['f7f8n', 'h7g7'], 3)],
+      [pvLine(cp(-13), ['h7g7', 'f8e6', 'g7f7'])],
+      [0.96, 0.51],
+    );
+    expect(e.headline).toBe('f8=N+ promotes to a knight instead of a queen.');
+    expect(text(e).join(' ')).not.toMatch(/loses material/);
+  });
+
+  it('says when a new queen is taken at once, or when the promotion comes later in the line', () => {
+    const taken = hintOf('4r2k/1P4pp/8/8/8/7P/5PP1/6K1 w - - 0 1', cp(-679), ['b7b8q', 'e8b8', 'f2f4']);
+    expect(taken.headline).toBe('b8=Q promotes, but the new queen is taken at once.');
+    const later = hintOf('7k/8/1P6/8/8/8/8/K7 w - - 0 1', cp(900), ['b6b7', 'h8g7', 'b7b8q', 'g7f7']);
+    expect(later.headline).toBe('b7 lets your pawn promote with b8=Q.');
+  });
+
+  it('does not call a pawn on the last rank a passed pawn', () => {
+    expect(principles('4r2k/1P4pp/8/8/8/7P/5PP1/6K1 w - - 0 1', 'b7b8q').map((p) => p.kind)).not.toContain('passedPawn');
+  });
+});
+
+describe('gambit lines', () => {
+  it('a quiet move does not "win" the pawn the opponent gives up for play', () => {
+    const twoKnights = 'r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4';
+    expect(hintOf(twoKnights, cp(4), ['f3g5', 'd7d5', 'e4d5', 'c6a5', 'c4b5', 'c7c6']).headline).not.toMatch(/wins/);
+    const petrov = 'rnbqkb1r/pppp1ppp/5n2/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3';
+    expect(hintOf(petrov, cp(-53), ['d1e2', 'f8c5', 'f3e5', 'e8g8']).headline).not.toMatch(/wins/);
+    const qf6 = 'rnb1kbnr/pppp1ppp/8/4p3/4P2q/3P1N2/PPP2PPP/RNBQKB1R b KQkq - 0 3';
+    expect(hintOf(qf6, cp(-112), ['h4f6', 'd3d4', 'e5d4', 'c2c3', 'd4c3', 'b1c3']).headline).toBe(
+      'Qf6 saves your queen on h4 from Nxh4.',
+    );
+  });
+});
+
+describe('tactics that are not real', () => {
+  const kinds = (fen: string, uci: string) => moveMotifs(fen, uci)!.motifs.map((m) => m.kind);
+
+  it('no pin when the pinned piece (or anything) simply takes the pinner', () => {
+    expect(kinds('2k1rb1r/pp6/3p2p1/4n1N1/2PN1Rn1/2K1P1P1/PP1B2q1/8 w - - 1 29', 'f4f8')).not.toContain('pin');
+    expect(kinds('rnbqk2r/ppppb1pp/4pn2/5pB1/3P4/2N2N2/PPP1PPPP/R2QKB1R w KQkq - 4 5', 'g5f6')).not.toContain('pin');
+    expect(kinds('r2q1rk1/ppp2ppp/2n5/1B6/4Pbb1/2N2N2/PPP2PPP/R2Q1RK1 b - - 1 12', 'd8d1')).not.toContain('pin');
+  });
+
+  it("says (it can't move) only when the pinned piece really cannot", () => {
+    expect(hintOf('4k3/4n3/8/8/8/8/8/R4K2 w - - 0 1', cp(50), ['a1e1']).headline).toMatch(/pins the knight on e7 to the king \(it can't move\)/);
+    const rook = hintOf('4k3/4r3/8/8/8/8/8/R4K2 w - - 0 1', cp(0), ['a1e1']).headline;
+    expect(rook).toMatch(/pins the rook on e7 to the king/);
+    expect(rook).not.toMatch(/can't move/);
+  });
+
+  it('keeps a pin when the pinned piece cannot take the pinner because of check', () => {
+    // Nf3+: White must answer the check, so Bxa5 is not possible and the bishop on d2 stays pinned.
+    const fen = 'r3kb1r/pp2pppp/3p1n2/qN2n3/4P3/N5P1/PPPB1P1P/R3KB1R b KQkq - 2 10';
+    expect(moveMotifs(fen, 'e5f3')!.motifs).toContainEqual(expect.objectContaining({ kind: 'pin', exploit: true }));
+  });
+
+  it('no fork when a block or king move saves everything', () => {
+    expect(kinds('r4r2/2k4P/1p2p3/p5bP/3p1p2/8/P7/1n2RK2 w - - 20 55', 'e1c1')).not.toContain('fork');
+    expect(kinds('r2qk2r/pbpp1pp1/np5p/7Q/2PPP3/N3B3/PP3PPP/R3KB1R w KQkq - 1 12', 'h5e5')).not.toContain('fork');
+    // Real checking forks stay.
+    expect(kinds('r3k3/ppp2ppp/8/1N6/8/8/PPP2PPP/4K3 w - - 0 1', 'b5c7')).toContain('fork');
+    expect(kinds('4k3/8/8/8/5n2/8/3Q4/6K1 w - - 0 1', 'd2e3')).toContain('fork');
+  });
+
+  it('no double attack by a piece that is simply lost, but a trade with tempo keeps it', () => {
+    expect(kinds('r2q1rk1/pbpp1pp1/np5p/5Q2/2PPP3/N3B3/PP2BPPP/R3K2R b KQ - 4 13', 'b7e4')).not.toContain('doubleThreat');
+    expect(kinds(fenOf('e4 e5 Nf3 d6 d4 Bg4 dxe5'), 'g4f3')).toContain('doubleThreat');
+  });
+
+  it('only reports pieces the move traps', () => {
+    expect(kinds('r2qk2r/1b3ppp/p3pn2/1p6/1bP4P/3PPNP1/1B1RBP2/1N1QK2R b Kkq - 1 18', 'e8g8')).not.toContain('trapped');
+  });
+});
+
+describe('fewer vague "improves the position" texts', () => {
+  it('a check that sets up a threat says what follows (Greek gift Ng5+)', () => {
+    const fen = 'rnbq1r2/pppn1ppk/4p3/3pP3/1b1P4/2N2N2/PPP2PPP/R1BQK2R w KQ - 0 8';
+    const e = hintOf(fen, cp(550), ['f3g5', 'h7g8', 'd1h5', 'd8g5', 'c1g5', 'f7f6']);
+    expect(text(e)).toEqual([
+      'Ng5+ gives check, and then Qh5 wins the queen for a knight.',
+      'It threatens mate with Qh7#.',
+    ]);
+  });
+
+  it('giving material back while winning, and a quiet preparing move', () => {
+    const qxf8 = hintOf('1r3rk1/p1ppQpp1/n6p/1p6/2PP4/N3B3/PP2BPPP/R2K3R w - - 1 17', cp(2459), ['e7f8', 'g8f8', 'c4b5', 'a6b4', 'e3d2']);
+    expect(qxf8.headline).toBe('Qxf8+ gives up the queen for a rook and a pawn and keeps a winning position.');
+    const be2 = hintOf('r2qk2r/1b3ppp/p3pn2/1p6/1bP4P/3PPNP1/1B1R1P2/1N1QKB1R w Kkq - 0 18', cp(439), ['f1e2', 'e8g8', 'e1g1', 'b4d2', 'b1d2']);
+    expect(be2.headline).toBe('Be2 prepares O-O, which castles the king to safety and brings the rook into play.');
+  });
+
+  it('a hanging piece is named even when the position was already decided', () => {
+    const fen = 'rnbqkb1r/pppppppp/8/8/4P1n1/8/PPPP1PPP/RNB1KBNR w KQkq - 0 3';
+    const e = explainWith(
+      fen,
+      'f1a6',
+      'good',
+      [pvLine(cp(-836), ['g1f3', 'g4f6', 'b1c3']), pvLine(cp(-844), ['f1e2'], 2)],
+      [pvLine(cp(1237), ['b8a6', 'g1f3', 'd7d5'])],
+      [0.044, 0.011],
+    );
+    expect(text(e)).toEqual([
+      'This hangs your bishop on a6.',
+      'Black plays Nxa6 and wins a bishop.',
+      'The position was already lost.',
+      'Best was Nf3, which develops the knight and fights for the center.',
+    ]);
+  });
+});
+
+describe('recaptures and consistency', () => {
+  it('a recapture is not counted as material won', () => {
+    const qxf4 = hintOf('3qkb1r/r1p2pp1/1pPp1n2/p5B1/4Ppbp/2N1Q3/PPP3PP/R3K1NR w KQk - 0 14', cp(336), ['e3f4', 'g4h5', 'f4h4', 'f8e7'], {
+      prevMove: { to: 'f4', captured: 'p' },
+    });
+    expect(text(qxf4)).toEqual(['Qxf4 wins a pawn.', 'Key line: Qxf4 Bh5 Qxh4 Be7.']);
+    const rxf8 = hintOf('1r3Qk1/p1pp1pp1/n6p/1p6/2PP4/N3B3/PP2BPPP/R2K3R b - - 0 17', cp(-1884), ['b8f8', 'c4b5', 'a6b4'], {
+      prevMove: { to: 'f8', captured: 'r' },
+    });
+    expect(rxf8.headline).toBe('Rxf8 wins the queen for a rook and a pawn.');
+  });
+
+  it('explains the best move with the same line as the hint', () => {
+    const moves = (GAMES.games ?? []).find((g) => g.name === 'Opera game')!.moves.split(' ');
+    const c = new Chess();
+    let prevMove: { to: string; captured?: string } | undefined;
+    let compared = 0;
+    for (const san of moves) {
+      const fen = c.fen();
+      const m = c.move(san);
+      const uci = m.from + m.to + (m.promotion ?? '');
+      const before = analysis(fen, GAMES);
+      const after = analysis(c.fen(), GAMES);
+      if (before.lines[0]?.pv[0] === uci && !c.isGameOver() && before.lines[0].score.kind === 'cp') {
+        const classification = classify(fen, uci, before, after);
+        const e = explainMove({ fenBefore: fen, moveUci: uci, classification, before, after, prevMove });
+        expect(e.headline).toBe(explainBestMove(fen, before.lines[0], { prevMove }).headline);
+        compared++;
+      }
+      prevMove = { to: m.to, captured: m.captured };
+    }
+    expect(compared).toBeGreaterThan(5);
+  });
+});
+
+describe('no contradictions', () => {
+  it('no "would be a mistake" when the opponent cannot take (in check)', () => {
+    const fen = fenOf('d4 e6 Nf3 f5 Nc3 Nf6 Bg5 Be7 Bxf6 Bxf6 e4 fxe4 Nxe4 b6 Ne5 O-O Bd3 Bb7 Qh5 Qe7 Qxh7+ Kxh7 Nxf6+ Kh6');
+    const e = explainWith(
+      fen,
+      'e5g4',
+      'great',
+      [pvLine({ kind: 'mate', value: 7 }, ['e5g4', 'h6g5', 'h2h4', 'g5f4']), pvLine(cp(76), ['f6g4'], 2)],
+      [pvLine({ kind: 'mate', value: -6 }, ['h6g5', 'h2h4', 'g5f4'])],
+      [1, 1],
+    );
+    expect(text(e).join(' ')).not.toMatch(/would be a mistake/);
+  });
+
+  it('a swing to the other side reads "the better game", not "back into the game"', () => {
+    const fen = 'r1bqkb1r/pppp1ppp/5n2/4p3/2BnP3/5N2/PPPPQPPP/RNB1K2R w KQkq - 6 5';
+    const e = explainWith(
+      fen,
+      'e2d3',
+      'blunder',
+      [pvLine(cp(195), ['f3d4', 'e5d4', 'e4e5']), pvLine(cp(-69), ['e2d1'], 2)],
+      [pvLine(cp(236), ['d7d5', 'c4d5', 'f6d5'])],
+      [0.673, 0.295],
+    );
+    expect(e.headline).toBe('This gives Black the better game.');
+  });
+
+  it('does not repeat the same tactic as "X was better"', () => {
+    for (const d of explain(S.tradeAhead, 'Qxd8+').details) expect(d).not.toMatch(/was better: it trades/);
   });
 });
 
@@ -490,6 +792,11 @@ describe('whole games (engine lines at depth 16)', () => {
           slowest = Math.max(slowest, dt);
           n++;
           expectWellFormed(e);
+          // "X was better: it <reason>" never repeats the played move's own reason.
+          for (const d of e.details) {
+            const better = /was better: it (.*)\.$/.exec(d)?.[1];
+            if (better) expect([e.headline, ...e.details].some((x) => x !== d && x.endsWith(`${better}.`))).toBe(false);
+          }
           if (perspective === 'neutral') expect(text(e).join(' ')).not.toMatch(/\b[Yy]our?\b/);
         }
         if (!c.isGameOver()) {
@@ -528,11 +835,11 @@ describe('whole games (engine lines at depth 16)', () => {
     expect(out['9.Bg5']).toEqual(['Bg5 pins the knight on f6 to the queen and develops the bishop.']);
     expect(out['11...Nbd7']).toEqual(['Nbd7 blocks the check.']);
     expect(out['12.O-O-O']).toEqual([
-      'O-O-O wins a knight.',
+      'O-O-O wins a knight and two pawns.',
       'It attacks the knight on d7, which is pinned to the king.',
     ]);
     expect(out['14.Rd1']).toEqual([
-      'Rd1 wins the queen for a bishop.',
+      'Rd1 wins a rook and a pawn.',
       'It attacks the rook on d7, which is pinned to the king.',
     ]);
     expect(out['16.Qb8+']).toEqual(['Qb8+ starts a forced mate in 2.', 'The finish: Qb8+ Nxb8 Rd8#.']);

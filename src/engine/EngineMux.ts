@@ -10,6 +10,10 @@
  *    across restarts (updates shallower than what was already reported are held back).
  *  - Each lane keeps the ChessEngine semantics: one search at a time, a new one pre-empts the
  *    previous one of the same lane.
+ *  - A high search that follows low work starts from a cleared hash (`ucinewgame`). Otherwise
+ *    the bot's shallow, strength-limited searches would read the deep analysis in the shared
+ *    transposition table and history tables, and play far stronger than their calibration (which
+ *    assumes a bot engine of its own, as in dual mode). Consecutive high searches keep the hash.
  */
 import type { AnalysisResult, ChessEngine, SearchOptions } from './types';
 import { inspectPosition } from './StockfishEngine';
@@ -36,6 +40,8 @@ class Mux {
   private lowJob: LowJob | null = null;
   private highDead = false;
   private lowDead = false;
+  /** Lane of the last physical search (decides whether the hash must be cleared for the bot). */
+  private lastLane: 'high' | 'low' | null = null;
 
   readonly high: ChessEngine;
   readonly low: ChessEngine;
@@ -87,6 +93,9 @@ class Mux {
     const low = this.lowJob;
     if (low && low.running && !low.settled) low.paused = true;
     this.highActive++;
+    // Queued before the search: the engine runs `ucinewgame` once the low search has stopped.
+    if (this.lastLane === 'low') void this.engine.newGame().catch(() => undefined);
+    this.lastLane = 'high';
     const p = this.engine.search(fen, opts);
     const finished = () => {
       this.highActive--;
@@ -146,6 +155,7 @@ class Mux {
   private runLow(job: LowJob): void {
     job.running = true;
     job.paused = false;
+    this.lastLane = 'low';
     this.engine.search(job.fen, job.opts).then(
       (r) => {
         job.running = false;

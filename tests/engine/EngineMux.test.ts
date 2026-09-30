@@ -144,6 +144,29 @@ describe('EngineMux (real engine)', () => {
     expect(r.done).toBe(true);
   });
 
+  it('clears the shared hash before a bot search that follows analysis, not between bot searches', async () => {
+    const lowP = low.search(FENS.middle, { depth: 30, multiPv: 3 });
+    await sleep(80);
+    let mark = out.length;
+    const h = await high.search(FENS.afterE4, { depth: 6, skillLevel: 3 });
+    expect(h.done).toBe(true);
+    let seg = out.slice(mark);
+    const go = seg.indexOf(`position fen ${FENS.afterE4}`);
+    expect(go).toBeGreaterThan(0);
+    // The analysis search was stopped, then the hash cleared, then the bot searched.
+    expect(seg.slice(0, go)).toContain('ucinewgame');
+    expect(seg.indexOf('stop')).toBeLessThan(seg.indexOf('ucinewgame'));
+    low.stop();
+    expect((await lowP).aborted).toBe(true);
+
+    mark = out.length;
+    await high.search(FENS.italian, { depth: 6, skillLevel: 3 }); // last physical search was analysis: cleared
+    await high.search(FENS.start, { depth: 6, skillLevel: 3 }); // bot after bot: the hash is kept
+    seg = out.slice(mark);
+    expect(seg.filter((l) => l === 'ucinewgame')).toHaveLength(1);
+    expect(seg.indexOf('ucinewgame')).toBeLessThan(seg.indexOf(`position fen ${FENS.italian}`));
+  });
+
   it('rejects invalid FENs on both lanes without disturbing work', async () => {
     await expect(high.search('nope')).rejects.toThrow(/Invalid FEN/);
     await expect(low.search('nope')).rejects.toThrow(/Invalid FEN/);

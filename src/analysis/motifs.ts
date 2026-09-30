@@ -37,8 +37,11 @@ export type Motif =
   | { kind: 'check'; double: boolean; discovered: boolean }
   | { kind: 'fork'; by: PieceOn; targets: PieceOn[] }
   | { kind: 'doubleThreat'; threats: { san: string; target: PieceOn }[] }
-  /** `exploit`: the pin already existed and the move attacks the pinned piece. */
-  | { kind: 'pin'; by: PieceOn; pinned: PieceOn; behind: PieceOn; exploit?: boolean }
+  /**
+   * `exploit`: the pin already existed and the move attacks the pinned piece. `frozen`: pinned to
+   * the king and unable to move at all (a knight, or a piece that cannot move along the pin line).
+   */
+  | { kind: 'pin'; by: PieceOn; pinned: PieceOn; behind: PieceOn; exploit?: boolean; frozen?: boolean }
   | { kind: 'skewer'; by: PieceOn; front: PieceOn; back: PieceOn }
   | { kind: 'discovered'; by: PieceOn; target: PieceOn }
   | { kind: 'freeCapture'; captured: PieceOn; attackers: number; defenders: number }
@@ -190,29 +193,35 @@ export function threatsAgainst(fen: string): Threat[] {
 
 /**
  * The most serious threat against the side to move (see `threatsAgainst`) that `uci` stops, or
- * null. A move that gives check is not counted as stopping anything (it only delays the threat).
+ * null. A move that gives check is not counted as stopping anything (it only delays the threat),
+ * and nothing counts as stopped while the opponent still has a mate in one. A material threat is
+ * stopped only when the target is safe afterwards (on its new square if it moved) and no threat
+ * of the same size or bigger is left; a capture never "saves" a piece (it takes or trades).
  */
 export function stoppedThreat(fen: string, uci: string): Threat | null {
   const threats = threatsAgainst(fen);
   if (!threats.length) return null;
   const c = new Chess(fen);
-  c.move(parseUci(uci));
+  const mv = c.move(parseUci(uci));
   if (c.inCheck()) return null;
   const after = c.fen();
-  let mates: string[] | null = null;
+  const opp = c.turn();
+  if (mateInOne(after).length) return null;
   let promos: PromotionThreat[] | null = null;
-  let caps: Square[] | null = null;
+  let caps: WinningCapture[] | null = null;
   for (const t of threats) {
-    if (t.kind === 'mate') {
-      mates ??= mateInOne(after);
-      if (!mates.includes(t.san)) return t;
-    } else if (t.kind === 'promotion') {
+    if (t.kind === 'mate') return t;
+    if (t.kind === 'promotion') {
       promos ??= promotionPushes(after);
       if (!promos.some((p) => p.to === t.to)) return t;
-    } else {
-      caps ??= winningCaptures(after).map((w) => w.to);
-      if (!t.target || !caps.includes(t.target.square)) return t;
+      continue;
     }
+    if (mv.captured || !t.target) continue;
+    caps ??= winningCaptures(after);
+    const moved = t.target.square === mv.from;
+    const lost = moved ? see(after, mv.to, opp) > 0 : caps.some((w) => w.to === t.target!.square);
+    if (lost) continue;
+    return caps.some((w) => w.gain >= (t.gain ?? 1)) ? null : t;
   }
   return null;
 }
@@ -244,6 +253,20 @@ export function forkTargets(fen: string, s: Square): PieceOn[] {
 }
 
 /**
+ * For a fork that gives check (`after`: the opponent to move): true when every legal reply still
+ * lets the forker's side win material on a target (followed if it moved) or on the forker's square.
+ */
+function checkForkHolds(after: string, forker: Square, targets: readonly PieceOn[]): boolean {
+  const c = new Chess(after);
+  const loot = targets.filter((t) => t.type !== 'k');
+  for (const r of c.moves({ verbose: true })) {
+    const squares: Square[] = [forker, ...loot.map((t) => (t.square === r.from ? r.to : t.square))];
+    if (!winningCaptures(r.after).some((w) => squares.includes(w.to))) return false;
+  }
+  return true;
+}
+
+/**
  * Pins and skewers by the sliders of `color` (optionally only the slider on `only`). A pin is a
  * piece (not a pawn) in front of a more valuable king, queen or rook; a skewer is a king or a more
  * valuable piece in front of a piece that SEE shows is won once the front piece steps aside.
@@ -251,6 +274,14 @@ export function forkTargets(fen: string, s: Square): PieceOn[] {
 export function linesFrom(fen: string, color: Color, only?: Square): Motif[] {
   const c = scratch(fen);
   const out: Motif[] = [];
+  // Can the opponent win the piece on `sq`? With the opponent to move, only legal captures count
+  // (a side in check cannot take the pinner); otherwise static exchange.
+  let legalWins: Square[] | null = null;
+  const lost = (sq: Square) => {
+    if (c.turn() === color) return see(fen, sq, other(color)) > 0;
+    legalWins ??= safe(() => winningCaptures(fen).map((w) => w.to), [] as Square[]);
+    return legalWins.includes(sq);
+  };
   for (const s of pieces(c, color)) {
     if (only && s.square !== only) continue;
     for (const [df, dr] of slideDirs(s.type)) {
@@ -262,8 +293,12 @@ export function linesFrom(fen: string, color: Color, only?: Square): Motif[] {
         VALUE[b.type] > VALUE[a.type] &&
         (b.type === 'k' || b.type === 'q' || b.type === 'r') &&
         (b.type === 'k' || VALUE[b.type] > VALUE[s.type]);
+      // A pinner or skewerer the opponent simply wins (e.g. the "pinned" piece takes it) is neither.
+      if ((pin || a.type === 'k' || VALUE[a.type] > VALUE[b.type]) && lost(s.square)) continue;
       if (pin) {
-        out.push({ kind: 'pin', by: s, pinned: a, behind: b });
+        const diagonal = df !== 0 && dr !== 0;
+        const frozen = b.type === 'k' && (a.type === 'n' || a.type === (diagonal ? 'r' : 'b'));
+        out.push({ kind: 'pin', by: s, pinned: a, behind: b, ...(frozen ? { frozen } : {}) });
       } else if ((a.type === 'k' || VALUE[a.type] > VALUE[b.type]) && b.type !== 'p') {
         const t = scratch(fen);
         t.remove(a.square);
@@ -407,7 +442,9 @@ function computeMoveMotifs(fen: string, uci: string): MoveMotifs {
   if (move.isKingsideCastle()) active.push(`f${rank}` as Square);
   if (move.isQueensideCastle()) active.push(`d${rank}` as Square);
 
-  const fork = safe(() => forkTargets(after, move.to), []);
+  let fork = safe(() => forkTargets(after, move.to), []);
+  // A forking check must win something whatever the reply (a block or king move can defuse it).
+  if (fork.some((t) => t.type === 'k') && !safe(() => checkForkHolds(after, move.to, fork), true)) fork = [];
   const moved = pieceAt(c, move.to);
   if (fork.length && moved) motifs.push({ kind: 'fork', by: moved, targets: fork });
 
@@ -435,7 +472,17 @@ function computeMoveMotifs(fen: string, uci: string): MoveMotifs {
     }
   }, undefined);
 
-  for (const p of safe(() => trappedPieces(after), [])) motifs.push({ kind: 'trapped', piece: p });
+  // Only pieces this move traps (not ones that were trapped already).
+  const trappedBefore = safe(() => {
+    const nf = nullMoveFen(fen);
+    return nf ? trappedPieces(nf).map((p) => p.square) : [];
+  }, [] as Square[]);
+  for (const p of safe(() => trappedPieces(after), [])) {
+    if (!trappedBefore.includes(p.square)) motifs.push({ kind: 'trapped', piece: p });
+  }
+
+  // A threat by a piece the opponent can simply take (for more than it captured) is no threat.
+  const moverSafe = safe(() => see(after, move.to, opp) <= (move.captured ? VALUE[move.captured] : 0), true);
 
   // New threats: what could the mover do next if the opponent passed?
   if (!c.inCheck()) {
@@ -443,11 +490,19 @@ function computeMoveMotifs(fen: string, uci: string): MoveMotifs {
       const nf = nullMoveFen(after);
       if (!nf) return;
       const oldMates = new Set(mateInOne(fen));
-      const mates = mateInOne(nf).filter((m) => !oldMates.has(m));
+      const probe = new Chess(nf);
+      // A mate threatened by the moved piece is no threat when the opponent can simply take it.
+      const byMover = (san: string) => {
+        const m = probe.move(san);
+        probe.undo();
+        return m.from === move.to;
+      };
+      const mates = mateInOne(nf).filter((m) => !oldMates.has(m) && (moverSafe || !byMover(m)));
       if (mates.length) motifs.push({ kind: 'mateThreat', san: mates[0] });
       const oldPromos = new Set(promotionPushes(fen).map((p) => p.to));
       const promo = promotionPushes(nf).find((p) => !oldPromos.has(p.to));
       if (promo && !move.promotion) motifs.push({ kind: 'promotionThreat', san: promo.san });
+      if (!moverSafe) return;
       // Targets already explained by a discovered attack are not repeated as plain threats.
       const oldTargets = new Set([
         ...winningCaptures(fen).map((w) => w.to),
@@ -542,16 +597,22 @@ export interface MaterialOutcome {
   net: number;
   /** Enemy material removed, after cancelling like-for-like trades. */
   won: Partial<Counts>;
-  /** Own material removed (promoted pawns excluded). */
+  /** Own material removed (promoted pawns excluded; a promoted piece taken again counts as a pawn). */
   lost: Partial<Counts>;
-  /** Promotions by `pov` inside the window. */
+  /** Promotions by `pov` inside the window whose new piece is still on the board at its end. */
   promotions: number;
+  /** The piece types of those promotions (e.g. ['q'], or ['n'] for an underpromotion). */
+  promoted: PieceSymbol[];
+  /** The same for the other side: promotions `pov` allows inside the window. */
+  theirPromoted: PieceSymbol[];
   /** SAN of the plies consumed. */
   sans: string[];
   /** Squares where `pov` captured something (for motif relevance). */
   captureSquares: Square[];
   /** Position at the end of the counted window. */
   fen: string;
+  /** The window ends on a quiet ply (false: the line stops in the middle of an exchange). */
+  settled: boolean;
 }
 
 /** Plays a UCI line from `fen` (stopping at the first illegal move), returning SAN, moves and FENs. */
@@ -584,6 +645,10 @@ export function playLine(
 function calm(fen: string): boolean {
   const stm: Color = fen.split(' ')[1] === 'b' ? 'b' : 'w';
   if (hangingPieces(fen, other(stm)).length) return false;
+  // A pawn that can queen next move (for either side) is not settled material either.
+  if (promotionPushes(fen).length) return false;
+  const nf = nullMoveFen(fen);
+  if (nf && promotionPushes(nf).length) return false;
   const own = hangingPieces(fen, stm);
   if (own.length === 0) return true;
   return own.length === 1 && !trappedPieces(fen).some((p) => p.square === own[0].piece.square);
@@ -599,13 +664,25 @@ const ORDER: PieceSymbol[] = ['q', 'r', 'b', 'n', 'p'];
  * cancelled (identical types, then bishop for knight).
  */
 export function materialOutcome(fen: string, pv: readonly string[], pov: Color, maxPlies = 10): MaterialOutcome {
-  const empty: MaterialOutcome = { net: 0, won: {}, lost: {}, promotions: 0, sans: [], captureSquares: [], fen };
+  const empty: MaterialOutcome = {
+    net: 0,
+    won: {},
+    lost: {},
+    promotions: 0,
+    promoted: [],
+    theirPromoted: [],
+    sans: [],
+    captureSquares: [],
+    fen,
+    settled: true,
+  };
   const c = new Chess(fen);
   const start = counts(c);
+  type Promos = Record<Color, Partial<Counts>>;
   const snaps: {
     counts: Record<Color, Counts>;
     plies: number;
-    promotions: number;
+    promos: Promos;
     adj: number;
     quiet: boolean;
     calm: boolean;
@@ -615,7 +692,7 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
   const caps: Square[] = [];
   // The first minor piece each side captured: a single net minor is named after it.
   const firstMinor: Partial<Record<Color, PieceSymbol>> = {};
-  let promotions = 0;
+  const promos: Promos = { w: {}, b: {} };
   for (let i = 0; i < Math.min(pv.length, maxPlies); i++) {
     let m: Move;
     try {
@@ -626,7 +703,7 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
     sans.push(m.san);
     if (m.color === pov && m.captured) caps.push(m.to);
     if ((m.captured === 'n' || m.captured === 'b') && !firstMinor[m.color]) firstMinor[m.color] = m.captured;
-    if (m.promotion && m.color === pov) promotions++;
+    if (m.promotion) promos[m.color][m.promotion] = (promos[m.color][m.promotion] ?? 0) + 1;
     const next = pv[i + 1];
     const nextCaptures = !!next && !!c.get(next.slice(2, 4) as Square);
     const quiet = !m.isCapture() && !m.isPromotion() && !c.inCheck() && !nextCaptures;
@@ -636,7 +713,15 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
       adj = c.turn() === pov ? g : -g;
     }
     const isCalm = quiet && calm(c.fen());
-    snaps.push({ counts: counts(c), plies: i + 1, promotions, adj, quiet, calm: isCalm, fen: c.fen() });
+    snaps.push({
+      counts: counts(c),
+      plies: i + 1,
+      promos: { w: { ...promos.w }, b: { ...promos.b } },
+      adj,
+      quiet,
+      calm: isCalm,
+      fen: c.fen(),
+    });
     if (i >= 1 && isCalm) break;
   }
   const rev = [...snaps].reverse();
@@ -645,16 +730,32 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
   if (!pick) return empty;
   const end = pick.counts;
   const them = other(pov);
-  const won: Partial<Counts> = {};
-  const lost: Partial<Counts> = {};
-  for (const t of ORDER) {
-    let dOwn = start[pov][t] - end[pov][t];
-    if (t === 'p') dOwn -= pick.promotions;
-    if (t === 'q') dOwn += pick.promotions;
-    const dThem = start[them][t] - end[them][t];
-    if (dOwn > 0) lost[t] = dOwn;
-    if (dThem > 0) won[t] = dThem;
-  }
+  // Pieces each side lost inside the window. A promoted pawn is not lost; a promoted piece that is
+  // captured again is named as the pawn it was (and its promotion no longer counts).
+  const removed = (side: Color): { lost: Partial<Counts>; kept: Partial<Counts> } => {
+    const p = pick.promos[side];
+    const kept: Partial<Counts> = { ...p };
+    let promoted = 0;
+    for (const t of ORDER) promoted += p[t] ?? 0;
+    const lost: Partial<Counts> = {};
+    for (const t of ORDER) {
+      const d = start[side][t] - end[side][t] + (p[t] ?? 0) - (t === 'p' ? promoted : 0);
+      if (d > 0) lost[t] = d;
+    }
+    for (const t of ORDER) {
+      const back = Math.min(kept[t] ?? 0, t === 'p' ? 0 : (lost[t] ?? 0));
+      if (back) {
+        kept[t] = (kept[t] ?? 0) - back;
+        lost[t] = (lost[t] ?? 0) - back;
+        lost.p = (lost.p ?? 0) + back;
+      }
+    }
+    return { lost, kept };
+  };
+  const mine = removed(pov);
+  const theirs = removed(them);
+  const won: Partial<Counts> = theirs.lost;
+  const lost: Partial<Counts> = mine.lost;
   for (const t of ORDER) {
     const m = Math.min(won[t] ?? 0, lost[t] ?? 0);
     if (m) {
@@ -680,15 +781,22 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
       w[first] = 1;
     }
   }
-  const net = worth(won) - worth(lost) + 8 * pick.promotions + (pick.quiet ? 0 : pick.adj);
+  const list = (x: Partial<Counts>) => ORDER.flatMap((t) => Array<PieceSymbol>(x[t] ?? 0).fill(t));
+  const promoted = list(mine.kept);
+  const theirPromoted = list(theirs.kept);
+  const promoGain = (xs: PieceSymbol[]) => xs.reduce((n, t) => n + VALUE[t] - 1, 0);
+  const net = worth(won) - worth(lost) + promoGain(promoted) - promoGain(theirPromoted) + (pick.quiet ? 0 : pick.adj);
   return {
     net,
     won,
     lost,
-    promotions: pick.promotions,
+    promotions: promoted.length,
+    promoted,
+    theirPromoted,
     sans: sans.slice(0, pick.plies),
     captureSquares: caps,
     fen: pick.fen,
+    settled: pick.quiet,
   };
 }
 
@@ -785,12 +893,12 @@ export function principles(fen: string, uci: string): Principle[] {
     !opening &&
     m.piece === 'p' &&
     !m.captured &&
-    Math.abs(rankOf(m.to) - rankOf(m.from)) === 1 &&
+    Math.abs(rankOf(m.to) - rankOf(m.from)) <= 2 &&
     !!king &&
     Math.abs(fileOf(m.from) - fileOf(king)) <= 1 &&
     safe(() => backRankWeak(fen, me) && !backRankWeak(after, me), false);
   if (luft) P('luft', true);
-  if (m.piece === 'p' && relRank(m.to) >= 4 && isPassed(c, m.to, me)) P('passedPawn', true);
+  if (m.piece === 'p' && !m.promotion && relRank(m.to) >= 4 && isPassed(c, m.to, me)) P('passedPawn', true);
   if (m.piece === 'r') {
     const enemyKing = kingSquare(c, other(me));
     const enemySeventhPawns = pieces(c, other(me)).some((p) => p.type === 'p' && relRank(p.square) === 6);
@@ -801,7 +909,7 @@ export function principles(fen: string, uci: string): Principle[] {
       P('openFile', true);
     }
   }
-  if (m.piece === 'p' && !m.captured) {
+  if (m.piece === 'p' && !m.captured && !m.promotion) {
     let best: { p: PieceOn; gain: number } | null = null;
     for (const s of pieces(c, me)) {
       if (s.type !== 'b' && s.type !== 'q') continue;
@@ -817,7 +925,7 @@ export function principles(fen: string, uci: string): Principle[] {
       P('bishopPair', false, { captured: m.captured });
     }
     if (even && m.captured !== 'p' && materialBalance(before, me) >= 2) P('tradeAhead', true, { captured: m.captured });
-    else if (even && m.captured !== 'p') P('trade', true, { captured: m.captured });
+    else if (even && (m.captured !== 'p' || m.piece === 'p')) P('trade', true, { captured: m.captured });
   }
   if (m.piece === 'k' && !castles && !inCheckBefore && nonPawn <= 20 && centreDistance(m.to) < centreDistance(m.from)) {
     P('kingActive', true);

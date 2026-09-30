@@ -10,11 +10,11 @@ import { classifyMove } from '../../src/analysis/classify';
 import { START_FEN } from '../../src/chess/utils';
 import { AnalysisService } from '../../src/engine/AnalysisService';
 import type { EngineSet } from '../../src/engine/createEngines';
-import { RETRY_CLASSES } from '../../src/game/coach';
+import { RETRY_CLASSES, mentionsMove } from '../../src/game/coach';
 import { buildPgn, pgnEval } from '../../src/game/pgn';
 import { summarizeGame } from '../../src/game/review';
-import { ENGINE_ADVICE, GameController, type BotLike } from '../../src/game/controller';
-import { GAME_KEY, loadGame } from '../../src/game/persistence';
+import { ENGINE_ADVICE, ENGINE_STOPPED, GameController, type BotLike } from '../../src/game/controller';
+import { loadGame } from '../../src/game/persistence';
 import { DEFAULT_SETTINGS, type GameSettings, type Ply, type PromotionPiece } from '../../src/game/types';
 import { defaultProfile, loadProfile, saveProfile } from '../../src/rating/rating';
 import { MemoryStorage, RecordingSound, ScriptedBot, fakeEngineSet } from '../helpers/fakeEngine';
@@ -275,7 +275,7 @@ describe('takebacks', () => {
 });
 
 describe('game end', () => {
-  it("detects checkmate (Fool's mate), records a rated loss and clears the saved game", async () => {
+  it("detects checkmate (Fool's mate), records a rated loss and keeps the finished game saved", async () => {
     const bot = new ScriptedBot(['e7e5', 'd8h4']);
     const { controller, store, storage, sound } = setup({ bot });
     await controller.boot();
@@ -293,8 +293,9 @@ describe('game end', () => {
     expect(profile.losses).toBe(1);
     expect(profile.history[0].reason).toBe('Checkmate');
     expect(profile.history[0].pgn).toContain('2. g4 Qh4# 0-1');
-    expect(storage.getItem(GAME_KEY)).toBeNull();
-    // The finished game is not saved: an update must not reload it away (game-over sheet, review).
+    // The finished game stays saved with its result (an iOS restart brings back the game-over state).
+    expect(loadGame(storage)?.over).toEqual({ outcome: store.outcome.value, ratingChange: rc });
+    // An update still must not reload the game-over sheet or a review away.
     expect(controller.canReloadNow()).toBe(false);
     expect(store.board.value.movableColor).toBeUndefined();
     expect(store.board.value.check).toBe(true);
@@ -416,9 +417,15 @@ describe('annotations and coach', () => {
     const coach = store.coach.value;
     expect(RETRY_CLASSES.has(ply.classification!.cls)).toBe(true);
     expect(coach.cls).toBe(ply.classification!.cls);
-    expect(coach.title).toMatch(/Blunder|Mistake|Miss/);
+    // The title names the move it rates.
+    expect(coach.title).toMatch(/^3\. Qxf7\+ is a (blunder|mistake|miss)$/);
     expect(coach.lines[0]).toBe(ply.explanation!.headline);
     expect(coach.actions.map((a) => a.id)).toEqual(['showBest', 'retry']);
+    // In a rated game the free "Show best" is the main action, not Retry (which unrates the game).
+    expect(coach.actions.find((a) => a.primary)?.id).toBe('showBest');
+    // Retry is on offer, so the text must not give the better move away.
+    const best = ply.classification!.bestMoveSan!;
+    expect(coach.lines.some((l) => mentionsMove(l, best))).toBe(false);
     expect(store.board.value.badge).toEqual({ square: 'f7', cls: ply.classification!.cls });
 
     controller.runAction('showBest');
@@ -434,10 +441,22 @@ describe('annotations and coach', () => {
     controller.runAction('backToGame');
     expect(store.isLive.value).toBe(true);
 
+    // A rated game asks first: Retry makes it unrated.
     controller.runAction('retry');
+    expect(store.sheet.value).toBe('assist');
+    expect(store.sheets.value.assist).toEqual({ kind: 'retry' });
+    expect(store.plies.value).toHaveLength(5);
+    controller.closeSheet(); // cancel
+    expect(store.game.value?.assisted).toBe(false);
+    expect(store.pendingAssist.value).toBeNull();
+    controller.runAction('retry');
+    controller.confirmAssist();
+    expect(store.sheet.value).toBeNull();
     expect(store.plies.value).toHaveLength(4);
     expect(store.game.value?.assisted).toBe(true);
+    expect(store.bottomPlayer.value.unrated).toBe(true);
     expect(store.coach.value.title).toBe('Try again');
+    expect(store.coach.value.lines.some((l) => mentionsMove(l, best))).toBe(false);
     expect(store.humanToMove.value).toBe(true);
     bot.release();
   });
@@ -551,18 +570,42 @@ describe('persistence', () => {
     expect(second.store.humanToMove.value).toBe(true);
   });
 
-  it('does not restore a finished game', async () => {
+  it('restores a finished game in its game-over state; review works; the next game replaces it', async () => {
     const storage = new MemoryStorage();
-    const first = setup({ bot: new ScriptedBot(['e7e5']), storage });
+    const first = setup({ bot: new ScriptedBot(['e7e5', 'b8c6']), storage });
     await first.controller.boot();
     first.controller.newGame(settings());
-    await playAll(first.controller, ['e2e4']);
+    await playAll(first.controller, ['e2e4', 'g1f3']);
     first.controller.resign();
-    first.controller.dispose();
-    const second = setup({ storage });
+    const outcome = first.store.outcome.value;
+    const rc = first.store.ratingChange.value;
+    await first.controller.startReview();
+    first.controller.onVisibilityChange(true); // iOS: the app goes to the background...
+    first.controller.dispose(); // ...and is killed.
+
+    const bot = new ScriptedBot();
+    const second = setup({ bot, storage });
     await second.controller.boot();
-    expect(second.store.phase.value).toBe('setup');
-    expect(second.store.profile.value.history).toHaveLength(1);
+    const s = second.store;
+    expect(s.phase.value).toBe('over');
+    expect(s.outcome.value).toEqual(outcome);
+    expect(s.ratingChange.value).toEqual(rc);
+    expect(s.plies.value.map((p) => p.uci)).toEqual(['e2e4', 'e7e5', 'g1f3', 'b8c6']);
+    expect(s.plies.value.every(annotated)).toBe(true);
+    expect(s.coach.value.actions.map((a) => a.id)).toEqual(['review', 'rematch', 'newGame']);
+    // Recorded once only.
+    expect(s.profile.value.history).toHaveLength(1);
+    expect(s.profile.value.losses).toBe(1);
+    await second.controller.idle();
+    expect(bot.calls).toHaveLength(0);
+    await second.controller.startReview();
+    expect(s.review.value?.accuracy.w).toEqual(expect.any(Number));
+
+    second.controller.exitReview();
+    second.controller.rematch();
+    expect(loadGame(storage)?.over).toBeUndefined();
+    expect(loadGame(storage)?.id).toBe(s.game.value?.id);
+    expect(s.profile.value.history).toHaveLength(1);
   });
 });
 
@@ -727,5 +770,386 @@ describe('helpers', () => {
     controller.resign();
     expect(store.evalBar.value.visible).toBe(true);
     expect(store.evalGraph.value.visible).toBe(true);
+  });
+});
+
+describe('rematch', () => {
+  it('uses the current best-move-arrows setting (switched on after the game): unrated with arrows', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    controller.resign();
+    controller.setSettings({ showBestMoves: true });
+    controller.rematch();
+    expect(store.game.value?.assisted).toBe(true);
+    expect(store.game.value?.settings.showBestMoves).toBe(true);
+    await vi.waitFor(() => expect(store.board.value.arrows!.length).toBeGreaterThan(0));
+    await playAll(controller, ['d2d4']);
+    controller.resign();
+    expect(store.ratingChange.value?.rated).toBe(false);
+  });
+
+  it('arrows switched on mid-game: the rematch is unrated too', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    controller.setSettings({ showBestMoves: true });
+    controller.resign();
+    expect(store.ratingChange.value?.rated).toBe(false);
+    controller.rematch();
+    expect(store.game.value?.assisted).toBe(true);
+  });
+
+  it('arrows on at the start and switched off mid-game: the rematch is rated, with no arrows', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot(['e7e5', 'e7e5']) });
+    await controller.boot();
+    controller.newGame(settings({ showBestMoves: true, botId: 'custom', botElo: 1200 }));
+    await playAll(controller, ['e2e4']);
+    controller.setSettings({ showBestMoves: false });
+    controller.resign();
+    controller.rematch();
+    expect(store.game.value?.assisted).toBe(false);
+    expect(store.game.value?.botElo).toBe(1200); // same opponent
+    await playAll(controller, ['e2e4']);
+    expect(store.board.value.arrows).toEqual([]);
+    controller.resign();
+    expect(store.ratingChange.value?.rated).toBe(true);
+  });
+});
+
+describe('live analysis', () => {
+  it('a new game on the position already analysed shows its eval (and arrows) again', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot() });
+    await controller.boot();
+    controller.newGame(settings({ showBestMoves: true }));
+    await vi.waitFor(() => expect(store.evalBar.value.label).not.toBe(''));
+    await vi.waitFor(() => expect(store.board.value.arrows!.length).toBeGreaterThan(0));
+    controller.newGame(settings({ showBestMoves: true, botId: 'custom', botElo: 1500 }));
+    await vi.waitFor(() => expect(store.live.value).not.toBeNull());
+    expect(store.evalBar.value.label).not.toBe('');
+    expect(store.evalGraph.value.points[0]).not.toBeNull();
+    expect(store.board.value.arrows!.length).toBeGreaterThan(0);
+    // Same after resigning at move 0 and a rematch.
+    controller.resign();
+    controller.rematch();
+    await vi.waitFor(() => expect(store.live.value).not.toBeNull());
+    expect(store.evalBar.value.label).not.toBe('');
+  });
+
+  it('keeps the last known eval number (pulsing) while the new position is analysed', async () => {
+    const { controller, store, engines } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    await vi.waitFor(() => expect(store.evalBar.value.depth).toBeGreaterThan(0));
+    const before = store.evalBar.value.label;
+    engines.analysis.delayMs = 40;
+    play(controller, 'g1f3');
+    expect(store.evalBar.value.label).toBe(before);
+    expect(store.evalBar.value.thinking).toBe(true);
+    await controller.idle();
+  });
+
+  it('keeps the verdict badge on your move after the bot replies', async () => {
+    const bot = new ScriptedBot(['e7e5']);
+    bot.manual = true;
+    const { controller, store } = setup({ bot });
+    await controller.boot();
+    controller.newGame(settings());
+    play(controller, 'e2e4');
+    await vi.waitFor(() => expect(store.plies.value[0].classification).toBeDefined());
+    const cls = store.plies.value[0].classification!.cls;
+    expect(store.board.value.badge).toEqual({ square: 'e4', cls });
+    bot.release();
+    await vi.waitFor(() => expect(store.plies.value).toHaveLength(2));
+    expect(store.board.value.lastMove).toEqual(['e7', 'e5']);
+    expect(store.board.value.badge).toEqual({ square: 'e4', cls });
+    expect(store.coach.value.title).toMatch(/^1\. e4 is /);
+  });
+});
+
+describe('abandoning and aborting', () => {
+  it('a new game while a rated game is in progress records it as a loss by abandonment', async () => {
+    const { controller, store, storage } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    controller.newGame(settings({ botId: 'custom', botElo: 1500 }));
+    expect(store.sheets.value.newGame.inProgress).toBeNull(); // no move yet
+    await playAll(controller, ['e2e4']);
+    expect(store.sheets.value.newGame.inProgress).toEqual({ rated: true });
+    const id = store.game.value!.id;
+    controller.openSheet('new');
+    controller.newGame(settings());
+    const profile = loadProfile(storage);
+    expect(profile.losses).toBe(1);
+    expect(profile.gamesPlayed).toBe(1);
+    expect(profile.rating).toBeLessThan(800);
+    expect(profile.history[0]).toMatchObject({ id, reason: 'Abandoned', playerScore: 0, rated: true });
+    expect(store.profile.value).toEqual(profile);
+    expect(store.phase.value).toBe('playing');
+    expect(store.plies.value).toHaveLength(0);
+  });
+
+  it('a new game before your first move, or from an unrated game, costs no rating', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    controller.newGame(settings({ playerColor: 'b' })); // the bot moves first
+    await controller.idle();
+    expect(store.plies.value).toHaveLength(1);
+    controller.newGame(settings());
+    expect(store.profile.value.history).toHaveLength(0);
+
+    await playAll(controller, ['e2e4']);
+    await controller.hint();
+    expect(store.sheets.value.newGame.inProgress).toEqual({ rated: false });
+    controller.newGame(settings());
+    expect(store.profile.value.history[0]).toMatchObject({ reason: 'Abandoned', rated: false });
+    expect(store.profile.value.rating).toBe(800);
+  });
+
+  it('resigning before your first move is unrated; a rematch after a finished game records nothing more', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot() });
+    await controller.boot();
+    controller.newGame(settings({ botId: 'custom', botElo: 3200 }));
+    controller.resign();
+    expect(store.ratingChange.value).toEqual({ before: 800, after: 800, rated: false });
+    controller.rematch();
+    expect(store.profile.value.history).toHaveLength(1);
+  });
+});
+
+describe('unrated help', () => {
+  it('the first hint of a rated game asks first; later ones do not; the strip shows "Unrated"', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot(['e7e5', 'b8c6']) });
+    await controller.boot();
+    controller.newGame(settings());
+    expect(store.bottomPlayer.value.unrated).toBeUndefined();
+    controller.requestHint();
+    expect(store.sheet.value).toBe('assist');
+    expect(store.sheets.value.assist).toEqual({ kind: 'hint' });
+    expect(store.coach.value.kind).not.toBe('hint');
+    controller.closeSheet();
+    expect(store.game.value?.assisted).toBe(false);
+    controller.requestHint();
+    controller.confirmAssist();
+    await vi.waitFor(() => expect(store.coach.value.busy).toBe(false));
+    expect(store.coach.value.kind).toBe('hint');
+    expect(store.game.value?.assisted).toBe(true);
+    expect(store.bottomPlayer.value.unrated).toBe(true);
+    controller.requestHint(); // dismisses
+    expect(store.coach.value.kind).not.toBe('hint');
+    await playAll(controller, ['e2e4']);
+    controller.requestUndo(); // already unrated: no question
+    expect(store.sheet.value).toBeNull();
+    expect(store.plies.value).toHaveLength(0);
+  });
+
+  it('undo in a rated game asks first; nothing happens when there is nothing to take back', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    controller.newGame(settings());
+    controller.requestUndo();
+    expect(store.sheet.value).toBeNull();
+    await playAll(controller, ['e2e4']);
+    controller.requestUndo();
+    expect(store.sheets.value.assist).toEqual({ kind: 'undo' });
+    controller.confirmAssist();
+    expect(store.plies.value).toHaveLength(0);
+    expect(store.game.value?.assisted).toBe(true);
+  });
+
+  it('a hint that finds nothing leaves the game rated', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot() });
+    await controller.boot();
+    controller.newGame(settings());
+    vi.spyOn(AnalysisService.prototype, 'ensure').mockResolvedValueOnce({
+      fen: START_FEN,
+      depth: 0,
+      lines: [],
+      bestMove: null,
+      done: false,
+      aborted: true,
+    });
+    await controller.hint();
+    expect(store.coach.value.lines).toEqual(['No hint is available for this position.']);
+    expect(store.game.value?.assisted).toBe(false);
+  });
+
+  it("the bot's mistake is only pointed out in games that are unrated anyway", async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot(['e7e5', 'd8g5']) });
+    await controller.boot();
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4', 'd2d4']);
+    expect(store.plies.value[3].classification?.cls).toMatch(/mistake|blunder/);
+    const punish = (l: string) => l.includes('Look for a way to punish it');
+    expect(store.coach.value.lines.some(punish)).toBe(false);
+    controller.setSettings({ showBestMoves: true }); // now unrated
+    expect(store.coach.value.lines.some(punish)).toBe(true);
+  });
+});
+
+describe('restore', () => {
+  it('brings back the verdict (with Show best / Retry) on your last move', async () => {
+    const storage = new MemoryStorage();
+    const bot1 = new ScriptedBot(['e7e5', 'b8c6']);
+    bot1.manual = true;
+    const first = setup({ bot: bot1, storage });
+    await first.controller.boot();
+    first.controller.newGame(settings());
+    for (const uci of ['e2e4', 'd1h5']) {
+      play(first.controller, uci);
+      await vi.waitFor(() => expect(bot1.heldCount).toBe(1));
+      bot1.release();
+      await vi.waitFor(() => expect(first.store.humanToMove.value).toBe(true));
+    }
+    play(first.controller, 'h5f7');
+    await vi.waitFor(() => expect(first.store.plies.value[4].classification).toBeDefined());
+    const cls = first.store.plies.value[4].classification!.cls;
+    first.controller.dispose();
+
+    const bot2 = new ScriptedBot(['e8f7']);
+    bot2.manual = true;
+    const second = setup({ bot: bot2, storage });
+    await second.controller.boot();
+    const s = second.store;
+    expect(s.coach.value.cls).toBe(cls);
+    expect(s.coach.value.actions.map((a) => a.id)).toEqual(['showBest', 'retry']);
+    await vi.waitFor(() => expect(bot2.heldCount).toBe(1));
+    bot2.release();
+    await vi.waitFor(() => expect(s.plies.value).toHaveLength(6));
+    // Still discussed after the bot's reply, as in live play.
+    expect(s.coach.value.cls).toBe(cls);
+    second.controller.runAction('retry');
+    second.controller.confirmAssist();
+    expect(s.plies.value).toHaveLength(4);
+  });
+});
+
+describe('engine failure', () => {
+  it('an analysis engine that breaks mid-game shows the error screen; Try again restores the game', async () => {
+    const storage = new MemoryStorage();
+    const sets: ReturnType<typeof fakeEngineSet>[] = [];
+    const { controller, store } = setup({
+      bot: new ScriptedBot(['e7e5', 'b8c6']),
+      storage,
+      createEngines: async () => {
+        const e = fakeEngineSet();
+        sets.push(e);
+        return e.set;
+      },
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await controller.boot();
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    sets[0].analysis.failWith = new Error('worker crashed');
+    play(controller, 'g1f3');
+    await vi.waitFor(() => expect(store.phase.value).toBe('error'));
+    expect(store.error.value?.message).toBe(ENGINE_STOPPED);
+    expect(store.coach.value.actions.map((a) => a.id)).toEqual(['retryBoot']);
+    expect(loadGame(storage)?.moves.slice(0, 3)).toEqual(['e2e4', 'e7e5', 'g1f3']);
+    await controller.retry();
+    expect(store.phase.value).toBe('playing');
+    expect(sets).toHaveLength(2);
+    await controller.idle();
+    expect(store.plies.value.slice(0, 3).map((p) => p.uci)).toEqual(['e2e4', 'e7e5', 'g1f3']);
+    expect(store.plies.value.every(annotated)).toBe(true);
+  });
+
+  it('a bot engine that breaks never lets the bot play a heuristic move in a rated game', async () => {
+    const sets: ReturnType<typeof fakeEngineSet>[] = [];
+    const { controller, store } = setup({
+      createEngines: async () => {
+        const e = fakeEngineSet();
+        sets.push(e);
+        return e.set;
+      },
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await controller.boot();
+    // Out of the opening book, so the bot needs its engine.
+    controller.newGame(settings({ botId: 'custom', botElo: 2800 }), { startFen: '4k3/8/8/8/8/8/4P3/4K3 w - - 0 1' });
+    sets[0].bot.failWith = new Error('worker crashed');
+    play(controller, 'e2e4');
+    await vi.waitFor(() => expect(store.phase.value).toBe('error'));
+    await controller.idle();
+    expect(store.plies.value).toHaveLength(1);
+    expect(store.profile.value.history).toHaveLength(0);
+    await controller.retry();
+    await controller.idle();
+    expect(store.phase.value).toBe('playing');
+    expect(store.plies.value).toHaveLength(2);
+  });
+
+  it('a move whose analysis failed offers to try again instead of spinning forever', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    controller.newGame(settings());
+    const empty = { depth: 0, lines: [], bestMove: null, done: false, aborted: true };
+    const ensure = vi
+      .spyOn(AnalysisService.prototype, 'ensure')
+      .mockImplementationOnce(async (fen: string) => ({ fen, ...empty }));
+    await playAll(controller, ['e2e4']);
+    expect(store.plies.value[0].classification).toBeUndefined();
+    expect(store.coach.value.busy).toBe(false);
+    expect(store.coach.value.title).toBe('Couldn’t check e4');
+    expect(store.coach.value.actions.map((a) => a.id)).toEqual(['retryAnalysis']);
+    ensure.mockRestore();
+    controller.runAction('retryAnalysis');
+    await controller.idle();
+    expect(store.plies.value[0].classification).toBeDefined();
+    expect(store.coach.value.title).toMatch(/^1\. e4 is /);
+  });
+});
+
+describe('draws the engine cannot see', () => {
+  it('repeating the position a third time when winning is a bad move; the final eval is 0.0', async () => {
+    const bot = new ScriptedBot(['e7e5', 'd8g5', 'b8c6', 'c6b8', 'b8c6', 'c6b8']);
+    const { controller, store } = setup({ bot });
+    await controller.boot();
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4', 'g1f3', 'f3g5', 'g5f3', 'f3g5', 'g5f3', 'f3g5']);
+    expect(store.outcome.value?.reason).toBe('Threefold repetition');
+    await controller.idle();
+    const last = store.plies.value.at(-1)!;
+    expect(last.san).toBe('Ng5');
+    expect(last.classification?.cls).toMatch(/mistake|blunder/);
+    expect(last.classification?.winAfter).toBe(0.5);
+    expect(last.evalWhite).toEqual({ kind: 'cp', value: 0 });
+    expect(last.explanation?.headline).toContain('repeats the position for the third time');
+    expect(last.explanation?.details[0]).toContain('You were winning');
+    expect(store.evalBar.value.label).toBe('0.0');
+    expect(store.evalBar.value.whiteWinProb).toBe(0.5);
+    expect(store.evalGraph.value.points.at(-1)).toBe(0.5);
+    await controller.startReview();
+    expect(store.review.value?.keyMoments.some((k) => k.index === last.index)).toBe(true);
+  });
+});
+
+describe('Show best', () => {
+  it('shows the variation once and keeps what was wrong with the played move', async () => {
+    const bot = new ScriptedBot(['e7e5', 'b8c6']);
+    bot.manual = true;
+    const { controller, store } = setup({ bot });
+    await controller.boot();
+    controller.newGame(settings());
+    for (const uci of ['e2e4', 'd1h5']) {
+      play(controller, uci);
+      await vi.waitFor(() => expect(bot.heldCount).toBe(1));
+      bot.release();
+      await vi.waitFor(() => expect(store.humanToMove.value).toBe(true));
+    }
+    play(controller, 'h5f7');
+    await vi.waitFor(() => expect(store.plies.value[4].classification).toBeDefined());
+    const ply = store.plies.value[4];
+    controller.runAction('showBest');
+    const lines = store.coach.value.lines;
+    expect(lines).toContain(`You played Qxf7+. ${ply.explanation!.headline}`);
+    const variations = lines.filter((l) => /^(Main line|Key line|The finish|Best line):/.test(l));
+    expect(variations.length).toBeLessThanOrEqual(1);
+    bot.release();
   });
 });

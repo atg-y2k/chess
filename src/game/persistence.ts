@@ -1,9 +1,11 @@
 /**
- * Saves and restores the in-progress game and the settings in localStorage.
+ * Saves and restores the current game and the settings in localStorage.
  *
  * iOS often kills a backgrounded Home Screen app and restarts it from scratch, so the controller
- * saves the game after every move. Loaded data is treated as untrusted: games are replayed with
- * chess.js and settings are merged over DEFAULT_SETTINGS. No call here ever throws.
+ * saves the game after every move, and keeps a finished game (with its result) until the next one
+ * starts, so its game-over screen and review survive too. Loaded data is treated as untrusted:
+ * games are replayed with chess.js and settings are merged over DEFAULT_SETTINGS. No call here
+ * ever throws.
  */
 import { Chess } from 'chess.js';
 import { MOVE_CLASS_ORDER } from '../analysis/types';
@@ -11,9 +13,9 @@ import type { Classification, Explanation } from '../analysis/types';
 import { parseUci, toUci } from '../chess/utils';
 import type { Score } from '../engine/types';
 import { DEFAULT_SETTINGS } from './types';
-import type { Color, GameSettings, Ply } from './types';
+import type { Color, GameOutcome, GameSettings, Ply } from './types';
 
-/** localStorage key of the in-progress game (a SavedGame). */
+/** localStorage key of the current (or just finished) game (a SavedGame). */
 export const GAME_KEY = 'chesscoach.game';
 /** localStorage key of the settings. The value is `{ version: 1, settings: GameSettings }`. */
 export const SETTINGS_KEY = 'chesscoach.settings';
@@ -41,6 +43,14 @@ export interface SavedGame {
   startedAt: string;
   /** Keyed by ply index (0-based, as `Ply.index`). */
   annotations: Record<number, PlyAnnotation>;
+  /** Set once the game has ended: its result and the rating change it caused. */
+  over?: SavedResult;
+}
+
+/** How a saved game ended. */
+export interface SavedResult {
+  outcome: GameOutcome;
+  ratingChange: { before: number; after: number; rated: boolean };
 }
 
 const UCI_RE = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
@@ -123,7 +133,7 @@ export function loadGame(storage: KeyValueStorage | null = defaultStorage()): Sa
   return game;
 }
 
-/** Removes the saved game (call when a game ends or a new one starts). */
+/** Removes the saved game. */
 export function clearGame(storage: KeyValueStorage | null = defaultStorage()): void {
   remove(storage, GAME_KEY);
 }
@@ -149,7 +159,7 @@ export function sanitizeSavedGame(raw: unknown): SavedGame | null {
     moves.push(uci);
   }
 
-  return {
+  const game: SavedGame = {
     ...raw,
     version: 1,
     id,
@@ -164,6 +174,21 @@ export function sanitizeSavedGame(raw: unknown): SavedGame | null {
     startedAt: typeof raw.startedAt === 'string' ? raw.startedAt : new Date().toISOString(),
     annotations: sanitizeAnnotations(raw.annotations, moves.length),
   };
+  const over = sanitizeResult(raw.over);
+  if (over) game.over = over;
+  else delete game.over;
+  return game;
+}
+
+/** A saved result, or null when it is missing or inconsistent. */
+function sanitizeResult(v: unknown): SavedResult | null {
+  if (!isObject(v) || !isObject(v.outcome) || !isObject(v.ratingChange)) return null;
+  const { result, winner, reason } = v.outcome;
+  const expected = result === '1-0' ? 'w' : result === '0-1' ? 'b' : result === '1/2-1/2' ? null : undefined;
+  if (expected === undefined || winner !== expected || typeof reason !== 'string') return null;
+  const { before, after, rated } = v.ratingChange;
+  if (!isFiniteNumber(before) || !isFiniteNumber(after) || typeof rated !== 'boolean') return null;
+  return { outcome: { result: result as GameOutcome['result'], winner: expected, reason }, ratingChange: { before, after, rated } };
 }
 
 /** Plays a UCI (or SAN) move; returns its UCI, or null when illegal. */

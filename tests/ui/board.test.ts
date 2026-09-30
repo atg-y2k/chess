@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { pieceOnSquare, promotionColor, snapBoardSize } from '../../src/ui/Board';
 import { graphSpan, knownRange, valueAt, whiteAreaPath } from '../../src/ui/EvalGraph';
-import { evalBarText } from '../../src/ui/EvalBar';
+import { evalBarText, isLongEvalText } from '../../src/ui/EvalBar';
 
 const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 describe('Board helpers', () => {
@@ -54,5 +54,10 @@ describe('EvalBar', () => {
     expect(evalBarText('-M2')).toBe('M2');
     expect(evalBarText('0-1')).toBe('0-1');
     expect(evalBarText('0.0')).toBe('0.0');
+    expect(evalBarText('+12.3')).toBe('12');
+    expect(evalBarText('-9.9')).toBe('9.9');
+    expect(isLongEvalText('M10')).toBe(true);
+    expect(isLongEvalText('9.9')).toBe(false);
+    expect(isLongEvalText('1-0')).toBe(false);
   });
 });

@@ -8,7 +8,7 @@ no server and no account, and it works offline once installed.
 - **Rules:** `chess.js` (BSD-2).
 - **Board:** `@lichess-org/chessground` (GPL-3).
 - **Engine:** Stockfish 19 "lite single-threaded" WASM from `stockfish` (nmrugg/stockfish.js, GPL-3). It is vendored in `public/engine/`.
-- **Hosting:** GitHub Pages (static). The app is installed with Safari → Share → *Add to Home Screen*.
+- **Hosting:** GitHub Pages (static). The app is installed with Safari → ⋯ → Share → *Add to Home Screen*.
 
 ## Module map (ownership boundaries)
 
@@ -320,8 +320,10 @@ interface ReviewPanelProps {
 `main.tsx` creates one `GameController` (src/game/controller.ts), binds page visibility to it
 (`bindPageLifecycle`), registers the service worker with `canReloadNow: () => controller.canReloadNow()`
 (true only in setup and on the error screen: an update never reloads a game in progress, nor a
-finished game's game-over screen or review, which are not saved), installs the
-iOS guards with `onFirstGesture: unlockAudio`, renders `<App controller/>` and calls `boot()`.
+finished game's game-over screen or review). `pwa.ts` also waits until the page is hidden, or has
+not been touched since it was opened or brought back, so an update never reloads the New game sheet
+while the user is choosing. `main.tsx` also installs the iOS guards with `onFirstGesture: unlockAudio`,
+renders `<App controller/>` and calls `boot()`.
 `window.__chessCoach.controller` is exposed for debugging and the e2e tests.
 
 The controller owns all state as signals (`controller.store`, see store.ts). The store also exposes
@@ -380,14 +382,28 @@ script in `index.html` set `<html data-theme>` before the first paint.
 
 ## Deployment
 
-A GitHub Actions workflow builds with `BASE_PATH=/chess/` and deploys to GitHub Pages. The
-service worker precaches the app, including the engine `.wasm`, so it works offline. Other static
-hosts (Cloudflare Pages, Netlify) work with `npm run build`, output `dist`, and `BASE_PATH=/`.
+A GitHub Actions workflow (`deploy.yml`) runs the unit tests and the e2e tests against a
+`BASE_PATH=/chess/` build, then builds with `BASE_PATH=/chess/` and deploys to GitHub Pages; `ci.yml`
+runs the same checks on branches and pull requests, with the e2e tests at both `/` and `/chess/`.
+Other static hosts (Cloudflare Pages, Netlify) work with `npm run build`, output `dist`, and
+`BASE_PATH=/`.
+
+Service worker (`vite.config.ts`, Workbox `generateSW`):
+- It precaches the whole app, including the engine `.js` + `.wasm` and the licence notices, so it
+  works offline. Hashed `assets/` and the engine files (versioned by name; `ENGINE_FILES` pins their
+  SHA-256 and fails the build if they change) are precached without a revision, so the first visit
+  can reuse the engine download from the HTTP cache instead of fetching it twice.
+- Only the app's own URL (`<base>`, `<base>index.html`, any query) falls back to the cached
+  `index.html`; other paths (`engine/COPYING-stockfish.txt`, `THIRD-PARTY-LICENSES.txt`, typos) get
+  the real file or a 404.
+- `build.license` writes `THIRD-PARTY-LICENSES.txt` (completed with the app's own licence notice,
+  its source URL `VITE_SOURCE_URL`, and the Workbox runtime), and licence comments are kept in the
+  minified code.
 
 ## Tests
 
 - `npm test`: Vitest unit tests in node (pure logic, the controller against a fake engine, UI helpers).
 - `npm run e2e`: Playwright on the production build with the real engine, iPhone 15 Pro emulation.
-  `e2e/pwa.spec.ts` checks the PWA shell (manifest, service worker, offline); `e2e/game.spec.ts`
-  plays through the UI (moves by tapping squares, coach, hint, undo, flip, reload, resign, review,
-  a game as Black, and `?enginetest`).
+  `e2e/pwa.spec.ts` checks the PWA shell (manifest, service worker, offline, licence notices);
+  `e2e/game.spec.ts` plays through the UI (moves by tapping squares, coach, hint, undo, flip, reload,
+  resign, review, a game as Black, and `?enginetest`).

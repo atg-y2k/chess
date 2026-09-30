@@ -9,6 +9,9 @@
  *  - Every complete result (final or partial) of either kind feeds the cache, keyed by `fenKey`.
  *    Per position the cache keeps the non-dominated results by (depth, MultiPV width).
  *  - Searches are depth-limited (never `movetime`, which misbehaves across iOS suspension).
+ *  - A search cut short by an engine restart (crash, hang) is retried on the fresh engine a few
+ *    times before its waiters get the best result so far, so a crash never leaves a shallow
+ *    result where a deep one was asked for.
  */
 import { fenKey } from '../chess/utils';
 import { inspectPosition } from './StockfishEngine';
@@ -52,9 +55,13 @@ interface Job {
   /** Put back at the head of the queue when its search ends (pause). */
   requeue: boolean;
   ended: boolean;
+  /** How many times this request was re-issued after an engine restart. */
+  retries: number;
 }
 
 const EMPTY_WIDTH = 0;
+/** Re-issues of an `ensure` search whose engine restarted (crash, hang) before it resolves best-so-far. */
+const RESTART_RETRIES = 2;
 
 export class AnalysisService {
   private readonly liveDepth: number;
@@ -90,8 +97,9 @@ export class AnalysisService {
    * High-priority analysis to at least `minDepth` with at least `multiPv` lines (or all legal
    * moves), cached by fenKey. Pre-empts live analysis, which resumes afterwards. Resolves from
    * the cache immediately when possible. `done` may be false when the depth was reached by a
-   * search that was later pre-empted. Resolves `aborted: true` (best so far) after cancelAll()
-   * or if the engine breaks. Rejects only for an invalid FEN.
+   * search that was later pre-empted. A search cut short by an engine restart is retried (up to
+   * twice). Resolves `aborted: true` (best so far) after cancelAll(), if the engine breaks, or
+   * if it keeps crashing on this position. Rejects only for an invalid FEN.
    */
   ensure(fen: string, opts: { minDepth: number; multiPv?: number }): Promise<AnalysisResult> {
     const key = fenKey(fen);
@@ -206,7 +214,19 @@ export class AnalysisService {
   // Scheduling
 
   private newJob(key: string, fen: string, depth: number, multiPv: number, kind: Job['kind'], waiters: Waiter[]): Job {
-    return { key, fen, depth, multiPv, kind, waiters, ctl: new AbortController(), superseded: false, requeue: false, ended: false };
+    return {
+      key,
+      fen,
+      depth,
+      multiPv,
+      kind,
+      waiters,
+      ctl: new AbortController(),
+      superseded: false,
+      requeue: false,
+      ended: false,
+      retries: 0,
+    };
   }
 
   private pump(): void {
@@ -296,8 +316,26 @@ export class AnalysisService {
       this.resolveFromCache(job);
       if (job.waiters.length) this.queue.unshift(this.newJob(job.key, job.fen, job.depth, job.multiPv, 'ensure', job.waiters));
     } else if (!job.superseded) {
-      // Unexpected abort (engine restarted after a crash): report what we have.
-      this.abortWaiters(job);
+      // Unexpected abort: the engine restarted after a crash or hang. It is usable again, so
+      // search once more rather than hand out a shallow partial result. A live search needs
+      // nothing here: pump() restarts it.
+      this.resolveFromCache(job);
+      if (job.waiters.length && job.retries < RESTART_RETRIES) {
+        // Sized for the waiters, not the old job: a deep live search that an ensure() joined
+        // comes back as that ensure() only.
+        const retry = this.newJob(
+          job.key,
+          job.fen,
+          Math.max(...job.waiters.map((w) => w.minDepth)),
+          Math.max(...job.waiters.map((w) => w.multiPv)),
+          'ensure',
+          job.waiters,
+        );
+        retry.retries = job.retries + 1;
+        this.queue.unshift(retry);
+      } else {
+        this.abortWaiters(job);
+      }
     }
     this.pump();
   }

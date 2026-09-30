@@ -17,12 +17,15 @@
   /* Text */
   --text: #f3f0ea;
   --text-dim: #b7afa4;
-  --text-faint: #857d73;
+  /* Captions: still >= 4.5:1 (WCAG AA) on --surface-2. */
+  --text-faint: #a0988d;
 
   /* Accent + semantic */
   --accent: #5fae6e;
   --accent-strong: #4b9a5b;
   --accent-text: #0e1f12;
+  /* Text links (>= 4.5:1 on the surfaces). */
+  --link: #6dbb7b;
   --danger: #d9534f;
   --warning: #f0b43c;
 
@@ -82,9 +85,10 @@
   --border: #d8d1c7;
   --overlay: rgba(0, 0, 0, 0.35);
   --text: #22201d;
-  --text-dim: #5d574f;
-  --text-faint: #8d867c;
-  --accent-text: #ffffff;
+  --text-dim: #514b44;
+  --text-faint: #6e675e;
+  /* --accent-text stays dark: white on the green accent is only 2.7:1. */
+  --link: #2e7a3e;
 }
 
 *,

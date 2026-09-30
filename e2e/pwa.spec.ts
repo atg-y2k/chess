@@ -9,6 +9,13 @@ const ENGINE_JS = 'engine/stockfish-19-lite-single.js';
 const ENGINE_WASM = 'engine/stockfish-19-lite-single.wasm';
 const ENGINE_WASM_BYTES = 1_787_571;
 
+/** Licence and source notices shipped with the app: [path, content type, text it must contain]. */
+const NOTICES: [string, RegExp, string][] = [
+  ['THIRD-PARTY-LICENSES.txt', /^text\/plain/, 'workbox-core'],
+  ['engine/COPYING-stockfish.txt', /^text\/plain/, 'GNU GENERAL PUBLIC LICENSE'],
+  ['engine/README.md', /^text\/markdown/, 'Corresponding source'],
+];
+
 /** Width, height and colour type from a PNG's IHDR chunk (colour type 2 = RGB, 6 = RGBA). */
 function pngInfo(buf: Buffer): { width: number; height: number; colorType: number } {
   expect(buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(true);
@@ -200,7 +207,8 @@ test.describe('PWA shell', () => {
       return urls;
     });
     const base = new URL('./', page.url()).pathname;
-    for (const path of ['index.html', 'manifest.webmanifest', ENGINE_JS, ENGINE_WASM, 'apple-touch-icon-180x180.png']) {
+    const notices = NOTICES.map(([path]) => path);
+    for (const path of ['index.html', 'manifest.webmanifest', ENGINE_JS, ENGINE_WASM, 'apple-touch-icon-180x180.png', ...notices]) {
       expect(cached, path).toContain(base + path);
     }
     expect(cached.some((p) => /\/assets\/.+\.js$/.test(p))).toBe(true);
@@ -218,7 +226,7 @@ test.describe('PWA shell', () => {
       await expect(page.locator('#app > *').first()).toBeAttached();
       expect(await page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
 
-      // Any in-scope navigation falls back to the cached index.html.
+      // The app's URL with any query gets the cached index.html.
       await page.goto('./?offline-deep-link=1');
       await expect(page.locator('#app > *').first()).toBeAttached();
 
@@ -228,9 +236,35 @@ test.describe('PWA shell', () => {
       expect(await runEngine(page)).toMatch(/^bestmove [a-h][1-8][a-h][1-8]/);
 
       await testInfo.attach('offline.png', { body: await page.screenshot(), contentType: 'image/png' });
+
+      // The licence and source notices open offline too (last: this leaves the app's URL).
+      for (const [path, , text] of NOTICES) {
+        const res = await page.goto(path);
+        expect(res?.fromServiceWorker(), path).toBe(true);
+        expect(await res?.text(), path).toContain(text);
+      }
     } finally {
       await context.setOffline(false);
     }
+  });
+
+  test('opens the licence and source notices as files, not as the app', async ({ page }) => {
+    await page.goto('./');
+    await waitForServiceWorker(page);
+
+    for (const [path, type, text] of NOTICES) {
+      const res = await page.goto(path);
+      expect(res?.status(), path).toBe(200);
+      expect(res?.headers()['content-type'], path).toMatch(type);
+      const body = (await res?.text()) ?? '';
+      expect(body, path).toContain(text);
+      expect(body, path).not.toContain('id="app"');
+    }
+
+    // Only the app's own URL gets the cached app shell: the service worker leaves other paths to
+    // the server (a 404 on a static host), so a future notice or download is never swallowed.
+    const other = await page.goto('no-such-page');
+    expect(other?.fromServiceWorker()).toBe(false);
   });
 
   test('app shell fills the screen as a flex column', async ({ page }) => {

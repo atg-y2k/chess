@@ -1,9 +1,13 @@
 /**
  * Player rating: Elo maths against the bot ladder plus profile persistence.
  *
- * The rating is a plain Elo estimate: E = 1 / (1 + 10^((Rbot - R) / 400)), R += K * (S - E), with
- * K = 60 for the first 10 rated games, 32 up to game 30, then 16 (research/strength.md). This makes
- * the player's rating self-consistent with the bot ladder whatever its absolute offset is.
+ * The rating is an Elo estimate, E = 1 / (1 + 10^((Rbot - R) / 400)), R += K * (S - E), measured
+ * against the bot ladder (so it is self-consistent with it whatever its absolute offset is). K comes
+ * from Glicko-1 (see `kFactor`): a new rating is uncertain, so the first games move it a lot
+ * (+-175 for the first game against an equal bot) and it settles within about 10-20 games instead of
+ * crawling up from 800 in +-30 steps; established ratings move by +-8. A run of results far from
+ * expectations (a player who has improved) makes K provisional again (`effectiveGames`), and a new
+ * player can start from a level instead of 800 (`STARTING_LEVELS`, `setStartingRating`).
  *
  * No DOM access: storage is `localStorage` when present (or an injected stand-in), and every
  * storage call is wrapped so private mode, quota errors or corrupt data never throw.
@@ -39,17 +43,71 @@ export function expectedScore(rating: number, opponent: number): number {
   return 1 / (1 + Math.pow(10, (opponent - rating) / 400));
 }
 
-/** K-factor for the next rated game: 60 for the first 10 games, 32 up to game 30, then 16. */
-export function kFactor(gamesPlayed: number): number {
-  if (gamesPlayed < 10) return 60;
-  if (gamesPlayed < 30) return 32;
-  return 16;
+/** Glicko-1 rating deviation of a new player, and the Glicko scale constant ln(10) / 400. */
+const NEW_PLAYER_RD = 350;
+const Q = Math.LN10 / 400;
+/** Smallest K-factor (an established rating; reached after about 42 rated games). */
+export const MIN_K = 16;
+
+/**
+ * K-factor for the next rated game against a bot the player is expected to score `expected`
+ * against. Glicko-1 against a fixed-rated opponent: the player's rating deviation starts at 350 and
+ * shrinks with every game (each counted as an even one), and a game's weight grows with how
+ * informative it is, E(1-E). Against an equal bot: 350 for the first game, ~58 at game 10, ~22 at
+ * game 30, then never below MIN_K.
+ */
+export function kFactor(gamesPlayed: number, expected = 0.5): number {
+  const n = Math.max(0, Number.isFinite(gamesPlayed) ? gamesPlayed : 0);
+  const e = Math.min(1, Math.max(0, Number.isFinite(expected) ? expected : 0.5));
+  return Math.max(MIN_K, Q / (1 / NEW_PLAYER_RD ** 2 + (n * Q * Q) / 4 + Q * Q * e * (1 - e)));
+}
+
+/** Surprise window: the last this many rated games... */
+const SURPRISE_GAMES = 6;
+/** ...beating (or missing) their expected score by this many points in total... */
+const SURPRISE_POINTS = 2.5;
+/** ...make the rating provisional again, as if only this many games had been played. */
+const SURPRISE_GAMES_PLAYED = 8;
+
+/**
+ * Game count used for the K-factor: `gamesPlayed`, lowered to 8 when the last 6 rated games
+ * together beat or missed their expected scores by 2.5 points or more (e.g. six straight wins at
+ * "Match my rating"): the player has probably improved (or lost form), so the rating catches up
+ * quickly instead of by +-8 per game.
+ */
+export function effectiveGames(profile: PlayerProfile): number {
+  const recent = profile.history.filter((r) => r.rated).slice(0, SURPRISE_GAMES);
+  if (recent.length === SURPRISE_GAMES) {
+    const surprise = recent.reduce((sum, r) => sum + r.playerScore - expectedScore(r.ratingBefore, r.botElo), 0);
+    if (Math.abs(surprise) >= SURPRISE_POINTS) return Math.min(profile.gamesPlayed, SURPRISE_GAMES_PLAYED);
+  }
+  return profile.gamesPlayed;
 }
 
 /** The player's score (1 win, 0.5 draw, 0 loss) for a result. */
 export function playerScoreFor(result: GameResult, playerColor: Color): 1 | 0.5 | 0 {
   if (result === '1/2-1/2') return 0.5;
   return (result === '1-0') === (playerColor === 'w') ? 1 : 0;
+}
+
+/** Starting levels a player can pick instead of the default 800 (first launch, or later to reset). */
+export const STARTING_LEVELS: readonly { id: string; label: string; rating: number }[] = [
+  { id: 'beginner', label: 'Beginner', rating: 400 },
+  { id: 'casual', label: 'Casual', rating: 800 },
+  { id: 'intermediate', label: 'Intermediate', rating: 1200 },
+  { id: 'advanced', label: 'Advanced', rating: 1600 },
+  { id: 'expert', label: 'Expert', rating: 2000 },
+];
+
+/**
+ * Sets the player's rating to a chosen starting level. The rating becomes provisional again
+ * (`gamesPlayed` = 0, so the next games move it a lot) and settles from there. The record and
+ * history are kept; the peak keeps its maximum once rated games have been played. Pure.
+ */
+export function setStartingRating(profile: PlayerProfile, rating: number): PlayerProfile {
+  const r = clampRating(rating);
+  const earned = profile.history.some((g) => g.rated);
+  return { ...profile, rating: r, gamesPlayed: 0, peak: earned ? Math.max(profile.peak, r) : r };
 }
 
 /** A fresh profile: rating 800, no games. */
@@ -68,8 +126,8 @@ export function defaultProfile(): PlayerProfile {
 /**
  * Records a finished game and returns the updated profile plus the completed record.
  *
- * - Rated games move the rating by K * (score - expected) (rounded, clamped to 100..3200) and
- *   increment `gamesPlayed` (the rated-game count that drives the K-factor).
+ * - Rated games move the rating by K * (score - expected) (rounded, clamped to 100..3200), with
+ *   K = kFactor(effectiveGames(profile), expected), and increment `gamesPlayed`.
  * - Unrated games keep the rating and `gamesPlayed` as they are (ratingBefore === ratingAfter),
  *   but are still added to the history and to wins / draws / losses.
  * - `history` is newest first and capped at HISTORY_LIMIT.
@@ -86,7 +144,8 @@ export function applyGameResult(
   if (existing) return { profile, record: existing };
 
   const ratingBefore = profile.rating;
-  const delta = kFactor(profile.gamesPlayed) * (record.playerScore - expectedScore(ratingBefore, record.botElo));
+  const expected = expectedScore(ratingBefore, record.botElo);
+  const delta = kFactor(effectiveGames(profile), expected) * (record.playerScore - expected);
   const ratingAfter = record.rated ? clampRating(ratingBefore + delta) : ratingBefore;
   const full: GameRecord = { ...record, ratingBefore, ratingAfter };
 

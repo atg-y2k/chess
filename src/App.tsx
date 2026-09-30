@@ -21,6 +21,7 @@ import type { PromotionPiece } from './game/types';
 import { applyTheme, loadTheme, saveTheme, watchSystemTheme, type ThemePref } from './theme';
 import { Board } from './ui/Board';
 import { CoachPanel } from './ui/CoachPanel';
+import { ConfirmSheet, assistPrompt } from './ui/ConfirmSheet';
 import { EvalBar } from './ui/EvalBar';
 import { EvalGraph } from './ui/EvalGraph';
 import { GameOverSheet } from './ui/GameOverSheet';
@@ -48,8 +49,13 @@ export interface AppProps {
   controller: GameController;
 }
 
-/** Below this height (CSS px) the coach slot is too short for the expanded panel: it collapses to one row. */
-export const COACH_TIGHT_PX = 84;
+/**
+ * Below this height (CSS px) the coach slot cannot show the expanded panel with its title, two
+ * lines of text and a row of actions (Show best, Retry, …): ≈ 61 + 43 + 39 px. It then collapses
+ * to one row; tapping it floats the full bubble. (One threshold, even when there are no actions,
+ * so the panel does not flip between the two forms from one move to the next.)
+ */
+export const COACH_TIGHT_PX = 144;
 /** Below this slot height the review summary floats over the board instead of squeezing into the slot. */
 export const REVIEW_FLOAT_PX = 300;
 /** How long a toast stays up (ms). */
@@ -354,8 +360,8 @@ function Tools({ c, summary }: { c: GameController; summary: Signal<boolean> }) 
   } else {
     items = [
       newGame,
-      item('undo', 'Undo', <IconUndo />, () => c.undo()),
-      item('hint', 'Hint', <IconBulb />, () => void c.hint()),
+      item('undo', 'Undo', <IconUndo />, () => c.requestUndo()),
+      item('hint', 'Hint', <IconBulb />, () => c.requestHint()),
       flip,
       item('coach', 'Coach', <IconCoach />, () => c.toggleCoach()),
       menu,
@@ -385,6 +391,10 @@ function Sheets({
   const lastOver = useRef<typeof sh.gameOver>(null);
   if (sh.gameOver) lastOver.current = sh.gameOver;
   const over = lastOver.current;
+  // Same for the unrated-help question while it animates closed.
+  const lastAssist = useRef<typeof sh.assist>(null);
+  if (sh.assist) lastAssist.current = sh.assist;
+  const assist = lastAssist.current;
   const close = () => c.closeSheet();
   return (
     <>
@@ -393,9 +403,18 @@ function Sheets({
         initial={sh.newGame.initial}
         playerRating={sh.newGame.playerRating}
         bots={sh.newGame.bots}
+        inProgress={sh.newGame.inProgress}
         onStart={(settings) => c.newGame(settings)}
         onClose={close}
       />
+      {assist && (
+        <ConfirmSheet
+          {...assistPrompt(assist.kind)}
+          open={sh.open === 'assist' && !!sh.assist}
+          onConfirm={() => c.confirmAssist()}
+          onClose={close}
+        />
+      )}
       <MenuSheet
         open={sh.open === 'menu'}
         settings={sh.menu.settings}

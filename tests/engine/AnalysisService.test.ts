@@ -2,8 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { Chess } from 'chess.js';
 import { AnalysisService } from '../../src/engine/AnalysisService';
 import { StockfishEngine } from '../../src/engine/StockfishEngine';
-import type { AnalysisResult } from '../../src/engine/types';
-import { createNodeTransport } from '../helpers/nodeTransport';
+import type { AnalysisResult, ChessEngine, PvLine, SearchOptions } from '../../src/engine/types';
+import { createNodeTransport, type NodeTransport } from '../helpers/nodeTransport';
 
 const FENS = {
   start: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
@@ -211,5 +211,165 @@ describe('AnalysisService (real engine)', () => {
     expect(r.terminal).toBe('checkmate');
     await expect(svc.ensure('bad fen', { minDepth: 5 })).rejects.toThrow(/Invalid FEN/);
     svc.watch(null);
+  });
+});
+
+/** A ChessEngine whose searches the test ends by hand (one at a time, like the real one). */
+class ManualEngine implements ChessEngine {
+  readonly calls: { fen: string; opts: SearchOptions; end: (r: Partial<AnalysisResult>) => void; ended: boolean }[] = [];
+  failNext: Error | null = null;
+
+  init(): Promise<void> {
+    return Promise.resolve();
+  }
+  search(fen: string, opts: SearchOptions = {}): Promise<AnalysisResult> {
+    this.stop();
+    if (this.failNext) return Promise.reject(this.failNext);
+    return new Promise((resolve) => {
+      const call = {
+        fen,
+        opts,
+        ended: false,
+        end: (r: Partial<AnalysisResult>) => {
+          if (call.ended) return;
+          call.ended = true;
+          resolve({ fen, depth: 0, lines: [], bestMove: null, done: false, ...r });
+        },
+      };
+      opts.signal?.addEventListener('abort', () => call.end({ aborted: true }), { once: true });
+      this.calls.push(call);
+    });
+  }
+  stop(): void {
+    this.calls.at(-1)?.end({ aborted: true });
+  }
+  newGame(): Promise<void> {
+    return Promise.resolve();
+  }
+  terminate(): void {
+    this.stop();
+  }
+}
+
+const lines = (depth: number, n = 3): PvLine[] =>
+  ['e2e4', 'd2d4', 'g1f3'].slice(0, n).map((m, i) => ({ multipv: i + 1, depth, score: { kind: 'cp', value: 30 - i }, pv: [m] }));
+const partial = (depth: number, n = 3): AnalysisResult => ({ fen: FENS.start, depth, lines: lines(depth, n), bestMove: null, done: false });
+const tickle = () => new Promise((r) => setTimeout(r, 0));
+
+describe('AnalysisService after an engine restart', () => {
+  it('re-issues an ensure() whose search was cut short, instead of resolving the shallow partial', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    let got: AnalysisResult | null = null;
+    void svc.ensure(FENS.start, { minDepth: 14, multiPv: 3 }).then((r) => (got = r));
+    expect(eng.calls).toHaveLength(1);
+    eng.calls[0].opts.onInfo?.(partial(7));
+    eng.calls[0].end({ depth: 7, lines: lines(7), aborted: true }); // the worker crashed and respawned
+    await tickle();
+    expect(got).toBeNull();
+    expect(eng.calls).toHaveLength(2);
+    expect(eng.calls[1].opts).toMatchObject({ depth: 14, multiPv: 3 });
+    eng.calls[1].end({ depth: 14, lines: lines(14), bestMove: 'e2e4', done: true });
+    await tickle();
+    expect(got).toMatchObject({ depth: 14, done: true });
+    expect(got!.aborted).toBeFalsy();
+  });
+
+  it('retries a live search that an ensure() joined at the ensure depth, then resumes live analysis', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng, { liveDepth: 18, liveMultiPv: 3 });
+    svc.watch(FENS.start);
+    expect(eng.calls[0].opts).toMatchObject({ depth: 18, multiPv: 3 });
+    let got: AnalysisResult | null = null;
+    void svc.ensure(FENS.start, { minDepth: 14, multiPv: 3 }).then((r) => (got = r));
+    expect(eng.calls).toHaveLength(1); // joined the live search
+    eng.calls[0].end({ depth: 7, lines: lines(7), aborted: true });
+    await tickle();
+    expect(eng.calls).toHaveLength(2);
+    expect(eng.calls[1].opts).toMatchObject({ depth: 14, multiPv: 3 });
+    eng.calls[1].end({ depth: 14, lines: lines(14), bestMove: 'e2e4', done: true });
+    await tickle();
+    expect(got).toMatchObject({ depth: 14, done: true });
+    expect(eng.calls).toHaveLength(3);
+    expect(eng.calls[2].opts).toMatchObject({ depth: 18, multiPv: 3 }); // live analysis resumed
+    svc.watch(null);
+  });
+
+  it('gives up after two retries and resolves the deepest result so far', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    let got: AnalysisResult | null = null;
+    void svc.ensure(FENS.start, { minDepth: 14, multiPv: 3 }).then((r) => (got = r));
+    for (const d of [5, 9, 6]) {
+      const call = eng.calls.at(-1)!;
+      call.opts.onInfo?.(partial(d));
+      call.end({ depth: d, lines: lines(d), aborted: true });
+      await tickle();
+    }
+    expect(eng.calls).toHaveLength(3);
+    expect(got).toMatchObject({ aborted: true, depth: 9 });
+    // The service still works.
+    void svc.ensure(FENS.afterE4, { minDepth: 10 });
+    expect(eng.calls).toHaveLength(4);
+  });
+
+  it('resolves best-so-far when the engine breaks while retrying', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    const p = svc.ensure(FENS.start, { minDepth: 14, multiPv: 3 });
+    eng.calls[0].opts.onInfo?.(partial(4));
+    eng.failNext = new Error('Engine "analysis" keeps crashing');
+    eng.calls[0].end({ depth: 4, lines: lines(4), aborted: true });
+    const r = await p;
+    expect(r).toMatchObject({ aborted: true, depth: 4 });
+    expect(eng.calls).toHaveLength(1);
+  });
+
+  it('does not retry searches it pre-empted itself (cancelAll)', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    const p = svc.ensure(FENS.start, { minDepth: 14, multiPv: 3 });
+    eng.calls[0].opts.onInfo?.(partial(6));
+    svc.cancelAll();
+    expect(await p).toMatchObject({ aborted: true, depth: 6 });
+    await tickle();
+    expect(eng.calls).toHaveLength(1);
+  });
+
+  it('real engine: a crash mid-search is followed by a full-depth search on the respawned engine', async () => {
+    const transports: NodeTransport[] = [];
+    const gosFor: string[] = [];
+    let armed = false;
+    const engine = new StockfishEngine(
+      () => {
+        const t = createNodeTransport();
+        transports.push(t);
+        return t;
+      },
+      {
+        onLine: (line, dir) => {
+          if (dir === 'out' && line.startsWith('position fen ')) gosFor.push(line.slice(13));
+          if (armed && dir === 'in' && /^info depth 5 .* multipv 3 /.test(line)) {
+            armed = false;
+            transports.at(-1)!.kill(); // the worker dies halfway through the annotation search
+          }
+        },
+      },
+    );
+    try {
+      await engine.init();
+      const svc = new AnalysisService(engine);
+      armed = true;
+      const r = await svc.ensure(FENS.italian, { minDepth: 12, multiPv: 3 });
+      expect(engine.respawnCount).toBe(1);
+      expect(r.aborted).toBeFalsy();
+      expect(r.done).toBe(true);
+      expect(r.depth).toBeGreaterThanOrEqual(12);
+      expect(r.lines).toHaveLength(3);
+      expect(r.lines.every((l) => legalIn(FENS.italian, l.pv[0]))).toBe(true);
+      expect(gosFor.filter((f) => f === FENS.italian)).toHaveLength(2);
+    } finally {
+      engine.terminate();
+    }
   });
 });

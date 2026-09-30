@@ -32,7 +32,8 @@ Check them with `sha256sum public/engine/*`.
   The upstream README explains how to rebuild the engine with Emscripten (`./build.js`).
 
 Chess Coach as a whole is distributed under the GPL-3.0-or-later (see `LICENSE` at the repository
-root), and its complete source is in this repository.
+root). Its complete source is at <https://github.com/atg-y2k/chess>; a copy hosted elsewhere names
+its source in `THIRD-PARTY-LICENSES.txt`, next to the app.
 
 ## Updating
 
@@ -40,4 +41,8 @@ root), and its complete source is in this repository.
    copy them from `node_modules/stockfish/bin/` after a temporary `npm pack stockfish@<version>`).
 2. Keep the `.js` and `.wasm` side by side under the same base name. The worker loads the `.wasm`
    from its own URL with `.js` replaced by `.wasm`, so do not rename or hash them.
-3. Update the file name in `src/engine/workerTransport.ts`, the table above and the tag link.
+3. Never put new content under an old file name: installed apps keep the engine files cached by
+   name (the service worker precaches them without a revision, so that the first visit downloads
+   them only once). Upstream names carry the version, so a new version has new names.
+4. Update the file name in `src/engine/workerTransport.ts`, the names and SHA-256 in `ENGINE_FILES`
+   in `vite.config.ts` (the build fails until they match), the table above and the tag link.

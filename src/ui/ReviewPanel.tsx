@@ -91,7 +91,7 @@ export function ReviewPanel({
       </header>
       {analysing && (
         <div class="review-progress-row">
-          <span class="review-status">Analysing game… {pct}%</span>
+          <span class="review-status">Analyzing game… {pct}%</span>
           <div
             class="review-progress"
             role="progressbar"

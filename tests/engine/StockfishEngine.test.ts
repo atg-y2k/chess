@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Chess } from 'chess.js';
 import { StockfishEngine, inspectPosition } from '../../src/engine/StockfishEngine';
-import type { AnalysisResult, EngineTransport } from '../../src/engine/types';
+import { EngineLoadError, engineFailureKind } from '../../src/engine/errors';
+import type { AnalysisResult, DownloadProgress, EngineTransport } from '../../src/engine/types';
 import { createNodeTransport, type NodeTransport } from '../helpers/nodeTransport';
 
 const FENS = {
@@ -332,7 +333,9 @@ describe('StockfishEngine recovery', () => {
     const silent: EngineTransport = { post: () => {}, onLine: () => {}, terminate: () => {} };
     const engine = new StockfishEngine(() => silent, { loadTimeoutMs: 300, watchdog: { tickMs: 50 } });
     const search = engine.search(FENS.start);
-    await expect(engine.init()).rejects.toThrow(/did not start/);
+    const err = await engine.init().catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/did not start/);
+    expect(engineFailureKind(err)).toBe('timeout');
     await expect(search).rejects.toThrow(/did not start/);
     await expect(engine.search(FENS.start)).rejects.toThrow();
   });
@@ -346,6 +349,84 @@ describe('StockfishEngine recovery', () => {
     expect((await a).aborted).toBe(true);
     await expect(engine.search(FENS.start)).rejects.toThrow(/terminated/);
     await expect(engine.newGame()).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * A fake engine process that "downloads" its .wasm for `downloadMs` (progress every `everyMs`),
+ * optionally stalling at `stallAt` of 1000 bytes, and then answers the UCI handshake.
+ */
+function loadingTransport(o: { downloadMs: number; everyMs: number; stallAt?: number }): EngineTransport {
+  let emitLine: (line: string) => void = () => {};
+  let emitProgress: (p: DownloadProgress) => void = () => {};
+  let loadedAll = false;
+  const queued: string[] = [];
+  const answer = (cmd: string) => {
+    if (cmd === 'uci') emitLine('uciok');
+    else if (cmd === 'isready') emitLine('readyok');
+  };
+  const total = 1000;
+  const t0 = Date.now();
+  const timer = setInterval(() => {
+    const loaded = Math.min(total, Math.round((total * (Date.now() - t0)) / o.downloadMs));
+    if (o.stallAt !== undefined && loaded >= o.stallAt) {
+      clearInterval(timer); // the connection dropped: no more bytes, no error
+      return;
+    }
+    emitProgress({ loaded, total });
+    if (loaded < total) return;
+    clearInterval(timer);
+    loadedAll = true;
+    for (const cmd of queued.splice(0)) answer(cmd);
+  }, o.everyMs);
+  return {
+    post: (cmd) => (loadedAll ? void setTimeout(() => answer(cmd), 1) : void queued.push(cmd)),
+    onLine: (cb) => void (emitLine = cb),
+    onProgress: (cb) => void (emitProgress = cb),
+    terminate: () => clearInterval(timer),
+  };
+}
+
+describe('StockfishEngine loading', () => {
+  it('a slow but steady download is not a dead engine: progress restarts the load timeout', async () => {
+    const seen: DownloadProgress[] = [];
+    const engine = new StockfishEngine(() => loadingTransport({ downloadMs: 900, everyMs: 40 }), {
+      loadTimeoutMs: 300,
+      watchdog: { tickMs: 50 },
+      onProgress: (p) => seen.push(p),
+    });
+    const started = Date.now();
+    await engine.init();
+    expect(Date.now() - started).toBeGreaterThan(800); // three times the load timeout
+    expect(seen.length).toBeGreaterThan(10);
+    expect(seen.every((p, i) => i === 0 || p.loaded >= seen[i - 1].loaded)).toBe(true);
+    expect(seen.at(-1)).toEqual({ loaded: 1000, total: 1000 });
+    engine.terminate();
+  });
+
+  it('a download that stops halfway fails as a download problem', async () => {
+    const engine = new StockfishEngine(() => loadingTransport({ downloadMs: 400, everyMs: 20, stallAt: 500 }), {
+      loadTimeoutMs: 300,
+      watchdog: { tickMs: 50 },
+    });
+    const err = await engine.init().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EngineLoadError);
+    expect(engineFailureKind(err)).toBe('download');
+    expect((err as Error).message).toMatch(/download stalled at \d+%/);
+  });
+
+  it('keeps the kind of a transport load error, and reports other start-up errors as crashes', async () => {
+    const failing = (err: Error): EngineTransport => {
+      let report: (e: Error) => void = () => {};
+      setTimeout(() => report(err), 5);
+      return { post: () => {}, onLine: () => {}, onError: (cb) => void (report = cb), terminate: () => {} };
+    };
+    const a = new StockfishEngine(() => failing(new EngineLoadError('HTTP 404', 'download')));
+    expect(engineFailureKind(await a.init().catch((e: unknown) => e))).toBe('download');
+    const b = new StockfishEngine(() => failing(new Error('engine process exited (SIGKILL)')));
+    const eb = await b.init().catch((e: unknown) => e);
+    expect(engineFailureKind(eb)).toBe('crash');
+    expect((eb as Error).message).toMatch(/SIGKILL/);
   });
 });
 

@@ -16,9 +16,18 @@ export interface EvalBarProps {
   thinking?: boolean;
 }
 
-/** The label without its sign: the end of the bar it sits at already says who is better. */
+/**
+ * The label without its sign (the end of the bar it sits at already says who is better), and
+ * whole pawns from 10 up ("12", not "12.3"), so it stays short enough for a legible size.
+ */
 export function evalBarText(label: string): string {
-  return label.replace(/^[+\-−](?=[\dM#])/, '');
+  const text = label.replace(/^[+\-−](?=[\dM#])/, '');
+  return /^\d{2,}\.\d$/.test(text) ? String(Math.round(Number(text))) : text;
+}
+
+/** Labels with three or more characters besides "." and "-" (e.g. "M10") get a smaller size. */
+export function isLongEvalText(text: string): boolean {
+  return text.replace(/[.\-]/g, '').length >= 3;
 }
 
 export function EvalBar({ whiteWinProb, label, orientation, thinking }: EvalBarProps) {
@@ -51,7 +60,7 @@ export function EvalBar({ whiteWinProb, label, orientation, thinking }: EvalBarP
           'evalbar-label' +
           (labelAtBottom ? ' evalbar-label-bottom' : ' evalbar-label-top') +
           (whiteBetter ? ' evalbar-on-white' : ' evalbar-on-black') +
-          (text.length >= 4 ? ' evalbar-label-long' : '')
+          (isLongEvalText(text) ? ' evalbar-label-long' : '')
         }
       >
         {text}

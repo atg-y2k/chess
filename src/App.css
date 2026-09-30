@@ -39,8 +39,8 @@
     'tools';
 }
 .app[data-evalbar] {
-  /* Eval bar (16px) + gap. */
-  --app-bar: 20px;
+  /* Eval bar (18px) + gap. */
+  --app-bar: 22px;
 }
 .app[data-graph] {
   --app-graph-h: 38px;
@@ -264,6 +264,13 @@
   .app-panel > .review {
     max-height: none;
   }
+  /* The floating summary hangs from the top of the column (over the opponent strip) rather than
+     growing up from the panel's bottom edge past the top of the screen, so its header (accuracy,
+     close button) stays visible. */
+  .app-panel[data-float] > .review {
+    top: calc(-1 * var(--app-strip-h));
+    max-height: none;
+  }
 }
 
 /* ---------------------------------------------------------------- boot splash */
@@ -415,7 +422,7 @@
   display: inline-flex;
   align-items: center;
   min-height: 44px;
-  color: var(--accent);
+  color: var(--link);
   font-size: 14px;
   font-weight: 600;
   text-decoration: none;

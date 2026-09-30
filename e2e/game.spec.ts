@@ -132,16 +132,23 @@ test.describe('Game', () => {
     }
     await expect.poll(async () => seen.add(await evalText(page)).size, { timeout: 30_000 }).toBeGreaterThan(1);
 
-    // Hint: an arrow on the board plus an explanation.
+    // Hint: the game is rated, so it asks first (a hint makes it unrated); then an arrow on the
+    // board plus an explanation, and the player strip says the game is unrated.
     await waitForMyTurn(page);
+    await expect(page.locator('.app-player--bottom .pstrip-unrated')).toHaveCount(0);
     await page.locator('.toolbar-btn[data-id="hint"]').tap();
+    const confirm = page.getByRole('dialog', { name: 'Use a hint?' });
+    await expect(confirm).toBeVisible();
+    await confirm.getByRole('button', { name: 'Show hint' }).tap();
+    await expect(confirm).toBeHidden();
     await expect(coach.locator('.coach-title')).toHaveText('Hint');
     await expect(page.locator('.cg-shapes line').first()).toBeAttached({ timeout: 30_000 });
     await expect(coach.locator('.coach-line').first()).not.toBeEmpty();
     await coach.getByRole('button', { name: 'Got it' }).tap();
     await expect(page.locator('.cg-shapes line')).toHaveCount(0);
+    await expect(page.locator('.app-player--bottom .pstrip-unrated')).toHaveText('Unrated');
 
-    // Undo takes back my move and the bot's reply.
+    // Undo takes back my move and the bot's reply (no question: the game is already unrated).
     const beforeUndo = await moves(page).count();
     await page.locator('.toolbar-btn[data-id="undo"]').tap();
     await expect(moves(page)).toHaveCount(beforeUndo - 2);
@@ -160,6 +167,14 @@ test.describe('Game', () => {
     await expect(page.locator('.mlist-san')).toHaveText(sans, { timeout: 30_000 });
     expect(await page.evaluate(() => window.__chessCoach!.controller.store.liveFen.value)).toBe(fen);
     await waitForMyTurn(page);
+
+    // New game mid-game: the sheet says the current game would end as a loss.
+    await page.locator('.toolbar-btn[data-id="newGame"]').tap();
+    const newSheet = page.getByRole('dialog', { name: 'New game' });
+    await expect(newSheet.locator('[data-id="abandon-note"]')).toContainText('will end as a loss');
+    await expect(newSheet.locator('[data-id="play"]')).toHaveText('Resign & play');
+    await newSheet.getByRole('button', { name: 'Close' }).tap();
+    await expect(newSheet).toBeHidden();
 
     // Resign from the menu -> game over sheet -> Game Review with accuracy.
     await page.locator('.toolbar-btn[data-id="menu"]').tap();
@@ -182,6 +197,13 @@ test.describe('Game', () => {
     await expect(page.locator('.app-panel .coach .coach-title')).toContainText(/\d+(\.|…) /);
     await page.locator('.toolbar-btn[data-id="summary"]').tap();
     await expect(review).toBeVisible();
+
+    // iOS may kill the app after the game: a reload brings back the finished game, ready for review.
+    const finalSans = await page.locator('.mlist-san').allTextContents();
+    await page.reload();
+    await expect(page.locator('.mlist-san')).toHaveText(finalSans, { timeout: 30_000 });
+    expect(await page.evaluate(() => window.__chessCoach!.controller.store.phase.value)).toBe('over');
+    await expect(page.locator('.toolbar-btn[data-id="review"]')).toBeEnabled();
 
     // Nothing overflows the screen.
     const scroll = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.scrollHeight]);
@@ -221,6 +243,54 @@ test.describe('Game', () => {
     // The tail of the tap (its click) must not land on the new sheet's backdrop and close it.
     await page.waitForTimeout(800);
     await expect(over).toBeVisible();
+  });
+
+  test('the coach text is readable at every phone height (or the panel collapses to one row)', async ({ page }) => {
+    test.setTimeout(90_000);
+    await startGame(page, 'pip', 'w');
+    await waitForMyTurn(page);
+    await play(page, 'e2e4');
+    await expect(page.locator('.app-panel .coach .class-icon').first()).toBeVisible({ timeout: 30_000 });
+    // Safari (not installed) viewports of Plus / Pro Max / SE-class phones, and the 15 Pro's.
+    for (const [width, height] of [[393, 852], [393, 659], [430, 739], [414, 715], [375, 667], [375, 812]]) {
+      await page.setViewportSize({ width, height });
+      await page.waitForTimeout(150);
+      const m = await page.evaluate(() => {
+        const panel = document.querySelector('.app-panel')!;
+        const body = panel.querySelector('.coach-body');
+        return { tight: panel.hasAttribute('data-tight'), body: body?.clientHeight ?? 0 };
+      });
+      expect(m.tight || m.body >= 38, `${width}x${height}: ${JSON.stringify(m)}`).toBe(true);
+    }
+  });
+
+  test.describe('landscape', () => {
+    test.use({ viewport: { width: 852, height: 393 } });
+    test('the floating review summary keeps its header (accuracy, close) on screen', async ({ page }) => {
+      test.setTimeout(120_000);
+      await page.goto('./');
+      await expect(page.getByRole('dialog', { name: 'New game' })).toBeVisible({ timeout: 30_000 });
+      await page.evaluate(() => {
+        const c = window.__chessCoach!.controller;
+        c.newGame({ ...c.store.settings.value, playerColor: 'w', botId: 'pip', botElo: 100, adaptive: false });
+      });
+      await waitForMyTurn(page);
+      await play(page, 'e2e4');
+      await waitForMyTurn(page);
+      await page.evaluate(() => {
+        const c = window.__chessCoach!.controller as unknown as { resign(): void; startReview(): Promise<void> };
+        c.resign();
+        void c.startReview();
+      });
+      const review = page.getByRole('region', { name: 'Game review' });
+      await expect(review.locator('.review-acc').first()).toHaveText(/^\d+\.\d$/, { timeout: 90_000 });
+      for (const sel of ['.review-head', '.review-close']) {
+        const box = await review.locator(sel).first().boundingBox();
+        expect(box, sel).not.toBeNull();
+        expect(box!.y, sel).toBeGreaterThanOrEqual(0);
+        expect(box!.y + box!.height, sel).toBeLessThanOrEqual(393);
+      }
+    });
   });
 
   test('?enginetest runs the engine self-test and passes', async ({ page }) => {

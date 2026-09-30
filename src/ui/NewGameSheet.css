@@ -404,6 +404,23 @@
   color: var(--warning);
 }
 
+.ngs-abandon {
+  display: flex;
+  gap: 7px;
+  margin: 0 2px 10px;
+  font-size: 13.5px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: var(--text);
+}
+.ngs-abandon svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: var(--warning);
+}
+
 .ngs-play {
   display: block;
   width: 100%;

@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:source": "git archive --format=tar.gz --prefix=chess-coach/ -o dist/chess-coach-source.tar.gz HEAD",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

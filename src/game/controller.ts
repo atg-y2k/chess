@@ -24,6 +24,8 @@ import { inspectPosition } from '../engine/StockfishEngine';
 import type { AnalysisResult, ChessEngine, Score } from '../engine/types';
 import { engineSupported } from '../engine/workerTransport';
 import { applyGameResult, loadProfile, playerScoreFor, saveProfile, updateGameRecord } from '../rating/rating';
+import type { GameRecord } from '../rating/types';
+import { answerFreeLines, repetitionExplanation } from './coach';
 import {
   clearGame,
   createGameId,
@@ -34,19 +36,23 @@ import {
   type KeyValueStorage,
   type PlyAnnotation,
   type SavedGame,
+  type SavedResult,
 } from './persistence';
 import { buildPgn, type PgnPlayer } from './pgn';
 import { emptyCounts, summarizeGame } from './review';
 import { playSound, setSoundEnabled, soundForSan, type SoundKind } from './sound';
 import {
   SHALLOW_DEPTH,
+  annotationKey,
   createState,
   createStore,
   personaForSettings,
   uciArrow,
   whiteScore,
   type CoachActionId,
+  type CoachMode,
   type GameInfo,
+  type PendingAssist,
   type ReadonlyStore,
   type SheetName,
   type Store,
@@ -59,6 +65,9 @@ export const ANNOTATE_DEPTH = 14;
 export const ANNOTATE_MULTIPV = 3;
 /** Shown when the engine cannot start. */
 export const ENGINE_ADVICE = 'Your browser may not support WebAssembly SIMD (iOS 16.4+ required).';
+/** Shown when an engine stops working during a game (it crashed and could not be restarted). */
+export const ENGINE_STOPPED = 'The chess engine stopped working.';
+export const ENGINE_STOPPED_ADVICE = 'Tap Try again to restart it. Your game is saved.';
 
 /** Sound output (default: game/sound.ts). */
 export interface SoundPort {
@@ -101,13 +110,62 @@ export interface NewGameOptions {
 type AnnotateResult = 'done' | 'stale' | 'failed';
 
 const isAnnotated = (p: Ply): boolean => !!(p.classification && p.explanation && p.evalWhite);
-const annotationKey = (gameId: string, p: Ply): string => `${gameId}|${p.index}|${p.fenBefore}|${p.uci}`;
 const uciOf = (m: Pick<Move, 'from' | 'to' | 'promotion'>): string => m.from + m.to + (m.promotion ?? '');
+/** Explanation details that spell out a variation ("Main line: …"); "Show best" has its own. */
+const LINE_DETAIL = /^(Main line|Key line|The finish):/;
 const prevMoveOf = (p: Ply): PrevMove => ({ to: p.uci.slice(2, 4), ...(p.captured ? { captured: p.captured } : {}) });
 
 async function defaultCreateEngines(): Promise<EngineSet> {
   if (!engineSupported()) throw new Error('Web Workers or WebAssembly SIMD are not available.');
   return createEngines();
+}
+
+/**
+ * Wraps an engine to notice when it breaks for good. `ChessEngine.search` (and init / newGame)
+ * reject only when the engine is broken or terminated, or for an invalid FEN; BotPlayer and
+ * AnalysisService swallow such failures (heuristic bot moves, empty analyses), so the controller
+ * listens here instead.
+ */
+function monitorEngine(engine: ChessEngine, onFatal: (e: unknown) => void): ChessEngine {
+  const watch = <T>(p: Promise<T>, fen?: string): Promise<T> =>
+    p.catch((e: unknown) => {
+      let badFen = false;
+      if (fen !== undefined) {
+        try {
+          inspectPosition(fen);
+        } catch {
+          badFen = true;
+        }
+      }
+      if (!badFen) onFatal(e);
+      throw e;
+    });
+  return {
+    init: () => watch(engine.init()),
+    search: (fen, opts) => watch(engine.search(fen, opts), fen),
+    stop: () => engine.stop(),
+    newGame: () => watch(engine.newGame()),
+    terminate: () => engine.terminate(),
+  };
+}
+
+/** Whether ply `index` repeats a position for the third time (the game is then drawn). */
+function isThirdRepetition(startFen: string, plies: readonly Ply[], index: number): boolean {
+  const key = fenKey(plies[index].fenAfter);
+  let seen = fenKey(startFen) === key ? 1 : 0;
+  for (let i = 0; i <= index; i++) if (fenKey(plies[i].fenAfter) === key) seen++;
+  return seen >= 3;
+}
+
+/**
+ * The coach mode after a restore: the verdict on the human's last move, while it is still the
+ * move being discussed (the last ply, or followed only by the bot's reply), as in live play.
+ */
+function restoredCoachMode(plies: readonly Ply[], playerColor: Color): CoachMode {
+  for (let i = plies.length - 1; i >= 0 && i >= plies.length - 2; i--) {
+    if (plies[i].color === playerColor) return { kind: 'feedback', index: i };
+  }
+  return { kind: 'idle' };
 }
 
 function isScore(v: unknown): v is Score {
@@ -136,6 +194,8 @@ export class GameController {
   private readonly analysisOptions: AnalysisServiceOptions;
 
   private engines: EngineSet | null = null;
+  /** The bot engine, monitored for failure (see monitorEngine). */
+  private botEngine: ChessEngine | null = null;
   private analysis: AnalysisService | null = null;
   private unsubscribe: (() => void) | null = null;
   private bot: BotLike | null = null;
@@ -149,8 +209,6 @@ export class GameController {
   private annotating: Promise<void> | null = null;
   private reviewTask: Promise<void> | null = null;
   private booting: Promise<void> | null = null;
-  /** Plies whose analysis failed (skipped by the background queue; the review retries them). */
-  private readonly failed = new Set<string>();
   private hidden = false;
   private openingsReady: Promise<void> = Promise.resolve();
 
@@ -224,7 +282,9 @@ export class GameController {
       return;
     }
     this.engines = engines;
-    this.analysis = new AnalysisService(engines.analysis, this.analysisOptions);
+    const fatal = (which: 'analysis' | 'bot') => (e: unknown) => this.onEngineFailure(engines, which, e);
+    this.botEngine = monitorEngine(engines.bot, fatal('bot'));
+    this.analysis = new AnalysisService(monitorEngine(engines.analysis, fatal('analysis')), this.analysisOptions);
     this.unsubscribe = this.analysis.subscribe((r) => this.onLive(r));
     if (this.hidden) this.analysis.setPaused(true);
     s.engineMode.value = engines.mode;
@@ -257,10 +317,38 @@ export class GameController {
     }
     this.engines?.terminate();
     this.engines = null;
+    this.botEngine = null;
     this.analysis = null;
   }
 
-  /** Rebuilds a saved game (plies + annotations) and continues it. */
+  /**
+   * An engine broke for good mid-session (it kept crashing): no more analysis, and the bot would
+   * only play heuristic moves in a rated game. Saves the game and shows the error screen, whose
+   * "Try again" (`retry()`) starts fresh engines and restores the game.
+   */
+  private onEngineFailure(engines: EngineSet, which: 'analysis' | 'bot', e: unknown): void {
+    const s = this.s;
+    if (this.engines !== engines || s.phase.value === 'error' || s.phase.value === 'boot') return;
+    console.error(`[game] the ${which} engine stopped working`, e);
+    this.save();
+    this.abortBot();
+    this.epoch++;
+    batch(() => {
+      s.error.value = {
+        message: ENGINE_STOPPED,
+        advice: ENGINE_STOPPED_ADVICE,
+        detail: e instanceof Error ? e.message : String(e),
+      };
+      s.sheet.value = null;
+      s.pendingAssist.value = null;
+      s.phase.value = 'error';
+    });
+  }
+
+  /**
+   * Rebuilds a saved game (plies + annotations) and continues it, or shows it finished (game-over
+   * state, ready for review) when it had ended.
+   */
   private restore(saved: SavedGame): void {
     const s = this.s;
     const chess = new Chess(saved.startFen);
@@ -296,30 +384,43 @@ export class GameController {
       },
     };
     const startEval = (saved as SavedGame & { startEval?: unknown }).startEval;
+    const over = saved.over ?? null;
     this.chess = chess;
     this.epoch++;
-    this.failed.clear();
+    this.clearFailed();
     this.bot = this.makeBot(game.id);
     this.botReady = this.bot.newGame(game.botElo).catch((e: unknown) => console.warn('[game] bot newGame failed', e));
+    this.analysis?.watch(null);
     batch(() => {
       s.game.value = game;
       s.plies.value = plies;
       s.startEval.value = isScore(startEval) ? startEval : null;
       s.viewIndex.value = null;
       s.flipped.value = false;
-      s.outcome.value = null;
-      s.ratingChange.value = null;
+      s.outcome.value = over?.outcome ?? null;
+      s.ratingChange.value = over?.ratingChange ?? null;
       s.reviewState.value = null;
-      s.coachMode.value = { kind: 'idle' };
+      s.coachMode.value = over ? { kind: 'idle' } : restoredCoachMode(plies, game.playerColor);
       s.coachCollapsed.value = null;
       s.live.value = null;
       s.botThinking.value = false;
       s.sheet.value = null;
-      s.phase.value = 'playing';
+      s.pendingAssist.value = null;
+      s.phase.value = over ? 'over' : 'playing';
     });
     this.updateWatch();
     this.kickAnnotations();
-    if (!this.checkGameEnd()) this.requestBotMove();
+    if (over) this.ensureRecorded(game, over);
+    else if (!this.checkGameEnd()) this.requestBotMove();
+  }
+
+  /** A restored finished game whose result is missing from the history (e.g. the profile failed to save) is recorded now. */
+  private ensureRecorded(g: GameInfo, over: SavedResult): void {
+    const s = this.s;
+    if (s.profile.value.history.some((r) => r.id === g.id)) return;
+    const record = this.recordResult(g, over.outcome, over.ratingChange.rated);
+    s.ratingChange.value = { before: record.ratingBefore, after: record.ratingAfter, rated: record.rated };
+    this.save();
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -338,14 +439,27 @@ export class GameController {
     this.startGame(next, opts.startFen);
   }
 
-  /** Same opponent, same colour, same options (adaptive games re-match the new rating). */
+  /**
+   * Same opponent and colour (adaptive games re-match the new rating). The other options, such as
+   * best-move arrows (which decide whether the game is rated), are the current settings.
+   */
   rematch(): void {
-    const g = this.s.game.value;
+    const s = this.s;
+    const g = s.game.value;
     if (!g) {
       this.openSheet('new');
       return;
     }
-    this.startGame({ ...g.settings, playerColor: g.playerColor }, g.startFen);
+    this.startGame(
+      {
+        ...s.settings.value,
+        botId: g.settings.botId,
+        botElo: g.settings.botElo,
+        adaptive: g.settings.adaptive,
+        playerColor: g.playerColor,
+      },
+      g.startFen,
+    );
   }
 
   private startGame(settings: GameSettings, startFen = START_FEN): void {
@@ -360,10 +474,14 @@ export class GameController {
       chess = new Chess();
     }
     const s = this.s;
+    this.abandonCurrent();
     this.abortBot();
     this.analysis.cancelAll();
+    // Forget the live target: a new game on the position already watched (a new game or rematch
+    // before the first move) must emit its analysis again, or the eval bar and arrows stay blank.
+    this.analysis.watch(null);
     this.epoch++;
-    this.failed.clear();
+    this.clearFailed();
     const playerColor: Color =
       settings.playerColor === 'random' ? (this.rng() < 0.5 ? 'w' : 'b') : settings.playerColor;
     const bot = personaForSettings(settings, s.profile.value);
@@ -395,6 +513,7 @@ export class GameController {
       s.live.value = null;
       s.botThinking.value = false;
       s.sheet.value = null;
+      s.pendingAssist.value = null;
       s.phase.value = 'playing';
     });
     this.sound.play('gameStart');
@@ -403,8 +522,24 @@ export class GameController {
     if (!this.checkGameEnd()) this.requestBotMove();
   }
 
+  /**
+   * A game in progress that is replaced by a new one counts as a loss by abandonment (rated unless
+   * assisted) once the human has moved; before that it is simply discarded (an abort).
+   */
+  private abandonCurrent(): void {
+    const s = this.s;
+    const g = s.game.value;
+    if (!g || s.phase.value !== 'playing' || s.outcome.value) return;
+    if (!s.plies.value.some((p) => p.color === g.playerColor)) return;
+    const winner = otherColor(g.playerColor);
+    this.recordResult(g, { result: winner === 'w' ? '1-0' : '0-1', winner, reason: 'Abandoned' }, !g.assisted);
+  }
+
   private makeBot(gameId: string): BotLike {
-    return this.makeBotPlayer(this.engines!.bot, { rng: mulberry32(hashSeed(gameId)), thinkDelay: this.thinkDelay });
+    return this.makeBotPlayer(this.botEngine ?? this.engines!.bot, {
+      rng: mulberry32(hashSeed(gameId)),
+      thinkDelay: this.thinkDelay,
+    });
   }
 
   /**
@@ -548,14 +683,34 @@ export class GameController {
     return true;
   }
 
-  /** Ends the game: rating (rated unless assisted), history record with PGN, game-over sheet. */
-  private finish(outcome: GameOutcome): void {
+  /**
+   * Ends the game: rating (rated unless assisted, or `rated: false`), history record with PGN,
+   * game-over sheet. The finished game stays saved (with its result) until the next one starts,
+   * so an iOS restart brings back its game-over state and review.
+   */
+  private finish(outcome: GameOutcome, opts: { rated?: boolean } = {}): void {
     const s = this.s;
     const g = s.game.value!;
     this.abortBot();
     this.epoch++;
-    const rated = !g.assisted;
-    const pgn = this.pgnText(outcome, false);
+    const record = this.recordResult(g, outcome, (opts.rated ?? true) && !g.assisted);
+    batch(() => {
+      s.outcome.value = outcome;
+      s.ratingChange.value = { before: record.ratingBefore, after: record.ratingAfter, rated: record.rated };
+      s.phase.value = 'over';
+      s.sheet.value = 'gameOver';
+      s.viewIndex.value = null;
+      s.coachMode.value = { kind: 'idle' };
+      s.pendingAssist.value = null;
+    });
+    this.save();
+    this.sound.play('gameEnd');
+    this.updateWatch();
+  }
+
+  /** Adds the game's result to the profile (rating + history, once per game id) and saves it. */
+  private recordResult(g: GameInfo, outcome: GameOutcome, rated: boolean): GameRecord {
+    const s = this.s;
     const { profile, record } = applyGameResult(s.profile.value, {
       id: g.id,
       date: new Date(this.now()).toISOString(),
@@ -566,37 +721,25 @@ export class GameController {
       playerScore: playerScoreFor(outcome.result, g.playerColor),
       rated,
       reason: outcome.reason,
-      pgn,
+      pgn: this.pgnText(outcome, false),
     });
-    saveProfile(profile, this.storage);
-    clearGame(this.storage);
-    batch(() => {
-      s.outcome.value = outcome;
+    if (profile !== s.profile.value) {
+      saveProfile(profile, this.storage);
       s.profile.value = profile;
-      s.ratingChange.value = { before: record.ratingBefore, after: record.ratingAfter, rated: record.rated };
-      s.phase.value = 'over';
-      s.sheet.value = 'gameOver';
-      s.viewIndex.value = null;
-      s.coachMode.value = { kind: 'idle' };
-    });
-    this.sound.play('gameEnd');
-    this.updateWatch();
+    }
+    return record;
   }
 
   /**
    * Takes back the human's last move (and the bot's reply, if any), aborting a pending bot move.
    * Only while playing, with takebacks allowed and a human move to take back. Marks the game
-   * assisted (unrated). Returns whether anything was undone.
+   * assisted (unrated). Returns whether anything was undone. (The toolbar calls `requestUndo()`.)
    */
   undo(): boolean {
+    const target = this.undoTarget();
+    if (target === null) return false;
     const s = this.s;
-    const g = s.game.value;
-    if (!g || s.phase.value !== 'playing' || s.outcome.value || !s.settings.value.allowTakebacks) return false;
-    const ps = s.plies.value;
-    let target = ps.length;
-    while (target > 0 && ps[target - 1].color !== g.playerColor) target--;
-    if (target === 0) return false;
-    this.truncate(target - 1);
+    this.truncate(target);
     this.markAssisted();
     batch(() => {
       s.coachMode.value = { kind: 'idle' };
@@ -608,22 +751,47 @@ export class GameController {
     return true;
   }
 
-  /** "Retry" after a mistake: back to the position before human ply `index` (assisted). */
-  private retryMove(index: number): void {
+  /** Number of plies to keep for an undo, or null when there is nothing to take back. */
+  private undoTarget(): number | null {
+    const s = this.s;
+    const g = s.game.value;
+    if (!g || s.phase.value !== 'playing' || s.outcome.value || !s.settings.value.allowTakebacks) return null;
+    const ps = s.plies.value;
+    let target = ps.length;
+    while (target > 0 && ps[target - 1].color !== g.playerColor) target--;
+    return target === 0 ? null : target - 1;
+  }
+
+  private canRetry(index: number): boolean {
     const s = this.s;
     const g = s.game.value;
     const ply = s.plies.value[index];
-    if (!g || !ply || ply.color !== g.playerColor) return;
-    if (s.phase.value !== 'playing' || s.outcome.value || !s.settings.value.allowTakebacks) return;
+    return (
+      !!g &&
+      !!ply &&
+      ply.color === g.playerColor &&
+      s.phase.value === 'playing' &&
+      !s.outcome.value &&
+      s.settings.value.allowTakebacks
+    );
+  }
+
+  /** "Retry" after a mistake: back to the position before human ply `index` (assisted). */
+  private retryMove(index: number): void {
+    const s = this.s;
+    const ply = s.plies.value[index];
+    if (!this.canRetry(index)) return;
     this.truncate(index);
     this.markAssisted();
+    const cl = ply.classification;
     batch(() => {
       s.viewIndex.value = null;
       s.coachMode.value = {
         kind: 'retry',
         san: ply.san,
-        cls: ply.classification?.cls ?? 'mistake',
-        headline: ply.explanation?.headline ?? null,
+        cls: cl?.cls ?? 'mistake',
+        // Only what does not give the better move away.
+        headline: cl ? (answerFreeLines(ply.explanation, cl)[0] ?? null) : (ply.explanation?.headline ?? null),
       };
     });
     this.updateWatch();
@@ -638,13 +806,17 @@ export class GameController {
     this.s.plies.value = ps.slice(0, n);
   }
 
-  /** Resigns the game in progress (a loss; rated unless assisted). */
+  /**
+   * Resigns the game in progress: a loss, rated unless assisted. Before the human's first move it
+   * is unrated (like abandoning a game before moving, which is not counted at all).
+   */
   resign(): void {
     const s = this.s;
     const g = s.game.value;
     if (!g || s.phase.value !== 'playing' || s.outcome.value) return;
     const winner = otherColor(g.playerColor);
-    this.finish({ result: winner === 'w' ? '1-0' : '0-1', winner, reason: 'Resignation' });
+    const moved = s.plies.value.some((p) => p.color === g.playerColor);
+    this.finish({ result: winner === 'w' ? '1-0' : '0-1', winner, reason: 'Resignation' }, { rated: moved });
   }
 
   private markAssisted(): void {
@@ -660,8 +832,9 @@ export class GameController {
 
   /**
    * Hint on the human's turn: analyses the position (depth 14, MultiPV 3) and shows why the best
-   * move is good, with its arrow. Marks the game assisted. Calling it while a hint is shown
-   * dismisses the hint.
+   * move is good, with its arrow. Marks the game assisted once the hint is shown (not when none
+   * could be found). Calling it while a hint is shown dismisses the hint. (The toolbar calls
+   * `requestHint()`.)
    */
   async hint(): Promise<void> {
     const s = this.s;
@@ -672,10 +845,9 @@ export class GameController {
       return;
     }
     const g = s.game.value;
-    if (!svc || !g || !s.humanToMove.value || !s.isLive.value || m.kind === 'showBest') return;
+    if (!svc || !g || !this.canHint()) return;
     const fen = s.liveFen.value;
     const epoch = this.epoch;
-    this.markAssisted();
     s.coachMode.value = { kind: 'hint', fen, explanation: null, prev: m };
     this.updateWatch();
     let r: AnalysisResult;
@@ -692,10 +864,61 @@ export class GameController {
     if (line) {
       const e = explainBestMove(fen, line, { prevMove: prev ? prevMoveOf(prev) : undefined, perspective: 'you' });
       explanation = { ...e, arrows: e.arrows?.length ? e.arrows : uciArrow(line.pv[0], 'best') };
+      this.markAssisted();
     } else {
       explanation = { headline: 'No hint is available for this position.', details: [] };
     }
     s.coachMode.value = { ...now, explanation };
+  }
+
+  private canHint(): boolean {
+    const s = this.s;
+    return !!s.game.value && s.humanToMove.value && s.isLive.value && s.coachMode.value.kind !== 'showBest';
+  }
+
+  /** Toolbar Hint: dismisses a shown hint, else asks first in a rated game (see `requestAssist`). */
+  requestHint(): void {
+    if (this.s.coachMode.value.kind === 'hint') this.dismissHint();
+    else if (this.canHint()) this.requestAssist({ kind: 'hint' });
+  }
+
+  /** Toolbar Undo (asks first in a rated game, see `requestAssist`). */
+  requestUndo(): void {
+    if (this.undoTarget() !== null) this.requestAssist({ kind: 'undo' });
+  }
+
+  /**
+   * A hint, takeback or Retry makes a rated game unrated, so the first one in a rated game opens
+   * the 'assist' sheet to confirm (`confirmAssist()` runs it, `closeSheet()` cancels). In an
+   * unrated game it runs at once.
+   */
+  private requestAssist(a: PendingAssist): void {
+    const s = this.s;
+    if (s.game.value?.assisted === false) {
+      batch(() => {
+        s.pendingAssist.value = a;
+        s.sheet.value = 'assist';
+      });
+      return;
+    }
+    this.runAssist(a);
+  }
+
+  /** Runs the help waiting in the 'assist' sheet. */
+  confirmAssist(): void {
+    const s = this.s;
+    const a = s.pendingAssist.value;
+    batch(() => {
+      s.pendingAssist.value = null;
+      if (s.sheet.value === 'assist') s.sheet.value = null;
+    });
+    if (a) this.runAssist(a);
+  }
+
+  private runAssist(a: PendingAssist): void {
+    if (a.kind === 'undo') this.undo();
+    else if (a.kind === 'hint') void this.hint();
+    else if (a.index !== undefined) this.retryMove(a.index);
   }
 
   /** Hides the hint (back to what the coach showed before). */
@@ -717,9 +940,14 @@ export class GameController {
       }
       case 'retry': {
         const index = m.kind === 'feedback' || m.kind === 'showBest' ? m.index : -1;
-        if (index >= 0) this.retryMove(index);
+        if (index >= 0 && this.canRetry(index)) this.requestAssist({ kind: 'retry', index });
         return;
       }
+      case 'retryAnalysis':
+        this.clearFailed();
+        if (s.phase.value === 'review') void this.startReview();
+        else this.kickAnnotations();
+        return;
       case 'backToGame':
         if (m.kind === 'showBest') this.backFromShowBest();
         else this.goTo(null);
@@ -755,16 +983,24 @@ export class GameController {
     const human = ply.color === g.playerColor;
     const prev = index > 0 ? s.plies.value[index - 1] : undefined;
     const lines: string[] = [];
+    const played = human ? `You played ${ply.san}.` : `${g.bot.name} played ${ply.san}.`;
+    // What was wrong with the played move (not repeated when it only says what the best move was).
+    const why = ply.explanation?.headline;
+    const playedLine = why && !why.startsWith('Best was') ? `${played} ${why}` : played;
     if (line) {
       const e = explainBestMove(ply.fenBefore, line, {
         prevMove: prev ? prevMoveOf(prev) : undefined,
         perspective: human ? 'you' : 'neutral',
       });
-      lines.push(e.headline, ...e.details.slice(0, 2));
       const san = pvToSan(ply.fenBefore, line.pv, 8);
-      if (san.length > 1) lines.push(`Best line: ${formatLine(ply.fenBefore, san)}`);
+      const bestLine = san.length > 1 ? `Best line: ${formatLine(ply.fenBefore, san)}` : null;
+      // The "Best line" below already shows the variation: skip the explanation's own copy.
+      const details = bestLine ? e.details.filter((d) => !LINE_DETAIL.test(d)) : e.details;
+      lines.push(e.headline, ...details.slice(0, 2), playedLine);
+      if (bestLine) lines.push(bestLine);
+    } else {
+      lines.push(playedLine);
     }
-    lines.push(human ? `You played ${ply.san}.` : `${g.bot.name} played ${ply.san}.`);
     const bestSan = cl.bestMoveSan ?? (bestUci ? uciToSan(ply.fenBefore, bestUci) : null);
     batch(() => {
       s.coachMode.value = {
@@ -824,11 +1060,18 @@ export class GameController {
   }
 
   openSheet(name: SheetName): void {
-    this.s.sheet.value = name;
+    batch(() => {
+      if (name !== 'assist') this.s.pendingAssist.value = null;
+      this.s.sheet.value = name;
+    });
   }
 
+  /** Closes the open sheet (cancelling a pending assist). */
   closeSheet(): void {
-    this.s.sheet.value = null;
+    batch(() => {
+      this.s.pendingAssist.value = null;
+      this.s.sheet.value = null;
+    });
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -889,7 +1132,7 @@ export class GameController {
       s.coachMode.value = { kind: 'idle' };
       s.reviewState.value = { progress: 0, accuracy: { w: null, b: null }, counts: emptyCounts(), keyMoments: [] };
     });
-    this.failed.clear();
+    this.clearFailed();
     this.updateWatch();
     this.updateReviewProgress();
     const task: Promise<void> = this.runReview(g.id)
@@ -934,11 +1177,12 @@ export class GameController {
       while (this.annotating) await this.annotating;
       if (!alive()) return;
       if (s.plies.value.every(isAnnotated)) break;
-      this.failed.clear(); // one more try for plies whose analysis failed
+      this.clearFailed(); // one more try for plies whose analysis failed
     }
     if (!alive()) return;
     const summary = summarizeGame(g.startFen, s.startEval.value, s.plies.value);
     s.reviewState.value = { ...summary, progress: null };
+    this.save(); // the review's annotations survive a restart
     const acc = summary.accuracy[g.playerColor];
     if (acc !== null) {
       const profile = updateGameRecord(s.profile.value, g.id, { accuracy: Math.round(acc * 10) / 10 });
@@ -976,11 +1220,23 @@ export class GameController {
     for (;;) {
       const g = this.s.game.value;
       if (!g || !this.analysis) return;
-      const ply = this.s.plies.value.find((p) => !isAnnotated(p) && !this.failed.has(annotationKey(g.id, p)));
+      const failed = this.s.failedAnnotations.value;
+      const ply = this.s.plies.value.find((p) => !isAnnotated(p) && !failed.has(annotationKey(g.id, p)));
       if (!ply) return;
       const res = await this.annotate(g.id, ply);
-      if (res === 'failed') this.failed.add(annotationKey(g.id, ply));
+      if (res === 'failed') this.markFailed(annotationKey(g.id, ply));
     }
+  }
+
+  /** Plies whose analysis failed are skipped by the background queue (the review retries them once). */
+  private markFailed(key: string): void {
+    const next = new Set(this.s.failedAnnotations.value);
+    next.add(key);
+    this.s.failedAnnotations.value = next;
+  }
+
+  private clearFailed(): void {
+    if (this.s.failedAnnotations.value.size) this.s.failedAnnotations.value = new Set();
   }
 
   /**
@@ -1024,29 +1280,34 @@ export class GameController {
     const human = ply.color === g.playerColor;
     const isBook = (index === 0 || prev?.isBook === true) && isBookMove(ply.fenBefore, ply.uci, ply.fenAfter);
     const prevMove = prev ? prevMoveOf(prev) : undefined;
+    // The engine sees positions, not the game: a third repetition ends the game in a draw, which
+    // it cannot know. Classify the move against that result (a terminal draw for classifyMove).
+    const repetition = isThirdRepetition(g.startFen, plies, index);
     const classification = classifyMove({
       fenBefore: ply.fenBefore,
       moveUci: ply.uci,
       before,
-      after,
+      after: repetition ? { ...after, terminal: 'stalemate' } : after,
       opponentPrevWinLoss: prev?.classification?.winLoss,
       isBook,
       playerRating: human ? s.profile.value.rating : g.botElo,
       prevMove: prevMove ? { to: prevMove.to } : undefined,
     });
-    const explanation = explainMove({
-      fenBefore: ply.fenBefore,
-      moveUci: ply.uci,
-      classification,
-      before,
-      after,
-      prevMove,
-      perspective: human ? 'you' : 'neutral',
-    });
+    const explanation = repetition
+      ? repetitionExplanation(ply.san, classification, { human, botName: g.bot.name })
+      : explainMove({
+          fenBefore: ply.fenBefore,
+          moveUci: ply.uci,
+          classification,
+          before,
+          after,
+          prevMove,
+          perspective: human ? 'you' : 'neutral',
+        });
     const next = plies.slice();
     next[index] = {
       ...plies[index],
-      evalWhite: toWhitePov(afterScore, ply.fenAfter),
+      evalWhite: repetition ? { kind: 'cp', value: 0 } : toWhitePov(afterScore, ply.fenAfter),
       evalDepth: after.depth,
       classification,
       explanation,
@@ -1131,9 +1392,9 @@ export class GameController {
 
   /**
    * Whether a service-worker update may reload the page now: only before a game (setup) or on the
-   * engine error screen. Not while playing, and not after a game either: a finished game is not
-   * saved, so a reload would lose its game-over screen and review. A new service worker is active
-   * anyway, so the next launch runs the new version.
+   * engine error screen. Not while playing, and not after a game either: the finished game is
+   * saved, but a reload would still close its game-over sheet or interrupt the review. A new
+   * service worker is active anyway, so the next launch runs the new version.
    */
   canReloadNow(): boolean {
     const p = this.s.phase.value;
@@ -1169,10 +1430,15 @@ export class GameController {
     });
   }
 
+  /** Saves the game in progress, or the finished game with its result (phase over / review). */
   private save(): void {
     const s = this.s;
     const g = s.game.value;
-    if (!g || s.phase.value !== 'playing' || s.outcome.value) return;
+    const phase = s.phase.value;
+    const o = s.outcome.value;
+    const playing = phase === 'playing' && !o;
+    const finished = (phase === 'over' || phase === 'review') && !!o;
+    if (!g || (!playing && !finished)) return;
     const annotations: Record<number, PlyAnnotation> = {};
     for (const p of s.plies.value) {
       const a: PlyAnnotation = {};
@@ -1197,6 +1463,11 @@ export class GameController {
       annotations,
     };
     if (s.startEval.value) saved.startEval = s.startEval.value;
+    if (finished && o) {
+      const rc = s.ratingChange.value;
+      const rating = s.profile.value.rating;
+      saved.over = { outcome: o, ratingChange: rc ?? { before: rating, after: rating, rated: false } };
+    }
     saveGame(saved, this.storage);
   }
 

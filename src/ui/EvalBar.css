@@ -2,7 +2,7 @@
   position: relative;
   flex: none;
   align-self: stretch;
-  width: var(--evalbar-w, 16px);
+  width: var(--evalbar-w, 18px);
   min-height: 48px;
   overflow: hidden;
   border-radius: calc(var(--radius-sm) / 2);
@@ -50,18 +50,18 @@
   right: 0;
   z-index: 2;
   font-family: var(--font);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   line-height: 1;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.05em;
   text-align: center;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
 .evalbar-label-long {
-  font-size: 7.5px;
-  letter-spacing: -0.05em;
+  font-size: 9px;
+  letter-spacing: -0.06em;
 }
 .evalbar-label-bottom {
   bottom: 5px;

@@ -22,7 +22,7 @@ export interface GameRecord {
 
 export interface PlayerProfile {
   rating: number;
-  /** Number of rated games played (drives the K-factor). */
+  /** Number of rated games played since the rating was (re)set (drives the K-factor). */
   gamesPlayed: number;
   peak: number;
   wins: number;

@@ -298,3 +298,38 @@ describe('requestPersistentStorage', () => {
     expect(await requestPersistentStorage()).toBe(false);
   });
 });
+
+describe('finished game result (over)', () => {
+  const over = {
+    outcome: { result: '0-1' as const, winner: 'b' as const, reason: 'Resignation' },
+    ratingChange: { before: 800, after: 741, rated: true },
+  };
+
+  it('round-trips the result of a finished game', () => {
+    saveGame(savedGame({ over }));
+    expect(loadGame()?.over).toEqual(over);
+  });
+
+  it('drops a malformed or inconsistent result but keeps the game', () => {
+    const bad = [
+      { ...over, outcome: { ...over.outcome, winner: 'w' } }, // 0-1 won by White
+      { ...over, outcome: { ...over.outcome, result: '2-0' } },
+      { ...over, outcome: { ...over.outcome, reason: 7 } },
+      { ...over, ratingChange: { before: 800, after: 'x', rated: true } },
+      { ...over, ratingChange: { before: 800, after: 741 } },
+      'over',
+    ];
+    for (const b of bad) {
+      storage.setItem(GAME_KEY, JSON.stringify({ ...savedGame(), over: b }));
+      const loaded = loadGame();
+      expect(loaded?.id).toBe('game-1');
+      expect(loaded && 'over' in loaded).toBe(false);
+    }
+  });
+
+  it('accepts a draw (winner null)', () => {
+    const draw = { outcome: { result: '1/2-1/2' as const, winner: null, reason: 'Stalemate' }, ratingChange: { before: 800, after: 810, rated: true } };
+    saveGame(savedGame({ over: draw }));
+    expect(loadGame()?.over).toEqual(draw);
+  });
+});

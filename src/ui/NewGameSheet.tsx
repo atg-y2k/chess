@@ -17,6 +17,19 @@ export interface NewGameSheetProps {
   /** Receives complete settings: `botId` is a persona id with its Elo, or 'custom' with the chosen Elo. */
   onStart: (settings: GameSettings) => void;
   onClose: () => void;
+  /**
+   * A game is still going (the player has moved): starting a new one ends it as a loss (rated
+   * unless it is already unrated). The sheet says so and the button reads "Resign & play".
+   */
+  inProgress?: { rated: boolean } | null;
+}
+
+/** What starting a new game does to the game in progress (null when there is none). */
+export function abandonNote(inProgress: { rated: boolean } | null | undefined): string | null {
+  if (!inProgress) return null;
+  return inProgress.rated
+    ? 'Your current game will end and count as a loss.'
+    : 'Your current game will end as a loss. It is unrated, so your rating stays the same.';
 }
 
 export const ELO_MIN = 100;
@@ -110,7 +123,7 @@ const MATCH_EMOJI = '🎯';
  * "New game" sheet: opponent picker (persona cards + custom Elo slider + "Match my rating"),
  * colour choice, assistance toggles and a big Play button.
  */
-export function NewGameSheet({ open, initial, playerRating, bots, onStart, onClose }: NewGameSheetProps) {
+export function NewGameSheet({ open, initial, playerRating, bots, onStart, onClose, inProgress }: NewGameSheetProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial, bots));
   const scrollerRef = useRef<HTMLDivElement>(null);
   const colorLabelId = useId();
@@ -157,6 +170,7 @@ export function NewGameSheet({ open, initial, playerRating, bots, onStart, onClo
   };
 
   const start = () => onStart(settingsFromDraft(initial, draft, bots, rating));
+  const abandon = abandonNote(inProgress);
 
   const hero = draft.adaptive
     ? {
@@ -176,9 +190,17 @@ export function NewGameSheet({ open, initial, playerRating, bots, onStart, onClo
       title="New game"
       class="ngs"
       footer={
-        <button type="button" class="btn btn-primary ngs-play" data-id="play" onClick={start}>
-          Play
-        </button>
+        <>
+          {abandon && (
+            <p class="ngs-abandon" data-id="abandon-note" role="note">
+              <InfoGlyph />
+              <span>{abandon}</span>
+            </p>
+          )}
+          <button type="button" class="btn btn-primary ngs-play" data-id="play" onClick={start}>
+            {abandon ? 'Resign & play' : 'Play'}
+          </button>
+        </>
       }
     >
       <section class="sheet-section" aria-label="Opponent">
@@ -305,7 +327,7 @@ export function NewGameSheet({ open, initial, playerRating, bots, onStart, onClo
           <span>
             {draft.showBestMoves
               ? 'Best-move arrows are on, so this game won’t count for your rating.'
-              : 'Using takebacks, hints or best-move arrows makes a game unrated.'}
+              : 'The coach and evaluation bar are fine in rated games; takebacks, hints, Retry and best-move arrows make a game unrated.'}
           </span>
         </p>
       </section>
