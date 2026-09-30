@@ -681,27 +681,50 @@ function stoppedText(t: Threat, own: string): string {
 
 // ------------------------------------------------------------------ public API
 
+/** Options of `explainBestMove`. */
+export interface ExplainBestMoveOptions {
+  prevMove?: PrevMove;
+  perspective?: Perspective;
+  /**
+   * All engine lines for `fen` (the MultiPV set, best first), when known. They let a quiet move
+   * without a concrete reason be described by how it compares: "is the only move that keeps the
+   * advantage", or "keeps the balance" with "Nf3 and c4 are about as good".
+   */
+  lines?: readonly PvLine[];
+}
+
 /**
  * Why is this (engine) move good? Used for hints ("Show hint"), for "Best was X, which …" and to
  * praise good moves. `line` is an engine line for `fen` (side-to-move POV); `line.pv[0]` is the
- * move explained. Never throws.
+ * move explained. Pass the other MultiPV lines as `opts.lines` for better text on quiet moves
+ * (the same lines `explainMove` gets as `before`, so a hint and the feedback on the move agree).
+ * Never throws.
  */
-export function explainBestMove(
-  fen: string,
-  line: PvLine,
-  opts: { prevMove?: PrevMove; perspective?: Perspective } = {},
-): Explanation {
+export function explainBestMove(fen: string, line: PvLine, opts: ExplainBestMoveOptions = {}): Explanation {
   try {
     const v = voice(sideToMove(fen), opts.perspective);
     const r = explainLine(fen, { pv: line.pv, score: line.score }, v, opts.prevMove);
     if (!r) return { headline: 'There is no move to suggest here.', details: [] };
+    let headline = `${r.san} ${r.reason}.`;
+    let details = r.details;
+    let motifs = r.motifs;
+    const cmp = compareLines(fen, { pv: line.pv, score: line.score }, opts.lines, v);
+    if (cmp && r.fallback) {
+      // Nothing concrete about the move itself: say how it compares with the alternatives.
+      headline = r.title === 'Check' ? `${r.san} gives check and ${cmp.reason}.` : `${r.san} ${cmp.reason}.`;
+      details = cmp.detail ? [cmp.detail, ...r.details] : r.details;
+      motifs = [...r.motifs, ...cmp.motifs];
+    } else if (cmp?.only && (r.title === 'Positional' || r.title === 'Opening principle')) {
+      details = [...r.details, 'It is the only good move here.'];
+      motifs = [...r.motifs, ...cmp.motifs];
+    }
     return {
-      headline: `${r.san} ${r.reason}.`,
-      details: r.details.slice(0, 3),
+      headline,
+      details: details.slice(0, 3),
       bestLineSan: pvToSan(fen, line.pv, 6),
       arrows: dedupeArrows([...arrow(line.pv[0], 'best'), ...r.arrows]),
       title: r.title,
-      motifs: r.motifs,
+      motifs,
     };
   } catch {
     const san = line.pv[0] ? uciToSan(fen, line.pv[0]) : null;
@@ -1010,7 +1033,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     const rr = reply ? explainLine(fenAfter, reply, rv, took) : null;
     if (neg) headline = `${move.san} ${principleText(neg)}.`;
     else if (cl.cls === 'miss') headline = `${v.subject} missed a chance to punish ${Opp}'s mistake.`;
-    else headline = evalHeadline(cl, v, Opp);
+    else headline = evalHeadline(cl.winBefore, cl.winAfter, v, Opp);
     // Only mention the reply when it does something concrete (a tactic, a threat, winning material).
     const useReply =
       !!rr && !rr.fallback && !['Recapture', 'Positional', 'Opening principle', 'Check'].includes(rr.title);
@@ -1047,9 +1070,10 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
         return done(lost.headline, details, lost.title, lost.motifs);
       }
     }
-    // The best move is explained with the same engine line as the hint, so the two agree.
+    // The best move is explained with the same engine line (and lines) as the hint, so the two agree.
     const own = isBest && beforeLines[0]?.pv[0] === moveUci ? asLine(beforeLines[0]) : null;
     const r = explainLine(fenBefore, own ?? playedLine, v, p.prevMove);
+    const cmp = own && r?.fallback ? compareLines(fenBefore, own, beforeLines, v) : null;
     const neg = isBest ? undefined : principles(fenBefore, moveUci).find((x) => !x.good);
     let headline = r ? `${r.san} ${r.reason}.` : `${move.san} is a reasonable move.`;
     const details: (string | null | false | undefined)[] = r && !r.fallback ? [r.details[0]] : [];
@@ -1059,6 +1083,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
         ? sacrificeDetail(cl.cls, fenBefore, moveUci, fenAfter, reply, refutation.sans, me, v)
         : null;
     if (r?.fallback && r.title === 'Positional') headline = `${move.san} ${plainReason(r.reason)}.`;
+    if (r?.fallback && r.title === 'Check' && cmp) headline = `${move.san} gives check and ${cmp.reason}.`;
     if (neg && (!r || r.fallback || r.title === 'Positional' || r.title === 'Opening principle')) {
       headline = `${move.san} is playable, but it ${principleText(neg)}.`;
       details.length = 0;
@@ -1084,8 +1109,8 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     else if (cl.cls === 'great' && onlyMove && !headline.includes('the only move')) {
       details.push('It was the only good move here.');
     }
-    if (r?.fallback && details.length === 0) details.push(...r.details);
-    return done(headline, details, r?.title ?? 'Good move', r?.motifs ?? []);
+    if (r?.fallback && details.length === 0) details.push(cmp?.detail, ...r.details);
+    return done(headline, details, r?.title ?? 'Good move', [...(r?.motifs ?? []), ...(cmp?.motifs ?? [])]);
 
     /** What kind of move it is when nothing specific was found, instead of "improves the position". */
     function plainReason(fallback: string): string {
@@ -1093,7 +1118,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
       if (sacked) return `sacrifices ${theOn(sacked, v.own)}`;
       if (onlyMove && bestLine?.score) return onlyMoveReason(bestLine.score);
       if (cl.cls === 'book') return 'is a known opening move';
-      if (isBest) return fallback;
+      if (isBest) return cmp?.reason ?? fallback;
       if (cl.winAfter <= 1 - WINNING) return 'is a reasonable try in a difficult position';
       if (cl.winAfter >= WINNING) return `keeps ${v.own} winning position`;
       return cl.cls === 'good' ? 'is playable' : 'is a solid move';
@@ -1146,10 +1171,8 @@ function mateSentence(lead: string, sans: readonly string[], mateIn: number): st
   return sans.length >= 3 ? `It starts with ${sans.slice(0, 3).join(' ')}.` : null;
 }
 
-/** Headline for a weak move without a concrete tactical reason, from the expected scores. */
-function evalHeadline(cl: Classification, v: Voice, Opp: string): string {
-  const b = cl.winBefore;
-  const a = cl.winAfter;
+/** Headline for a weak move without a concrete tactical reason, from the expected scores before and after it. */
+function evalHeadline(b: number, a: number, v: Voice, Opp: string): string {
   // Where the game ends up comes first: "back into the game" undersells a swing to the other side.
   if (a <= 0.2 && b > 0.3) return `This gives ${Opp} a winning position.`;
   if (a < 0.45 && b >= 0.45) return `This gives ${Opp} the better game.`;
@@ -1159,10 +1182,80 @@ function evalHeadline(cl: Classification, v: Voice, Opp: string): string {
   return b - a < 0.1 ? `This makes ${v.own} position a little worse.` : `This makes ${v.own} position worse.`;
 }
 
+/** Expected-score gap from the best line at which another move is clearly worse. */
+const ONLY_GAP = 0.1;
+
 /** True when the top engine line is clearly better than the second one. */
 function onlyGoodMove(lines: readonly PvLine[]): boolean {
   const [a, b] = lines;
-  return !!a && !!b && scoreToWin(a.score) - scoreToWin(b.score) >= 0.1;
+  return !!a && !!b && scoreToWin(a.score) - scoreToWin(b.score) >= ONLY_GAP;
+}
+
+/** Moves this close in expected score (and within `SAME_CP`) are "about as good". */
+const SAME_GAP = 0.02;
+/** In a decided position expected scores barely move: also require the evaluations to be this close. */
+const SAME_CP = 50;
+
+/** How a move compares with the other engine lines (see `compareLines`). */
+interface Comparison {
+  /** Verb phrase: "is the only move that keeps the advantage", "keeps the balance". */
+  reason: string;
+  /** "Nf3 and c4 are about as good." / "It is more precise than Nf3." / "Anything else …". */
+  detail: string | null;
+  /** True when every other move is clearly worse. */
+  only: boolean;
+  motifs: string[];
+}
+
+/**
+ * What the MultiPV lines say about the first move of `line` (the best line, mover's POV): the only
+ * good move ("is the only move that keeps the advantage", "Anything else gives Black the better
+ * game."), or what it keeps ("keeps the balance") and how close the alternatives are ("Nf3 and c4
+ * are about as good.", "It is more precise than Nf3."). Null unless `lines` holds this move as the
+ * best line plus at least one other move.
+ */
+function compareLines(fen: string, line: Line, lines: readonly PvLine[] | undefined, v: Voice): Comparison | null {
+  const uci = line.pv[0];
+  const score = line.score;
+  if (!lines || !uci || !score || lines[0]?.pv[0] !== uci) return null;
+  const others = lines.filter((l) => l.pv.length && l.pv[0] !== uci);
+  if (!others.length) return null;
+  const w = scoreToWin(score);
+  const next = others[0];
+  const Opp = SIDE[other(v.mover)];
+  if (w - scoreToWin(next.score) >= ONLY_GAP) {
+    const worse = evalHeadline(w, scoreToWin(next.score), v, Opp).replace(/^This /, 'Anything else ');
+    return { reason: onlyMoveReason(score), detail: worse, only: true, motifs: ['onlyGoodMove'] };
+  }
+  const reason = keepsReason(score, v);
+  const same = others
+    .filter((l) => w - scoreToWin(l.score) < SAME_GAP && cpGap(score, l.score) <= SAME_CP)
+    .map((l) => uciToSan(fen, l.pv[0]))
+    .filter((x): x is string => !!x)
+    .slice(0, 2);
+  if (same.length) {
+    return { reason, detail: `${joinAnd(same)} ${same.length > 1 ? 'are' : 'is'} about as good.`, only: false, motifs: [] };
+  }
+  const nextSan = uciToSan(fen, next.pv[0]);
+  return { reason, detail: nextSan ? `It is more precise than ${nextSan}.` : null, only: false, motifs: [] };
+}
+
+/** Centipawn distance between two scores (mates count as far apart unless identical). */
+function cpGap(a: Score, b: Score): number {
+  if (a.kind === 'cp' && b.kind === 'cp') return Math.abs(a.value - b.value);
+  return a.kind === b.kind && a.value === b.value ? 0 : Infinity;
+}
+
+/** What a quiet best move keeps, from its expected score: "keeps the balance", "keeps your advantage". */
+function keepsReason(score: Score, v: Voice): string {
+  const w = scoreToWin(score);
+  if (w >= WINNING) return `keeps ${v.own} winning position`;
+  if (w >= 0.6) return `keeps ${v.own} advantage`;
+  if (w >= 0.53) return 'keeps a small edge';
+  if (w > 0.47) return 'keeps the balance';
+  if (w >= 0.4) return 'holds the position';
+  if (w > 1 - WINNING) return 'is the best defense';
+  return 'is the best try in a difficult position';
 }
 
 /**

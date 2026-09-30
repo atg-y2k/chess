@@ -227,7 +227,7 @@ export function fakeEngineSet(): { analysis: FakeEngine; bot: FakeEngine; set: E
  * racing bot), so the controller's stale-move guards can be tested.
  */
 export class ScriptedBot implements BotLike {
-  readonly calls: { fen: string; elo: number; history: string[] }[] = [];
+  readonly calls: { fen: string; elo: number; history: string[]; startFen?: string }[] = [];
   readonly newGames: number[] = [];
   manual = false;
   ignoreAbort = false;
@@ -240,8 +240,8 @@ export class ScriptedBot implements BotLike {
     return Promise.resolve();
   }
 
-  move(fen: string, elo: number, history: string[], signal?: AbortSignal) {
-    this.calls.push({ fen, elo, history: [...history] });
+  move(fen: string, elo: number, history: string[], signal?: AbortSignal, startFen?: string) {
+    this.calls.push({ fen, elo, history: [...history], startFen });
     const legal = new Chess(fen).moves({ verbose: true }).map(uciOf);
     const scripted = this.moves[0];
     const uci = scripted && legal.includes(scripted) ? this.moves.shift()! : legal[0];

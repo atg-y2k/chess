@@ -313,6 +313,31 @@
   color: var(--text-dim);
   animation: app-fade-in 0.4s ease 0.35s both;
 }
+.app-splash-pct {
+  font-variant-numeric: tabular-nums;
+}
+/* Engine download progress: the slot is always there, so the splash does not jump when it shows. */
+.app-splash-bar {
+  width: 168px;
+  height: 4px;
+  margin-top: -4px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.app-splash-bar[data-shown] {
+  opacity: 1;
+}
+.app-splash-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform 0.2s linear;
+}
 @keyframes app-splash-pop {
   from {
     opacity: 0;

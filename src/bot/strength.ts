@@ -22,10 +22,12 @@
  *    move that makes progress. The skill band plays it; the custom band plays it with an
  *    Elo-dependent probability and otherwise stays human-ish but only among moves that keep the win
  *    (never hanging the queen to a bare king, never stalemating).
- *  - Repetition guard: the engine searches the bare FEN, so it cannot see that a move repeats an
- *    earlier position. When the bot is clearly better, moves that complete a threefold repetition
+ *  - Repetition guard: when the bot is clearly better, moves that complete a threefold repetition
  *    (or let the opponent complete one with a single reply) are avoided, using the game's position
- *    counts (`ChooseContext.positions`; BotPlayer replays the move history for them).
+ *    counts (`ChooseContext.positions`; BotPlayer replays the move history for them). BotPlayer also
+ *    gives the engine the game's moves (`SearchOptions.history`), so Stockfish scores a move that
+ *    repeats a position for the third time as a draw. The guard is still needed: weakened levels do
+ *    not always play the engine's top move, and it also covers the opponent's repeating reply.
  *
  * Searches are depth/node limited, never `movetime`: iOS freezes workers in the background and a
  * wall-clock limit would return a shallow move on resume. Node caps are sized for ~0.5-0.8 Mnps
@@ -564,7 +566,8 @@ export interface ChooseContext {
   deep?: AnalysisResult;
   /**
    * Occurrences of each `positionKey` in the game so far, the current position included. Enables the
-   * repetition guard (the engine searches the bare FEN and cannot see earlier positions).
+   * repetition guard (without them only the engine's own repetition detection is left, and only
+   * when it was given the game's moves).
    */
   positions?: ReadonlyMap<string, number>;
 }

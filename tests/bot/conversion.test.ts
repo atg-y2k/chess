@@ -2,6 +2,7 @@
  * Real-engine regression tests (Stockfish WASM in node) for decided positions: the bot plays a seen
  * mate in one, and finishes K+Q / K+R v K against a sensible defence instead of drawing it
  * (Stockfish's own pick_best dithered between mates; the custom band hung the queen to the bare king).
+ * A lost bot that is given the game's moves sees (and takes) a threefold-repetition draw.
  */
 import { Chess } from 'chess.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -67,4 +68,25 @@ describe('bots finish won positions (real engine)', () => {
     expect(r.end).toBe('bot mates');
     expect(r.plies).toBeLessThanOrEqual(100);
   }, 120_000);
+
+  it('a lost bot takes the threefold-repetition draw that only the game history shows', async () => {
+    // White is a queen up; the kings have shuffled g1-h1 / g8-h8 twice, so Kg8 repeats the
+    // position for the third time. From the bare FEN it is just another losing move.
+    const start = '6k1/5ppp/8/8/8/8/5PPP/3Q2K1 w - - 0 1';
+    const moves = ['g1h1', 'g8h8', 'h1g1', 'h8g8', 'g1h1', 'g8h8', 'h1g1'];
+    const chess = new Chess(start);
+    for (const m of moves) chess.move({ from: m.slice(0, 2), to: m.slice(2, 4) });
+    const fen = chess.fen();
+    for (const elo of [1400, 2000, 3200]) {
+      for (let seed = 1; seed <= 3; seed++) {
+        const bot = new BotPlayer(botEngine, { rng: mulberry32(seed), thinkDelay: false });
+        await bot.newGame(elo);
+        expect((await bot.move(fen, elo, moves, undefined, start))!.uci).toBe('h8g8');
+      }
+    }
+    // Without the start position the moves cannot be replayed: full strength then plays on.
+    const blind = new BotPlayer(botEngine, { rng: mulberry32(1), thinkDelay: false });
+    await blind.newGame(3200);
+    expect((await blind.move(fen, 3200, moves))!.uci).not.toBe('h8g8');
+  }, 60_000);
 });

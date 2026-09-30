@@ -10,14 +10,16 @@
  * Each area is its own component reading only the signals it needs, so a live-analysis update
  * re-renders the eval bar and graph, not the board.
  */
-import { useComputed, useSignal, useSignalEffect, type Signal } from '@preact/signals';
+import { useComputed, useSignal, useSignalEffect, type ReadonlySignal, type Signal } from '@preact/signals';
 import type { ComponentChild } from 'preact';
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { BOTS } from './bot/personas';
 import { copyText } from './clipboard';
+import { rememberedEngineMode, resetEngineMode } from './engine/createEngines';
 import type { GameController } from './game/controller';
 import type { ReadonlyStore, ToolbarId } from './game/store';
 import type { PromotionPiece } from './game/types';
+import { STARTING_LEVELS } from './rating/rating';
 import { applyTheme, loadTheme, saveTheme, watchSystemTheme, type ThemePref } from './theme';
 import { Board } from './ui/Board';
 import { CoachPanel } from './ui/CoachPanel';
@@ -144,8 +146,8 @@ export function App({ controller: c }: AppProps) {
         <Moves c={c} />
         <Tools c={c} summary={reviewSummary} />
       </main>
-      <Sheets c={c} theme={theme} onTheme={changeTheme} onExport={exportPgn} />
-      <Splash phase={phase} />
+      <Sheets c={c} theme={theme} onTheme={changeTheme} onExport={exportPgn} notify={notify} />
+      <Splash phase={phase} download={s.engineDownload} />
       {phase === 'error' && <ErrorScreen c={c} />}
       <div class="app-toast-host" role="status" aria-live="polite">
         {toast && (
@@ -380,13 +382,22 @@ function Sheets({
   theme,
   onTheme,
   onExport,
+  notify,
 }: {
   c: GameController;
   theme: ThemePref;
   onTheme: (t: ThemePref) => void;
   onExport: () => void;
+  notify: Notify;
 }) {
   const sh = c.store.sheets.value;
+  const engineMode = c.store.engineMode.value;
+  // When remembered single mode ends and two engines are tried again (localStorage; re-read when the menu opens).
+  const menuOpen = sh.open === 'menu';
+  const singleUntil = useMemo(
+    () => (engineMode === 'single' ? (rememberedEngineMode()?.until ?? null) : null),
+    [menuOpen, engineMode],
+  );
   // Keep the last result so the game-over sheet can animate closed after a rematch clears it.
   const lastOver = useRef<typeof sh.gameOver>(null);
   if (sh.gameOver) lastOver.current = sh.gameOver;
@@ -404,6 +415,9 @@ function Sheets({
         playerRating={sh.newGame.playerRating}
         bots={sh.newGame.bots}
         inProgress={sh.newGame.inProgress}
+        newPlayer={sh.newGame.newPlayer}
+        levels={STARTING_LEVELS}
+        onSetLevel={(rating) => c.setStartingRating(rating)}
         onStart={(settings) => c.newGame(settings)}
         onClose={close}
       />
@@ -434,6 +448,13 @@ function Sheets({
           close();
         }}
         onNewGame={() => c.openSheet('new')}
+        engine={{ mode: engineMode, singleUntil }}
+        onRetryDualEngines={retryDualEngines}
+        levels={STARTING_LEVELS}
+        onSetLevel={(rating) => {
+          c.setStartingRating(rating);
+          notify(`Your rating is now ${Math.round(c.store.profile.value.rating)}`);
+        }}
         onClose={close}
       />
       {over && (
@@ -450,29 +471,72 @@ function Sheets({
   );
 }
 
+/**
+ * The Menu's "Try two engines again": forgets the remembered compatibility (single-engine) mode
+ * and reloads (the game is saved). A `?engines=1` in the address is dropped too, or it would
+ * force one engine again.
+ */
+function retryDualEngines(): void {
+  resetEngineMode();
+  const url = new URL(location.href);
+  if (url.searchParams.has('engines')) {
+    url.searchParams.delete('engines');
+    location.replace(url.href);
+  } else {
+    location.reload();
+  }
+}
+
 // -------------------------------------------------------------------------------------------------
 // Boot splash, engine error
 
-/** Full-screen splash while the engines start; fades out once they are ready. */
-function Splash({ phase }: { phase: string }) {
+/**
+ * A download shorter than this (ms from the splash appearing) is not worth a progress readout:
+ * a cached engine "downloads" in a few frames, and the text would only flicker.
+ */
+const SPLASH_PROGRESS_DELAY_MS = 300;
+
+/**
+ * Full-screen splash while the engines start; fades out once they are ready. While the engine's
+ * `.wasm` is still downloading (first visit, slow connection) it shows the percentage and a bar.
+ */
+function Splash({ phase, download }: { phase: string; download: ReadonlySignal<number | null> }) {
   const booting = phase === 'boot';
   const [shown, setShown] = useState(booting);
+  const [patient, setPatient] = useState(false);
   useEffect(() => {
     if (booting) {
       setShown(true);
-      return;
+      const t = window.setTimeout(() => setPatient(true), SPLASH_PROGRESS_DELAY_MS);
+      return () => window.clearTimeout(t);
     }
+    setPatient(false);
     const t = window.setTimeout(() => setShown(false), 420);
     return () => window.clearTimeout(t);
   }, [booting]);
   if (!shown) return null;
+  const p = download.value;
+  const downloading = booting && patient && p !== null && p < 1;
+  const pct = downloading ? Math.floor(p * 100) : 0;
   return (
     <div class="app-splash" data-leaving={booting ? undefined : ''} role="status" aria-label="Starting the chess engine">
       <img class="app-splash-logo" src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" width={88} height={88} />
       <div class="app-splash-name">Chess Coach</div>
       <div class="app-splash-status">
         <span class="app-spinner" aria-hidden="true" />
-        Starting the engine…
+        {downloading ? <span class="app-splash-pct">Downloading engine {pct}%…</span> : 'Starting the engine…'}
+      </div>
+      <div
+        class="app-splash-bar"
+        data-shown={downloading ? '' : undefined}
+        role={downloading ? 'progressbar' : undefined}
+        aria-label={downloading ? 'Engine download' : undefined}
+        aria-valuemin={downloading ? 0 : undefined}
+        aria-valuemax={downloading ? 100 : undefined}
+        aria-valuenow={downloading ? pct : undefined}
+        aria-hidden={downloading ? undefined : 'true'}
+      >
+        <span style={{ transform: `scaleX(${downloading ? p : 0})` }} />
       </div>
     </div>
   );

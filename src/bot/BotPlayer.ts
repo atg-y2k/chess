@@ -5,12 +5,14 @@
  * game's book profile ('book'); otherwise a full-strength search limited by depth/nodes, weakened
  * in JS by `chooseMove` ('engine'). In a won simplified ending a second, deeper search is run so the
  * bot can convert it (`conversionSearchFor`). The game's move history is replayed to count
- * repeated positions, so the bot does not walk into a threefold repetition while winning.
+ * repeated positions, so the bot does not walk into a threefold repetition while winning; when it
+ * leads to the position, the engine searches get it too (`SearchOptions.history`), so Stockfish
+ * itself scores a move that repeats a position for the third time as a draw.
  * A human-like think delay (total, including search time) is added unless `thinkDelay: false`.
  * Everything is abortable through the AbortSignal.
  */
 import { Chess, type Move } from 'chess.js';
-import type { AnalysisResult, ChessEngine, SearchOptions } from '../engine/types';
+import type { AnalysisResult, ChessEngine, SearchHistory, SearchOptions } from '../engine/types';
 import { bookProfile, loadOpenings, pickBookMove, type BookProfile, type BookState } from './book';
 import {
   chooseMove,
@@ -97,7 +99,8 @@ export class BotPlayer {
   /**
    * Chooses the bot's move. `history` = UCI moves from `startFen` (default: the initial position)
    * to `fen`: its length drives the book and think time, and replaying it gives the repetition
-   * counts. A history that does not lead to `fen` only disables the repetition guard.
+   * counts, which the engine searches also get. A history that does not lead to `fen` only
+   * disables the repetition guard (the engine then searches the bare position).
    * Resolves null if aborted or when the position has no legal move. Never rejects for engine
    * failures: without engine lines the bot falls back to a heuristic move.
    */
@@ -133,15 +136,17 @@ export class BotPlayer {
     }
 
     const mp = planMove(this.planFor(elo), rng);
-    const result = await this.search(fen, searchOptionsFor(mp), signal);
+    // A copy: the replay cache keeps growing if another move() runs while this one searches.
+    const counts = this.positionCounts(startFen, history, fen);
+    const positions = counts ? new Map(counts) : null;
+    // Only a history that replays to `fen` is worth sending (the engine would fall back anyway).
+    const game: SearchHistory | undefined = positions ? { startFen, moves: history.slice() } : undefined;
+    const result = await this.search(fen, searchOptionsFor(mp), signal, game);
     if (signal?.aborted) return null;
     const convert = conversionSearchFor(fen, result, mp);
-    const deep = convert ? await this.search(fen, convert, signal) : undefined;
+    const deep = convert ? await this.search(fen, convert, signal, game) : undefined;
     if (signal?.aborted) return null;
-    const choice = chooseMove(fen, result, mp, rng, {
-      deep,
-      positions: this.positionCounts(startFen, history, fen) ?? undefined,
-    });
+    const choice = chooseMove(fen, result, mp, rng, { deep, positions: positions ?? undefined });
     if (!choice) return null;
     const diff = positionDifficulty(result);
     const target = thinkTimeMs(
@@ -200,13 +205,21 @@ export class BotPlayer {
     }
   }
 
-  /** Full-strength search with these limits; retries once if pre-empted by someone else. */
-  private async search(fen: string, limits: SearchOptions, signal?: AbortSignal): Promise<AnalysisResult> {
+  /**
+   * Full-strength search with these limits (and the game's moves, so the engine sees
+   * repetitions); retries once if pre-empted by someone else.
+   */
+  private async search(
+    fen: string,
+    limits: SearchOptions,
+    signal?: AbortSignal,
+    history?: SearchHistory,
+  ): Promise<AnalysisResult> {
     const empty: AnalysisResult = { fen, depth: 0, lines: [], bestMove: null, done: false, aborted: true };
     try {
       this.initPromise ??= this.engine.init();
       await this.initPromise;
-      const opts = { ...limits, signal };
+      const opts: SearchOptions = { ...limits, signal, ...(history ? { history } : {}) };
       let result = await this.engine.search(fen, opts);
       if (result.aborted && !signal?.aborted) result = await this.engine.search(fen, opts);
       return result;

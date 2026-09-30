@@ -3,7 +3,8 @@
  *   &open=new|menu|over|none   sheet shown on load (default new)
  *   &over=win|loss|draw|unrated|resign   GameOverSheet variant (default win)
  *   &bot=<id>|custom &elo=N &adaptive=1   initial NewGameSheet settings (default bot=fennec)
- *   &empty=1      profile without games (MenuSheet empty state)
+ *   &empty=1      profile without games (MenuSheet empty state; NewGameSheet "Your level" picker)
+ *   &engine=dual|single|forced   MenuSheet Engine row (single = remembered compatibility mode with a date)
  *   &canResign=0  MenuSheet with Resign disabled
  *   &sim=0|1      iPhone safe-area simulation (default: on for narrow viewports)
  *   &chrome=0     hide the launcher buttons (for screenshots)
@@ -13,9 +14,10 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
 import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings } from '../game/types';
+import { STARTING_LEVELS } from '../rating/rating';
 import type { GameRecord, PlayerProfile } from '../rating/types';
 import { GameOverSheet, type GameOverSheetProps } from '../ui/GameOverSheet';
-import { MenuSheet } from '../ui/MenuSheet';
+import { MenuSheet, type EngineInfo } from '../ui/MenuSheet';
 import { NewGameSheet } from '../ui/NewGameSheet';
 
 declare global {
@@ -332,8 +334,19 @@ export default function SheetsGallery() {
     return { ...DEFAULT_SETTINGS, botId, botElo, adaptive: q.get('adaptive') === '1' };
   });
   const [toast, setToast] = useState('');
-  const profile = q.get('empty') === '1' ? EMPTY_PROFILE : PROFILE;
+  const [profile, setProfile] = useState<PlayerProfile>(() => (q.get('empty') === '1' ? EMPTY_PROFILE : PROFILE));
   const canResign = q.get('canResign') !== '0';
+  const engineParam = q.get('engine');
+  const engine: EngineInfo =
+    engineParam === 'single'
+      ? { mode: 'single', singleUntil: Date.now() + 11 * 86_400_000 }
+      : engineParam === 'forced'
+        ? { mode: 'single' }
+        : { mode: 'dual' };
+  const setLevel = (source: string) => (rating: number) => {
+    emit(`${source}:level`, rating);
+    setProfile((p) => ({ ...p, rating, gamesPlayed: 0 }));
+  };
 
   // Simulated iPhone 15 Pro safe areas (the CSS env() insets are 0 in a desktop browser).
   useEffect(() => {
@@ -420,6 +433,9 @@ export default function SheetsGallery() {
         initial={settings}
         playerRating={profile.rating}
         bots={MOCK_BOTS}
+        newPlayer={profile.gamesPlayed === 0 && profile.history.length === 0}
+        levels={STARTING_LEVELS}
+        onSetLevel={setLevel('new')}
         onStart={(s) => {
           emit('new:start', s);
           setSettings(s);
@@ -447,6 +463,10 @@ export default function SheetsGallery() {
         }}
         onExportPgn={() => emit('menu:export')}
         onFlip={() => emit('menu:flip')}
+        engine={engine}
+        onRetryDualEngines={() => emit('menu:retryDualEngines')}
+        levels={STARTING_LEVELS}
+        onSetLevel={setLevel('menu')}
         onNewGame={() => {
           emit('menu:new');
           setOpen('new');

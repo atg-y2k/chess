@@ -12,6 +12,13 @@
  *  - A search cut short by an engine restart (crash, hang) is retried on the fresh engine a few
  *    times before its waiters get the best result so far, so a crash never leaves a shallow
  *    result where a deep one was asked for.
+ *  - Analysis is by position only: searches never pass `SearchOptions.history`, and `ensure` /
+ *    `watch` take no game moves. A result is cached by `fenKey` and shared by every road to that
+ *    position (the other move order, the review, a hint, a takeback and replay). With the game's
+ *    moves, a move that repeats a position would score 0.00 in one game and not in another, and
+ *    the cache would hand that draw score to positions where it is wrong. The repetition draws
+ *    that analysis cannot see are the controller's business (it detects the threefold itself);
+ *    the bot's searches do get the history (see BotPlayer).
  */
 import { fenKey } from '../chess/utils';
 import { inspectPosition } from './StockfishEngine';
@@ -269,6 +276,7 @@ export class AnalysisService {
     const prev = this.running;
     if (prev && !prev.ended) prev.superseded = true; // the engine pre-empts it
     this.running = job;
+    // No `history`: results must depend on the position alone to be cached by fenKey (see header).
     this.engine
       .search(job.fen, {
         depth: job.depth,

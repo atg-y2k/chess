@@ -34,6 +34,16 @@ export function classSentence(san: string, cls: MoveClass): string {
 /** Classes that do not need a "Show best" (the move was already the best or the only option). */
 export const TOP_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['brilliant', 'great', 'best', 'book', 'forced']);
 
+/**
+ * Whether the coach offers "Show best" (and review draws the best-move arrow) for a move: it was
+ * not the engine's top move, and its class does not already say it was the best or only option.
+ * A Brilliant sacrifice can be nearly-best, so it offers the engine's choice too.
+ */
+export function offersShowBest(cl: Pick<Classification, 'cls' | 'bestMoveUci'>, playedUci: string): boolean {
+  if (!cl.bestMoveUci || cl.bestMoveUci === playedUci) return false;
+  return cl.cls === 'brilliant' || !TOP_CLASSES.has(cl.cls);
+}
+
 /** Classes that offer "Retry" in coach mode. */
 export const RETRY_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['mistake', 'miss', 'blunder']);
 

@@ -53,6 +53,14 @@ export interface AnalysisResult {
   terminal?: 'checkmate' | 'stalemate';
 }
 
+/** The game's moves leading to a searched position (`SearchOptions.history`). */
+export interface SearchHistory {
+  /** FEN the game started from (the standard initial position for a normal game). */
+  startFen: string;
+  /** UCI moves from `startFen` to the searched position, e.g. ["e2e4", "e7e5"]. */
+  moves: readonly string[];
+}
+
 export interface SearchOptions {
   depth?: number;
   movetime?: number;
@@ -63,6 +71,14 @@ export interface SearchOptions {
   limitStrengthElo?: number;
   /** UCI "Skill Level" 0..20. Omit for 20 (full strength). Ignored when limitStrengthElo is set. */
   skillLevel?: number;
+  /**
+   * The game so far. When its moves legally lead to the searched FEN, the engine gets them too
+   * (only those since the last capture, pawn move or castling-rights change), so it sees
+   * repetitions: a move that repeats a position for the third time scores as a draw. Otherwise
+   * the bare FEN is searched. Omit it for position-only analysis (results that depend only on the
+   * FEN, which `AnalysisService` caches and shares between move orders).
+   */
+  history?: SearchHistory;
   /** Streaming updates while searching (throttling is the caller's concern). */
   onInfo?: (partial: AnalysisResult) => void;
   /** Aborting sends `stop`; the promise then resolves with the partial result and `aborted: true`. */

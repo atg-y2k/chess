@@ -1,80 +1,171 @@
 # Chess Coach
 
 Play chess against the computer on your iPhone, at any strength from absolute beginner to
-full-strength Stockfish, with a live evaluation bar and a coach that rates every move and explains
-it in plain English. It is an installable web app (PWA): everything runs on the phone, there is no
-account or server, and it works offline once it has been opened.
+full-strength Stockfish. An evaluation bar shows who is winning, and a coach rates every move you
+make and explains it in plain English. Chess Coach is a web app that you install on your Home
+Screen. Everything runs on the phone: there is no account and no server, and it works offline
+after the first visit.
 
 **Open it:** <https://atg-y2k.github.io/chess/> (see [Hosting](#hosting) if the link is not live yet).
 
-## Features
+## What you get
 
 - **Opponents from 100 to 3200 Elo.** 16 named bots (Pip 🐣 at 100 … Quasar 🌌 at 3200), a custom
   strength slider in steps of 50, and **Match my rating**, which always picks an opponent at your
   current rating.
-- **Your rating.** Rated games update a tracked Elo rating (you start at 800). Your peak, win/draw/loss
-  record and the last games (with accuracy after a review) are in the Menu.
-- **Live scoring.** An evaluation bar next to the board slides as the position changes, and an
-  evaluation graph under the coach shows the whole game. Tap or drag the graph to jump to a move.
-- **Coach.** After each of your moves the coach classifies it (see the [legend](#move-classifications))
-  and explains why: what it wins or hangs, the tactic you missed, the threat you allowed, and what
-  the best move was. *Show best* puts the best move and your move on the board as arrows; *Retry*
-  takes a bad move back so you can find a better one.
-- **Hints and arrows.** *Hint* shows the best move with an arrow and a short reason. *Best-move
-  arrows* (in the Menu or the New game sheet) show the engine's top three moves all the time.
-- **Game review.** After the game: accuracy for both sides, a count of each kind of move, key moments
-  you can tap, and step-by-step coaching for every move of both players.
-- **Takebacks, flip, PGN export.** Undo (optional per game), flip the board, and export the game as
-  PGN (with evaluations and move-quality marks) through the iOS share sheet or the clipboard.
-- **Made for the iPhone.** Full-screen when added to the Home Screen, respects the Dynamic Island and
-  home indicator, dark theme by default (Light and Automatic in the Menu), sounds that follow the
-  silent switch, and it keeps your game if the app is closed mid-game.
+- **Your own rating.** Rated games update an Elo rating. You pick a starting level, and the Menu
+  shows your rating, your peak, your wins, draws and losses, and your last games (with your accuracy
+  once a game has been reviewed).
+- **A live evaluation bar** next to the board, and a graph of the whole game under the coach.
+- **A coach** that classifies each of your moves (Best, Mistake, Blunder…) and says why: what it
+  wins or loses, the tactic you missed, the threat you allowed, and what the best move was.
+- **Hints, Show best and Retry** to learn from your mistakes during the game.
+- **Game review** after the game: accuracy for both sides, key moments, and coaching for every move
+  of both players.
+- **Takebacks, board flip and PGN export** (with evaluations and move marks) through the iOS share
+  sheet or the clipboard.
+- **Made for the iPhone:** full screen when installed, fits around the Dynamic Island and the home
+  indicator, dark theme by default (Light and Automatic in the Menu), sounds that follow the silent
+  switch, and your game is kept if iOS closes the app.
 
-Using takebacks, hints or best-move arrows makes a game **unrated**; your rating does not change.
-
-## Install it on an iPhone
+## Install it on your iPhone
 
 1. Open <https://atg-y2k.github.io/chess/> in **Safari** (iOS 16.4 or later).
 2. Tap **⋯** next to the address bar, then **Share**. (On older iOS, or with Safari's *Bottom* tab
    layout, tap the **Share** button directly.)
 3. Tap **Add to Home Screen**, leave **Open as Web App** switched on, and tap **Add**.
-4. Start Chess Coach from its Home Screen icon. It opens full-screen, like an app.
+4. Start Chess Coach from its Home Screen icon. It opens full screen, like an app.
 
 Chrome and the other iOS browsers can also add it to the Home Screen from their share menu. The Home
-Screen app keeps its own rating and saved game, separate from Safari's: progress made in a Safari tab
-before installing does not carry over.
+Screen app keeps its own rating and saved game, separate from Safari's, so progress made in a Safari
+tab before installing does not carry over.
 
-The first visit downloads everything, about 3 MB (most of it the chess engine and the opening book).
-After that it works **offline** (flight mode included). Updates download in the background, and the
-app switches to a new version only between games and when you are not using it: when you open it or
-come back to it (before you touch anything), or while it is in the background. It never reloads in the
-middle of a game or a review, or while you are choosing your next game.
+The first visit downloads about 3.3 MB (less if the site compresses it). Most of that is the chess
+engine (1.8 MB) and the opening book (0.9 MB). On a slow connection, the start screen shows
+"Downloading engine NN%…". After that the app works **offline**, in airplane mode too.
 
-## How the opponent strength works
+**Updates** download in the background. The new version starts the next time the app starts from
+scratch, for example after iOS has closed it in the background or after you swipe it away in the
+app switcher. The app never reloads itself during a game, on a finished game's screen or during a
+review, and never while you are touching it.
 
-The same Stockfish engine plays every level; the bots are weakened in JavaScript, not by the
-engine's own strength limiter, so every level is consistent and each game is replayable.
+## Playing a game
+
+The first time you open the app, and whenever you tap **New**, the **New game** sheet asks you to:
+
+- **Pick your level** (first game only): Beginner (400), Casual (800), Intermediate (1200),
+  Advanced (1600) or Expert (2000). This sets your starting rating. You can change it later in the
+  Menu with **Set my level**.
+- **Pick an opponent:** a named bot, **Custom** (the slider, 100 to 3200 in steps of 50) or
+  **Match my rating** (an opponent at your rating, rounded to 50, chosen again for every game).
+- **Pick a color:** White, Random or Black.
+- **Choose options:** Coach, Evaluation bar, Best-move arrows, Takebacks and Sound.
+
+Then tap **Play**. Move by dragging a piece or by tapping it and then its destination square. The
+bar at the bottom has **New** (a new game), **Undo** (take back your last move), **Hint**, **Flip**
+(turn the board around), **Coach** (coach on or off) and **Menu**. After the game it has **Review**
+and ‹ › to step through the moves. Tap any move in the move list, or anywhere on the graph, to look
+at that position; **Back to game** returns to the current one.
+
+If iOS closes the app (it often does in the background), your game is still there when you open it
+again, and a finished game comes back with its result, ready for review, until you start the next
+one.
+
+## The coach
+
+After each of your moves the coach names the kind of move (see [Move classifications](#move-classifications))
+and explains it. For example, "14. Qg4 is a blunder" with "This hangs your queen on g4."
+
+- **Show best** puts the engine's best move and the move you played on the board as arrows, and
+  explains the best move. It appears when the engine preferred a different move.
+- **Retry** (after a mistake, miss or blunder, when takebacks are on) takes your move back so you
+  can look for a better one. While Retry is on offer, the coach does not give away the answer.
+- **Hint** shows the best move with an arrow and a short reason, and how it compares with the other
+  good moves, for example "c4 keeps a small edge. g3 and Bf4 are about as good."
+- **Best-move arrows** (an option) show the engine's top three moves all the time.
+
+The coach needs a moment to check each move. If that fails (rarely), it says "Couldn't check …"
+with a **Try again** button.
+
+## The evaluation bar
+
+The bar next to the board shows who is better. The white part is White's share of the winning
+chances and the dark part is Black's, so a bar that is half white means the game is even. The
+number sits at the end of the side that is ahead. It is in pawns: **1.3** means that side is about
+a pawn and a third better. **M3** means that side can force checkmate in 3 moves. While a new
+position is being analyzed, the last number stays and pulses.
+
+The graph under the coach shows the same thing for the whole game, with colored dots at the big
+moments. The Evaluation bar option hides both.
+
+## Game review
+
+After the game, tap **Review** (or **Game review** in the coach panel). The engine goes through
+every move of both players. You then see each side's **accuracy**, a count of each kind of move,
+and the **key moments**. Tap a moment or step through the moves with ‹ › to read the coach's comment
+on each move, with **Show best** for the better move. **Report** returns to the summary.
+
+## Your rating (what Elo means)
+
+**Elo** is a number that measures playing strength. The gap between two ratings predicts the
+result: a player rated 200 points higher is expected to score about 76% (counting a draw as half a
+point), and one rated 400 points higher about 91%. After each rated game your rating goes up if you
+did better than expected against that bot and down if you did worse, so beating a stronger bot
+gains more than beating a weaker one.
+
+- **Starting level.** You start at the level you picked (Casual, 800, if you skip it). **Set my
+  level** in the Menu sets a new level at any time; your game history stays.
+- **New ratings move fast.** Your rating is uncertain at first, so your first rated game can move it
+  by about 175 points against an equal bot (more if you beat a much stronger one). The steps
+  shrink as you play: about ±30 after 10 games, about ±11 after 30, and ±8 from about 40 games on.
+  (The step size follows the Glicko rating system.) After you set a new level, the rating moves
+  fast again.
+- **Catching up.** If your last 6 rated games together went much better, or much worse, than
+  expected (by 2.5 points or more), the rating speeds up again as if you had played only 8 games,
+  so it can catch up with a player who has improved.
+- **Match my rating** follows your rating. A rematch matches your new rating.
+
+**Rated and unrated games.** A game counts for your rating unless you use help:
+
+- A **takeback** (Undo), a **hint**, **Retry** or **best-move arrows** make the game unrated. The
+  coach and the evaluation bar are fine in rated games.
+- In a rated game, the first hint, takeback or Retry asks you to confirm. Switching best-move arrows
+  on (in the Menu, or when starting the game) makes it unrated at once.
+- An **Unrated** tag on your player strip shows when a game no longer counts.
+- **Resigning** is a loss. Resigning before you have made a move does not change your rating.
+- **Starting a new game** while one is going, after you have made a move, counts as a loss
+  ("Abandoned"). It is rated unless the game was already unrated. The New game sheet warns you and
+  its button reads **Resign & play**. Before your first move, the old game is simply dropped.
+
+Unrated games still appear in your history and in your win, draw and loss record.
+
+## How the opponents play
+
+The same Stockfish engine plays every level. The bots are weakened by the app, not by the engine's
+own strength limiter, so every level is consistent and each game can be replayed.
 
 - **100–1300 Elo:** the engine scores every legal move, and the bot then chooses like a weak human
-  would: it prefers captures and checks, sometimes overlooks the reply to its move, and sometimes
-  misses mates. The lower the Elo, the more often it goes wrong.
-- **1350–3150 Elo:** Stockfish's own "Skill Level" method (choosing among its top lines with a
-  strength-dependent error), with the level blended smoothly between whole steps.
+  would. It likes captures and checks, sometimes overlooks the reply to its move, and sometimes
+  misses a mate. The lower the Elo, the more often it goes wrong.
+- **1350–3150 Elo:** Stockfish's own "Skill Level" method (choosing among its top moves with a
+  strength-dependent error), blended smoothly between whole levels.
 - **3200 Elo:** the engine's best move.
-- In the opening, every bot plays book moves from the lichess opening database, varied per game:
-  weak bots leave the book after a move or two (and pick dubious lines more often), strong bots
-  follow it for up to 14 moves.
+- **Openings:** every bot plays moves from the lichess opening book, varied from game to game. Weak
+  bots leave the book after a move or two and pick dubious lines more often; the strongest follow it
+  for up to about 19 moves.
+- **Winning endings:** bots finish off a won game. From 1350 up, a bot always plays a forced mate it
+  finds. In a clearly won ending against a bare king (or a king with pawns or one minor piece), the
+  bot searches deeper to make progress toward mate. Weaker bots do this only part of the time, but
+  they never hang their queen or rook there, and never stalemate you.
+- **Repetitions:** the bot knows the moves of the game, so it knows when a move would repeat a
+  position for the third time (a draw). When it is clearly winning, it avoids moves that would let
+  the game end in a draw by repetition.
 
 **These are engine-scale ratings, not chess.com or FIDE ratings.** They follow Stockfish's
 calibration against engine rating lists, which differs from human rating pools, especially at the
-bottom of the scale (100–400 are close together). Use them as a relative ladder: if you beat a bot
+bottom of the scale (100–400 are close together). Use them as a ladder: if you beat a bot
 comfortably, move up. The strongest levels are also limited by the phone's speed, so they play a
 little below their label.
-
-**Your rating** starts at 800 and uses the standard Elo formula against the bot's rating, with a
-K-factor of 60 for your first 10 rated games, 32 until 30 games and 16 after that. **Match my
-rating** sets the opponent to your rating (rounded to 50) at the start of each game, and a rematch
-re-matches it to your new rating.
 
 ## Move classifications
 
@@ -96,18 +187,40 @@ already a queen up.
 | `✕` | **Miss** | You did not punish your opponent's mistake. |
 | `??` | **Blunder** | A serious mistake that loses material or the game (loses 20% or more). |
 
-**Accuracy** is lichess's formula: a per-move accuracy from the drop in winning chances, averaged
+**Accuracy** uses lichess's formula: a per-move accuracy from the drop in winning chances, averaged
 over the game. The chess.com formulas are private, so the numbers are similar in spirit but will not
 match chess.com exactly. The Brilliant and Great thresholds depend on your rating.
 
-## Engine self-test
+## The Menu
 
-To check the engine on your own phone, open <https://atg-y2k.github.io/chess/?enginetest>. It starts
-both engines, runs a set of searches (including a mate in 2 and both engines at once) and shows a
-log with **PASS** or **FAIL**. *Copy log* copies it, for example to paste into a bug report.
+- **Flip board, Export PGN, New game and Resign** (Resign asks first).
+- **While playing:** Coach, Evaluation bar, Best-move arrows (makes the game unrated) and Sound.
+- **Appearance:** Dark, Light or Automatic (follows iOS).
+- **Your stats:** rating, peak, games, wins/draws/losses and **Set my level**; then your
+  **Recent games** (the last 10).
+- **Engine:** "Stockfish 19" with "2 workers", or "1 worker (compatibility mode, until …)", plus
+  **Run engine self-test**. See below.
+- **About:** the license notice, a link to the source code, the credits, and links to the
+  third-party licenses and the engine's source and license.
 
-If the app shows "The chess engine could not start", the phone probably runs iOS older than 16.4
-(WebAssembly SIMD is needed). The error screen has *Try again* and a link to the self-test.
+## If something goes wrong
+
+- **"The chess engine could not start."** The screen says what to do:
+  - "Your browser may not support WebAssembly SIMD": the phone needs iOS 16.4 or later.
+  - "Couldn't download the chess engine. Check your connection and tap Try again.": the first
+    download failed. The app also tries again by itself once the phone is back online.
+  - Otherwise: tap **Try again**, and if it keeps happening, close and reopen the app.
+- **"The chess engine stopped working."** Tap **Try again**. Your game is saved and continues.
+- **Compatibility mode.** Running two engines (one for your opponent, one for the coach) uses a lot
+  of memory. If the second engine cannot start, or iOS closes the app while it is starting both, the
+  app switches to one shared engine for 14 days and then tries two again. In this mode the coach pauses while your opponent thinks. The
+  Menu's Engine section shows the mode and offers **Try two engines again**.
+- **Engine self-test.** Menu → Engine → **Run engine self-test**, or open
+  <https://atg-y2k.github.io/chess/?enginetest>. It starts both engines, runs a set of searches
+  (including a mate in 2 and both engines at once) and shows a log with **PASS** or **FAIL**. *Copy
+  log* copies it, for example to paste into a bug report.
+
+---
 
 ## Hosting
 
@@ -115,10 +228,10 @@ The app is a static site: `npm run build` writes it to `dist/`.
 
 - **GitHub Pages (set up).** On every push to `main`, `.github/workflows/deploy.yml` runs the unit
   tests and the end-to-end tests (against a `BASE_PATH=/chess/` build), builds with
-  `BASE_PATH=/chess/` and publishes; nothing is published if a test fails. One-time setup:
+  `BASE_PATH=/chess/` and publishes. Nothing is published if a test fails. One-time setup:
   repository **Settings → Pages → Build and deployment → Source: GitHub Actions**. GitHub Pages on
-  the **Free plan requires a public repository**; this repository is private, so either make it public, upgrade to GitHub Pro (or a
-  paid organisation plan), or use one of the hosts below.
+  the **Free plan requires a public repository**. This repository is private, so either make it
+  public, upgrade to GitHub Pro (or a paid organization plan), or use one of the hosts below.
 - **Cloudflare Pages or Netlify** (both free for private repositories): connect the repository,
   set the build command to `npm run build`, the output directory to `dist`, and the environment
   variable **`BASE_PATH=/`** (the site is served from the root there, not from `/chess/`). Use
@@ -129,13 +242,14 @@ Whatever the host, open the site once in Safari and add it to the Home Screen as
 
 **A public site must offer its source code.** Everyone who opens the site receives GPL-3.0 code (the
 app itself, chessground and Stockfish), so they must also be able to get the source. The app points
-to <https://github.com/atg-y2k/chess> (in the Menu's About section and in `THIRD-PARTY-LICENSES.txt`
-next to the app), which is enough once that repository is public; the GitHub Pages route needs that
-anyway. To host publicly from a private repository instead, publish the source next to the app: use
-the build command `npm run build && npm run build:source` (it adds `chess-coach-source.tar.gz`, the
-source of the commit being deployed, to `dist/`) and set `VITE_SOURCE_URL=chess-coach-source.tar.gz`
-so the app points there. Or keep the site to yourself (for example with Cloudflare Access or Netlify's
-password protection), so that nobody else receives the app.
+to <https://github.com/atg-y2k/chess> (the Menu's About section, the self-test page and
+`THIRD-PARTY-LICENSES.txt` next to the app), which is enough once that repository is public; the
+GitHub Pages route needs that anyway. To host publicly from a private repository instead, publish
+the source next to the app: use the build command `npm run build && npm run build:source` (it adds
+`chess-coach-source.tar.gz`, a `git archive` of the committed source of the commit being deployed,
+to `dist/`) and set `VITE_SOURCE_URL=chess-coach-source.tar.gz` so the app points there. Or keep the
+site to yourself (for example with Cloudflare Access or Netlify's password protection), so that
+nobody else receives the app.
 
 ## Development
 
@@ -144,26 +258,29 @@ Requires Node 24 (chessground declares `engines.node >= 24`).
 ```sh
 npm ci                 # install
 npm run dev            # dev server with hot reload (http://localhost:5173)
-npm test               # unit tests (Vitest, ~420 tests)
+npm test               # unit tests (Vitest: 603 tests in 29 files; the calibration file is skipped)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
 npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting
 npm run preview        # serve dist/
-npm run e2e            # Playwright: builds, serves and runs e2e/ on an emulated iPhone 15 Pro
+npm run e2e            # Playwright (17 tests): builds, serves and runs e2e/ on an emulated iPhone 15 Pro
 npm run build:openings # regenerate src/data/openings.json from the lichess chess-openings data
 npm run calibrate      # play bot-vs-bot matches with the real engine to check the Elo ladder
 ```
 
+- Some unit tests run the real Stockfish WASM in node (engine, bot conversion and repetition tests).
 - `E2E_REQUIRE_APP_SW=1 npm run e2e` makes the PWA test fail if the app does not register its
   service worker itself (CI sets it). `BASE_PATH=/chess/ npm run e2e` tests the GitHub Pages layout.
   Set `PW_CHROMIUM_PATH` to use a specific Chromium.
-- `?engines=1` forces a single shared engine worker (the fallback for devices that cannot run two).
-- The dev-only component gallery is at `/gallery.html` (`npm run dev`).
+- `?engines=1` forces one shared engine worker for that visit (the fallback for devices that cannot
+  run two). A remembered compatibility mode lasts 14 days; `?engines=2` (or the Menu's *Try two
+  engines again*) clears it.
+- The dev-only component gallery is at `/gallery.html?g=<board|panels|sheets|engine>` (`npm run dev`).
 - In the browser console, `__chessCoach.controller` is the game controller
   (e.g. `await __chessCoach.controller.idle()`).
 - `ARCHITECTURE.md` describes the modules, the contracts between them and the screen layout.
 
-## Credits and licences
+## Credits and licenses
 
 Chess Coach is free software under the **GNU General Public License v3.0 or later** (see
 [`LICENSE`](LICENSE)); it has to be, because it includes GPL-3.0 components.
@@ -183,5 +300,5 @@ Chess Coach is free software under the **GNU General Public License v3.0 or late
   are inspired by chess.com's; this app is not affiliated with chess.com or lichess.org, and its bots
   are original characters.
 
-The build writes the licence texts of every package it includes to `THIRD-PARTY-LICENSES.txt` next to
-the app (the engine's are in `engine/`), and keeps the packages' licence comments in the minified code.
+The build writes the license texts of every package it includes to `THIRD-PARTY-LICENSES.txt` next to
+the app (the engine's are in `engine/`), and keeps the packages' license comments in the minified code.

@@ -14,7 +14,7 @@ export interface ClassMeta {
 }
 
 export const CLASS_META: Record<MoveClass, ClassMeta> = {
-  brilliant: { label: 'Brilliant', symbol: '!!', color: 'var(--cls-brilliant)', hex: '#1fbfa2', description: 'A strong sacrifice that is also the best move.' },
+  brilliant: { label: 'Brilliant', symbol: '!!', color: 'var(--cls-brilliant)', hex: '#1fbfa2', description: 'A strong sacrifice that is also (nearly) the best move.' },
   great: { label: 'Great', symbol: '!', color: 'var(--cls-great)', hex: '#5a8fc4', description: 'The only good move, or one that changes the course of the game.' },
   best: { label: 'Best', symbol: '★', color: 'var(--cls-best)', hex: '#6fb04b', description: 'The engine’s top choice.' },
   excellent: { label: 'Excellent', symbol: '👍', color: 'var(--cls-excellent)', hex: '#8fbf4a', description: 'Almost as good as the best move.' },

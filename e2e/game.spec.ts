@@ -2,7 +2,9 @@
  * Game flow end-to-end, on the production build with the real Stockfish workers (iPhone 15 Pro
  * emulation, see playwright.config.ts): new-game sheet, moves by tapping squares, bot replies,
  * eval bar, coach feedback, hint arrows, undo, flip, reload restore, resign, game over sheet and
- * game review; a game as Black; and the `?enginetest` diagnostics page.
+ * game review; a game as Black; the starting-level picker, "Set my level" and the Menu's Engine
+ * row (and compatibility mode); engine download progress and a failed download; and the
+ * `?enginetest` diagnostics page.
  *
  * Moves are made by tapping the centres of squares, computed from the board's bounding box and
  * orientation. The legal-move choice for later moves and a few waits read the app's state through
@@ -290,6 +292,130 @@ test.describe('Game', () => {
         expect(box!.y, sel).toBeGreaterThanOrEqual(0);
         expect(box!.y + box!.height, sel).toBeLessThanOrEqual(393);
       }
+    });
+  });
+
+  test('a new player picks a starting level; Set my level in the menu; the Engine row', async ({ page }) => {
+    test.setTimeout(90_000);
+    const rating = () =>
+      page.evaluate(() => (JSON.parse(localStorage.getItem('chesscoach.profile') ?? '{}') as { profile?: { rating?: number } }).profile?.rating);
+    await page.goto('./');
+    const sheet = page.getByRole('dialog', { name: 'New game' });
+    await expect(sheet).toBeVisible({ timeout: 30_000 });
+
+    // Brand new: "Your level" at the top of the sheet, on the default 800.
+    const level = sheet.getByRole('radiogroup', { name: 'Your level' });
+    await expect(level).toBeVisible();
+    await expect(level.locator('[data-level="casual"]')).toHaveAttribute('aria-checked', 'true');
+    const adaptive = sheet.locator('.toggle[data-id="adaptive"]');
+    await expect(adaptive).toContainText('Match my rating (800)');
+
+    // Picking a level sets (and saves) the rating; "Match my rating" follows it.
+    await level.locator('[data-level="advanced"]').tap();
+    await expect(level.locator('[data-level="advanced"]')).toHaveAttribute('aria-checked', 'true');
+    await expect(sheet.locator('.lvl-caption')).toContainText('Advanced');
+    await expect(adaptive).toContainText('Match my rating (1600)');
+    expect(await rating()).toBe(1600);
+    await page.reload();
+    await expect(sheet.getByRole('radiogroup', { name: 'Your level' }).locator('[data-level="advanced"]')).toHaveAttribute(
+      'aria-checked',
+      'true',
+      { timeout: 30_000 },
+    );
+
+    // A rating-matched game against 1600.
+    await sheet.locator('.toggle[data-id="adaptive"]').tap();
+    await expect(sheet.locator('.ngs-hero-elo-num')).toHaveText('1600');
+    await sheet.getByRole('button', { name: 'Play' }).tap();
+    await expect(sheet).toBeHidden();
+    await expect(page.locator('.app-player--top')).toContainText('1600');
+
+    // Menu: the Engine row (two workers here; nothing to retry) and the self-test link.
+    await page.locator('.toolbar-btn[data-id="menu"]').tap();
+    const menu = page.getByRole('dialog', { name: 'Menu' });
+    await expect(menu).toBeVisible();
+    await expect(menu.locator('[data-id="engine-mode"]')).toContainText('2 workers');
+    await expect(menu.locator('[data-id="engine-retry-dual"]')).toHaveCount(0);
+    await expect(menu.locator('[data-id="engine-selftest"]')).toHaveAttribute('href', '?enginetest');
+    // About links the license notices shipped next to the app.
+    for (const [id, text] of [['third-party', 'workbox-core'], ['engine-notes', 'Corresponding source']]) {
+      const href = await menu.locator(`.about [data-id="${id}"]`).getAttribute('href');
+      const res = await page.request.get(new URL(href!, page.url()).href);
+      expect(res.status(), id).toBe(200);
+      expect(await res.text(), id).toContain(text);
+    }
+
+    // Set my level asks first, then changes the rating.
+    await menu.locator('[data-id="set-level"]').tap();
+    const chooser = menu.getByRole('radiogroup', { name: 'Set my level' });
+    await expect(chooser.locator('[data-level="advanced"]')).toHaveAttribute('aria-checked', 'true');
+    await chooser.locator('[data-level="intermediate"]').tap();
+    await expect(menu.locator('.menu-profile-num')).toHaveText('1600');
+    await menu.locator('[data-id="set-level-confirm"]').tap();
+    await expect(menu.locator('.menu-profile-num')).toHaveText('1200');
+    await expect(page.locator('.app-toast')).toHaveText('Your rating is now 1200');
+    expect(await rating()).toBe(1200);
+
+    // Once a game is in the history, the New Game sheet no longer asks for a level.
+    await menu.locator('.menu-tile[data-id="resign"]').tap();
+    await menu.locator('[data-id="resign-confirm"]').tap();
+    await page.getByRole('dialog', { name: /You lost/ }).getByRole('button', { name: 'New game' }).tap();
+    await expect(sheet).toBeVisible();
+    await expect(sheet.locator('.toggle[data-id="adaptive"]')).toContainText('Match my rating (1200)');
+    await expect(sheet.getByRole('radiogroup', { name: 'Your level' })).toHaveCount(0);
+  });
+
+  test('compatibility mode: the Engine row offers two engines again', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto('./?engines=1');
+    const sheet = page.getByRole('dialog', { name: 'New game' });
+    await expect(sheet).toBeVisible({ timeout: 30_000 });
+    await sheet.getByRole('button', { name: 'Close' }).tap();
+    await page.locator('.toolbar-btn[data-id="menu"]').tap();
+    const menu = page.getByRole('dialog', { name: 'Menu' });
+    await expect(menu.locator('[data-id="engine-mode"]')).toContainText('1 worker (compatibility mode)');
+    await menu.locator('[data-id="engine-retry-dual"]').tap();
+    await page.waitForURL((url) => !url.search.includes('engines'));
+    await expect(sheet).toBeVisible({ timeout: 30_000 });
+    expect(await page.evaluate(() => (window.__chessCoach!.controller.store as unknown as { engineMode: { value: string } }).engineMode.value)).toBe(
+      'dual',
+    );
+  });
+
+  test('a slow first download shows the engine download progress on the splash', async ({ page, context }) => {
+    test.setTimeout(90_000);
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Network.enable');
+    // ~0.45 MB/s: the 1.8 MB engine takes a few seconds.
+    await cdp.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 20,
+      downloadThroughput: 450 * 1024,
+      uploadThroughput: 450 * 1024,
+    });
+    await page.goto('./');
+    await expect(page.locator('.app-splash-status')).toHaveText(/^Downloading engine \d{1,2}%…$/, { timeout: 20_000 });
+    await expect(page.locator('.app-splash-bar[role="progressbar"]')).toBeVisible();
+    await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    await expect(page.getByRole('dialog', { name: 'New game' })).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator('.app-splash')).toHaveCount(0);
+  });
+
+  test.describe('without a service worker', () => {
+    // Routes the engine download from the page and its worker only (a service worker would fetch around the route).
+    test.use({ serviceWorkers: 'block' });
+    test('a failed engine download says to check the connection and retries when back online', async ({ page }) => {
+      test.setTimeout(90_000);
+      let fail = true;
+      await page.route('**/*.wasm', (route) => (fail ? route.fulfill({ status: 503, body: 'unavailable' }) : route.fallback()));
+      await page.goto('./');
+      const error = page.getByRole('alertdialog');
+      await expect(error).toBeVisible({ timeout: 60_000 });
+      await expect(error).toContainText('Couldn’t download the chess engine. Check your connection and tap Try again.');
+      fail = false;
+      await page.evaluate(() => window.dispatchEvent(new Event('online')));
+      await expect(page.getByRole('dialog', { name: 'New game' })).toBeVisible({ timeout: 60_000 });
+      await expect(error).toHaveCount(0);
     });
   });
 

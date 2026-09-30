@@ -58,7 +58,7 @@ const EVALS = [
 
 const TEXT: Record<number, { title?: string; lines: string[] }> = {
   7: { lines: ['b5 gives a pawn back to lure the bishop away.', 'Nf6 first keeps more options open.'] },
-  13: { lines: ['Nh5 threatens Ng3+, but the knight is offside on the rim.', 'Best was d6, supporting the centre.'] },
+  13: { lines: ['Nh5 threatens Ng3+, but the knight is offside on the rim.', 'Best was d6, supporting the center.'] },
   18: { lines: ['g4! gains space and kicks the knight before it can settle.', 'White offers the bishop to speed up the attack.'] },
   19: { lines: ['Nf6 walks back and loses time.', 'Best was cxb5, taking the free bishop.'] },
   20: {
@@ -82,7 +82,7 @@ const TEXT: Record<number, { title?: string; lines: string[] }> = {
   35: { lines: ['Bxg1 misses the chance to defend with Qxa1+ first.', 'Best was Qxa1+, forcing Ke2 before taking.'] },
   36: {
     lines: [
-      'e5 shuts the black queen out of the defence of g7.',
+      'e5 shuts the black queen out of the defense of g7.',
       'Nxg7+ followed by Qf6+ and Be7# is now unstoppable.',
       'Black has two extra rooks, but they are both out of play.',
     ],
@@ -170,7 +170,7 @@ function keyMomentsFor(plies: Ply[]): KeyMoment[] {
 
 /** Coach content for the position after `current` plies. */
 function coachFor(plies: Ply[], current: number): Pick<CoachPanelProps, 'cls' | 'title' | 'lines'> {
-  if (current === 0) return { title: 'Your move', lines: ['White to play. Take the centre with a pawn.'] };
+  if (current === 0) return { title: 'Your move', lines: ['White to play. Take the center with a pawn.'] };
   const p = plies[current - 1];
   const cls = p.classification!.cls;
   const who = p.color === PLAYER_COLOR ? '' : `${BOT.name.split(' ')[0]}: `;
@@ -478,7 +478,7 @@ function StatesPage() {
       {section(
         'CoachPanel',
         <>
-          <CoachPanel title="Analysing your move…" lines={[]} busy />
+          <CoachPanel title="Analyzing your move…" lines={[]} busy />
           <CoachPanel title="Your move" lines={['Black threatens Qxa1+, winning your rook on a1.']} />
           <CoachPanel
             cls="mistake"
@@ -503,7 +503,7 @@ function StatesPage() {
           <CoachPanel
             cls="brilliant"
             title="Brilliant"
-            lines={['Bd6!! offers both rooks to cut the queen off from the defence.']}
+            lines={['Bd6!! offers both rooks to cut the queen off from the defense.']}
             collapsed={collapsed}
             onToggleCollapsed={() => {
               logEvent('states:collapse');
@@ -534,7 +534,7 @@ function StatesPage() {
         />,
       )}
       {section(
-        'ReviewPanel (analysing, nothing yet)',
+        'ReviewPanel (analyzing, nothing yet)',
         <div class="gal-fixed">
           <ReviewPanel
             progress={0.03}

@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
 import type { Color, GameSettings } from '../game/types';
 import { IconChart, IconCoach, IconEye, IconSound, IconUndo } from './icons';
+import { LevelPicker, type StartingLevel } from './LevelPicker';
 import { Sheet } from './Sheet';
 import { Toggle } from './Toggle';
 import './NewGameSheet.css';
@@ -22,6 +23,15 @@ export interface NewGameSheetProps {
    * unless it is already unrated). The sheet says so and the button reads "Resign & play".
    */
   inProgress?: { rated: boolean } | null;
+  /**
+   * A brand-new player (no games yet): with `levels` and `onSetLevel`, a compact "Your level"
+   * picker at the top sets the starting rating (and so "Match my rating") before the first game.
+   */
+  newPlayer?: boolean;
+  /** Starting levels for the picker (rating/rating.ts STARTING_LEVELS). */
+  levels?: readonly StartingLevel[];
+  /** A level was picked: set the player's rating to it (the new rating comes back as `playerRating`). */
+  onSetLevel?: (rating: number) => void;
 }
 
 /** What starting a new game does to the game in progress (null when there is none). */
@@ -123,10 +133,22 @@ const MATCH_EMOJI = '🎯';
  * "New game" sheet: opponent picker (persona cards + custom Elo slider + "Match my rating"),
  * colour choice, assistance toggles and a big Play button.
  */
-export function NewGameSheet({ open, initial, playerRating, bots, onStart, onClose, inProgress }: NewGameSheetProps) {
+export function NewGameSheet({
+  open,
+  initial,
+  playerRating,
+  bots,
+  onStart,
+  onClose,
+  inProgress,
+  newPlayer,
+  levels,
+  onSetLevel,
+}: NewGameSheetProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial, bots));
   const scrollerRef = useRef<HTMLDivElement>(null);
   const colorLabelId = useId();
+  const levelLabelId = useId();
   const rating = Math.round(playerRating);
 
   // Start from `initial` every time the sheet opens.
@@ -203,6 +225,18 @@ export function NewGameSheet({ open, initial, playerRating, bots, onStart, onClo
         </>
       }
     >
+      {newPlayer && levels?.length && onSetLevel ? (
+        <section class="sheet-section ngs-level">
+          <div class="ngs-level-head">
+            <h3 class="sheet-label" id={levelLabelId}>
+              Your level
+            </h3>
+            <span class="ngs-level-hint">Sets your starting rating</span>
+          </div>
+          <LevelPicker levels={levels} value={rating} onChange={onSetLevel} labelledBy={levelLabelId} id="level" />
+        </section>
+      ) : null}
+
       <section class="sheet-section" aria-label="Opponent">
         <div
           class="ngs-hero"

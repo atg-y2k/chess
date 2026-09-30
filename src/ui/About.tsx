@@ -1,14 +1,25 @@
 /**
  * "About" section (in the Menu): the app's GPL notice, where to get the source, and the credits
- * and licenses of the components it ships (the bundled code has lost their license headers, so
- * the notices are shown here). The full GPL text is loaded on demand from the repository's
- * LICENSE (a separate chunk, precached like the rest of the app, so it also works offline).
+ * and licenses of the components it ships. The build also writes every bundled package's license
+ * text to THIRD-PARTY-LICENSES.txt next to the app, and the engine's source and license notes are
+ * in engine/README.md (with engine/COPYING-stockfish.txt); both are linked here. The full GPL text is
+ * loaded on demand from the repository's LICENSE (a separate chunk, precached like the rest of the
+ * app, so it also works offline).
  */
 import { useState } from 'preact/hooks';
 import './About.css';
 
-/** Public source of the app (GPL-3.0-or-later: the corresponding source must be offered). */
-export const SOURCE_URL = 'https://github.com/atg-y2k/chess';
+/**
+ * Where users get the app's source (GPL-3.0-or-later: the corresponding source must be offered).
+ * A build for another host sets VITE_SOURCE_URL (e.g. a source archive next to the app), as
+ * THIRD-PARTY-LICENSES.txt does.
+ */
+export const SOURCE_URL: string = (import.meta.env.VITE_SOURCE_URL as string | undefined) || 'https://github.com/atg-y2k/chess';
+
+/** The license texts of everything the build ships (written by the build next to index.html). */
+export const THIRD_PARTY_URL = `${import.meta.env.BASE_URL}THIRD-PARTY-LICENSES.txt`;
+/** The engine's source, license and checksums (public/engine/README.md, shipped with the app). */
+export const ENGINE_NOTES_URL = `${import.meta.env.BASE_URL}engine/README.md`;
 
 /** The GPL notice, after the app's name. */
 export const GPL_NOTICE =
@@ -123,6 +134,12 @@ export function About() {
         </a>
         <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener noreferrer">
           GPL-3.0 online
+        </a>
+        <a href={THIRD_PARTY_URL} target="_blank" rel="noopener" data-id="third-party">
+          Third-party licenses
+        </a>
+        <a href={ENGINE_NOTES_URL} target="_blank" rel="noopener" data-id="engine-notes">
+          Engine source and license
         </a>
       </p>
       <GplText />

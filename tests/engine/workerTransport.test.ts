@@ -6,6 +6,13 @@ import { createWorkerTransport, engineWasmUrl } from '../../src/engine/workerTra
 const SCRIPT = 'http://localhost/chess/engine/stockfish-19-lite-single.js';
 const WASM = 'http://localhost/chess/engine/stockfish-19-lite-single.wasm';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function until(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+  const t0 = Date.now();
+  while (!cond()) {
+    if (Date.now() - t0 > timeoutMs) throw new Error('timeout waiting for condition');
+    await sleep(5);
+  }
+}
 
 /** Stand-in for the engine's Web Worker: records what it is sent, lets the test play the worker. */
 class FakeWorker {
@@ -50,15 +57,25 @@ function listen(t: EngineTransport) {
 }
 
 let fetches: string[] = [];
-let respond: () => Promise<Response> = async () => new Response('wasm', { headers: { 'content-type': 'application/wasm' } });
+let inits: RequestInit[] = [];
+let respond: (init: RequestInit) => Promise<Response> = async () =>
+  new Response('wasm', { headers: { 'content-type': 'application/wasm' } });
+
+/** Like a real fetch that never gets an answer: pending until its signal aborts, then an AbortError. */
+const hang = (init: RequestInit) =>
+  new Promise<Response>((_, reject) => {
+    init.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')));
+  });
 
 beforeEach(() => {
   fetches = [];
+  inits = [];
   respond = async () => new Response('wasm', { headers: { 'content-type': 'application/wasm' } });
   vi.stubGlobal('Worker', FakeWorker);
-  vi.stubGlobal('fetch', (url: string) => {
+  vi.stubGlobal('fetch', (url: string, init: RequestInit = {}) => {
     fetches.push(String(url));
-    return respond();
+    inits.push(init);
+    return respond(init);
   });
 });
 afterEach(() => {
@@ -162,5 +179,53 @@ describe('createWorkerTransport', () => {
     expect(engineFailureKind(gb.errors[0])).toBe('crash');
     expect(gb.errors[0].message).toMatch(/unreachable/);
     b.terminate();
+  });
+
+  it('reads only the headers: a GET (served by the service worker offline) aborted once they arrive', async () => {
+    let pulled = 0;
+    // A body that would stream forever: the probe must not read it.
+    respond = async () =>
+      new Response(new ReadableStream({ pull: (c) => void (pulled++, c.enqueue(new Uint8Array(65536))) }), {
+        headers: { 'content-type': 'application/wasm' },
+      });
+    const t = createWorkerTransport(SCRIPT, { probeAfterMs: 50 });
+    const got = listen(t);
+    await sleep(120);
+    expect(fetches).toEqual([WASM]);
+    expect(inits[0].method ?? 'GET').toBe('GET'); // Workbox answers only GETs: a HEAD would miss the precache
+    expect(inits[0].signal?.aborted).toBe(true); // aborted right after the headers
+    expect(pulled).toBeLessThanOrEqual(1); // at most the stream's initial fill, never read on
+    expect(got.errors).toEqual([]);
+    t.terminate();
+  });
+
+  it('abandons a probe that gets no headers in time (no verdict) and tries again later', async () => {
+    respond = hang;
+    const t = createWorkerTransport(SCRIPT, { probeAfterMs: 50, probeTimeoutMs: 100 });
+    const got = listen(t);
+    await until(() => fetches.length === 1);
+    expect(inits[0].signal?.aborted).toBe(false);
+    await until(() => !!inits[0].signal?.aborted); // given up after probeTimeoutMs
+    expect(got.errors).toEqual([]); // a slow answer is not a failed download: the load timeout decides
+    await until(() => fetches.length === 2); // tried again (after twice the delay)
+    expect(inits[1].signal?.aborted).toBe(false);
+    t.terminate();
+    expect(inits[1].signal?.aborted).toBe(true); // closing aborts the probe in flight
+    await sleep(150);
+    expect(fetches).toHaveLength(2);
+    expect(got.errors).toEqual([]);
+  });
+
+  it('aborts a probe in flight when the engine speaks', async () => {
+    respond = hang;
+    const t = createWorkerTransport(SCRIPT, { probeAfterMs: 50 });
+    const got = listen(t);
+    await until(() => fetches.length === 1);
+    FakeWorker.last!.print('uciok');
+    expect(inits[0].signal?.aborted).toBe(true);
+    await sleep(20);
+    expect(got.errors).toEqual([]);
+    expect(got.lines).toEqual(['uciok']);
+    t.terminate();
   });
 });

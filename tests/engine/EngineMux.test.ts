@@ -171,6 +171,28 @@ describe('EngineMux (real engine)', () => {
     await expect(high.search('nope')).rejects.toThrow(/Invalid FEN/);
     await expect(low.search('nope')).rejects.toThrow(/Invalid FEN/);
   });
+
+  it('passes the game moves through on both lanes, also when a paused low search restarts', async () => {
+    // Kg8 repeats the position for the third time (see StockfishEngine.test.ts): only the
+    // engine that is given the moves scores it as a draw.
+    const start = '6k1/5ppp/8/8/8/8/5PPP/3Q2K1 w - - 0 1';
+    const moves = ['g1h1', 'g8h8', 'h1g1', 'h8g8', 'g1h1', 'g8h8', 'h1g1'];
+    const c = new Chess(start);
+    for (const m of moves) c.move({ from: m.slice(0, 2), to: m.slice(2, 4) });
+    const fen = c.fen();
+    const history = { startFen: start, moves };
+    const mark = out.length;
+    const lowP = low.search(fen, { depth: 40, multiPv: 2, history });
+    await sleep(100);
+    const h = await high.search(fen, { depth: 10, history });
+    await sleep(100); // the low search restarts
+    low.stop();
+    const l = await lowP;
+    expect(h.bestMove).toBe('h8g8');
+    expect(l.lines[0]?.pv[0]).toBe('h8g8');
+    const positions = out.slice(mark).filter((x) => x.startsWith('position'));
+    expect(positions).toEqual(Array(3).fill(`position fen ${start} moves ${moves.join(' ')}`));
+  });
 });
 
 describe('EngineMux termination', () => {

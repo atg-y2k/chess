@@ -18,6 +18,13 @@ const FENS = {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** FEN after playing UCI `moves` from `start`. */
+function play(start: string, moves: string[]): string {
+  const c = new Chess(start);
+  for (const m of moves) c.move({ from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] });
+  return c.fen();
+}
+
 function legalIn(fen: string, uci: string | null | undefined): boolean {
   if (!uci) return false;
   try {
@@ -243,6 +250,47 @@ describe('StockfishEngine (real engine)', () => {
     expect(idx).toBeGreaterThan(-1);
     const lastBest = t.log.findLastIndex((l) => l.dir === 'in' && l.line.startsWith('bestmove'));
     expect(idx).toBeGreaterThan(lastBest);
+  });
+
+  it('sees a threefold repetition when given the game moves (the bare FEN cannot)', async () => {
+    // White is a queen up. Both kings have shuffled g1-h1 / g8-h8 twice, so Kg8 now repeats the
+    // position for the third time: a draw, and Black's only way to save the game.
+    const start = '6k1/5ppp/8/8/8/8/5PPP/3Q2K1 w - - 0 1';
+    const moves = ['g1h1', 'g8h8', 'h1g1', 'h8g8', 'g1h1', 'g8h8', 'h1g1'];
+    const fen = play(start, moves);
+    const mark = t.log.length;
+    const blind = await t.engine.search(fen, { depth: 12, multiPv: 2 });
+    const seen = await t.engine.search(fen, { depth: 12, multiPv: 2, history: { startFen: start, moves } });
+    expect(blind.bestMove).not.toBe('h8g8');
+    expect(blind.lines[0].score.kind === 'mate' || blind.lines[0].score.value < -300).toBe(true);
+    expect(seen).toMatchObject({ fen, done: true, bestMove: 'h8g8' });
+    expect(seen.lines[0].score).toEqual({ kind: 'cp', value: 0 });
+    expect(seen.lines[1].score.kind === 'mate' || seen.lines[1].score.value < -300).toBe(true);
+    const sent = t.log.slice(mark).filter((l) => l.dir === 'out' && l.line.startsWith('position'));
+    expect(sent.map((l) => l.line)).toEqual([`position fen ${fen}`, `position fen ${start} moves ${moves.join(' ')}`]);
+  });
+
+  it('sends only the moves since the last irreversible one, and the bare FEN for a history that does not fit', async () => {
+    const moves = ['e2e4', 'e7e5', 'g1f3', 'b8c6', 'f1c4'];
+    const mark = t.log.length;
+    const respawns = t.engine.respawnCount;
+    const ok = await t.engine.search(FENS.italian, { depth: 6, history: { startFen: FENS.start, moves } });
+    const illegal = await t.engine.search(FENS.italian, {
+      depth: 6,
+      history: { startFen: FENS.start, moves: ['e2e4', 'e7e5', 'g1f3', 'b8c6', 'f1c5'] },
+    });
+    const elsewhere = await t.engine.search(FENS.italian, { depth: 6, history: { startFen: FENS.start, moves: ['e2e4'] } });
+    for (const r of [ok, illegal, elsewhere]) {
+      expect(r.done).toBe(true);
+      expect(legalIn(FENS.italian, r.bestMove)).toBe(true);
+    }
+    const sent = t.log.slice(mark).filter((l) => l.dir === 'out' && l.line.startsWith('position'));
+    expect(sent.map((l) => l.line)).toEqual([
+      `position fen ${play(FENS.start, moves.slice(0, 2))} moves g1f3 b8c6 f1c4`,
+      `position fen ${FENS.italian}`,
+      `position fen ${FENS.italian}`,
+    ]);
+    expect(t.engine.respawnCount).toBe(respawns);
   });
 });
 

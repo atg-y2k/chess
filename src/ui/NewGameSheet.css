@@ -1,5 +1,19 @@
 /* NewGameSheet: opponent hero + picker, Elo slider, colour choice, options, Play. */
 
+/* ---------------------------------------------------------------- your level (new players) */
+
+.ngs-level-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ngs-level-hint {
+  margin: 0 4px 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
 /* ---------------------------------------------------------------- hero (selected opponent) */
 
 .ngs-hero {

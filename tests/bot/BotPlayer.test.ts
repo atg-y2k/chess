@@ -318,4 +318,34 @@ describe('BotPlayer', () => {
     expect((await blind.move(cases[0].fen, 3150, cases[0].history))!.uci).toBe('a3a2');
     expect((await blind.move(cases[0].fen, 3150, Array(8).fill('e2e4'), undefined, start))!.uci).toBe('a3a2');
   });
+
+  it('sends the game moves with its searches (the conversion search too) only when they lead to the position', async () => {
+    const start = '8/8/3k4/8/8/8/8/R3K3 w - - 0 1';
+    const moves = ['a1a2', 'd6d5', 'a2a1', 'd5d6'];
+    const fen = play(start, moves);
+    const engine = new FakeEngine();
+    const bot = new BotPlayer(engine, { rng: mulberry32(7), thinkDelay: false });
+    await bot.newGame(1600);
+    const history = [...moves];
+    const m = (await bot.move(fen, 1600, history, undefined, start))!;
+    expect(isLegal(fen, m.uci)).toBe(true);
+    expect(engine.searches).toHaveLength(2); // the normal search and the deep conversion search
+    for (const s of engine.searches) {
+      expect(s.opts.history).toEqual({ startFen: start, moves });
+      expect(s.opts.history!.moves).not.toBe(history); // a copy: the caller may keep appending
+    }
+    // A history that does not replay to the position (wrong start, junk moves) is not sent.
+    for (const [h, st] of [
+      [moves, undefined],
+      [Array(4).fill('e2e4'), start],
+      [moves.slice(0, 3), start],
+    ] as [string[], string | undefined][]) {
+      const e2 = new FakeEngine();
+      const b2 = new BotPlayer(e2, { rng: mulberry32(7), thinkDelay: false });
+      await b2.newGame(1600);
+      expect(isLegal(fen, (await b2.move(fen, 1600, h, undefined, st))!.uci)).toBe(true);
+      expect(e2.searches.length).toBeGreaterThan(0);
+      for (const s of e2.searches) expect(s.opts.history).toBeUndefined();
+    }
+  });
 });

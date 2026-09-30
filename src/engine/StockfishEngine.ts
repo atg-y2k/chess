@@ -17,9 +17,13 @@
  *  - The load timeout measures silence, not total time: `.wasm` download progress (when the
  *    transport reports it) counts as a sign of life, so a slow connection is not a dead engine.
  *    A failed first start rejects `init()` with an `EngineLoadError` saying why.
+ *  - With `SearchOptions.history` the position is sent as `position fen … moves …` when chess.js
+ *    confirms the moves legally reach the searched FEN (see ./position), so the engine sees
+ *    repetitions; otherwise, and without history, as the bare FEN.
  */
 import { Chess, type Square } from 'chess.js';
 import { EngineLoadError } from './errors';
+import { PositionCommands } from './position';
 import type { AnalysisResult, ChessEngine, DownloadProgress, EngineTransport, PvLine, SearchOptions } from './types';
 import { MultiPvCollector, goCommand, parseUciLine, setOptionCommand, toPvLine, type OptionValue } from './uci';
 
@@ -103,7 +107,8 @@ type Phase =
 
 interface Job {
   fen: string;
-  engineFen: string;
+  /** UCI `position` command for this search. */
+  position: string;
   opts: SearchOptions;
   collector: MultiPvCollector;
   lines: PvLine[];
@@ -152,6 +157,9 @@ export class StockfishEngine implements ChessEngine {
   private newGamePending = false;
   private newGameWaiters: Waiter[] = [];
   private newGameInFlight: Waiter[] = [];
+
+  /** Builds `position` commands (keeps the last history replay). */
+  private readonly positions = new PositionCommands();
 
   private respawnTimes: number[] = [];
   private respawnTotal = 0;
@@ -222,7 +230,7 @@ export class StockfishEngine implements ChessEngine {
       const multiPv = clampInt(opts.multiPv ?? 1, 1, 256);
       const job: Job = {
         fen,
-        engineFen: pos.fen,
+        position: this.positions.command(pos.fen, opts.history),
         opts,
         collector: new MultiPvCollector(Math.min(multiPv, pos.legalMoves)),
         lines: [],
@@ -531,7 +539,7 @@ export class StockfishEngine implements ChessEngine {
       this.pump();
       return;
     }
-    this.send(`position fen ${job.engineFen}`);
+    this.send(job.position);
     this.send(goCommand(job.opts));
     job.goSent = true;
     this.stopSentAt = 0;

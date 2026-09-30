@@ -19,11 +19,19 @@ import { hashSeed, mulberry32 } from '../bot/strength';
 import type { BotMove } from '../bot/types';
 import { START_FEN, fenKey, formatLine, otherColor, parseUci, pvToSan, toWhitePov, uciToSan } from '../chess/utils';
 import { AnalysisService, type AnalysisServiceOptions } from '../engine/AnalysisService';
-import { createEngines, type EngineSet } from '../engine/createEngines';
+import { createEngines, type EngineLoadProgress, type EngineSet } from '../engine/createEngines';
+import { EngineLoadError, engineFailureKind } from '../engine/errors';
 import { inspectPosition } from '../engine/StockfishEngine';
 import type { AnalysisResult, ChessEngine, Score } from '../engine/types';
 import { engineSupported } from '../engine/workerTransport';
-import { applyGameResult, loadProfile, playerScoreFor, saveProfile, updateGameRecord } from '../rating/rating';
+import {
+  applyGameResult,
+  loadProfile,
+  playerScoreFor,
+  saveProfile,
+  setStartingRating as withStartingRating,
+  updateGameRecord,
+} from '../rating/rating';
 import type { GameRecord } from '../rating/types';
 import { answerFreeLines, repetitionExplanation } from './coach';
 import {
@@ -64,7 +72,13 @@ export const ANNOTATE_DEPTH = 14;
 /** MultiPV of the per-ply annotations. */
 export const ANNOTATE_MULTIPV = 3;
 /** Shown when the engine cannot start. */
+export const ENGINE_START_FAILED = 'The chess engine could not start.';
+/** Advice when the browser lacks Web Workers or WebAssembly SIMD. */
 export const ENGINE_ADVICE = 'Your browser may not support WebAssembly SIMD (iOS 16.4+ required).';
+/** Advice when the engine files could not be downloaded (the app retries once when back online). */
+export const ENGINE_DOWNLOAD_ADVICE = 'Couldn’t download the chess engine. Check your connection and tap Try again.';
+/** Advice for any other start failure (a timeout or a crash while loading). */
+export const ENGINE_RETRY_ADVICE = 'Tap Try again. If it keeps happening, close and reopen the app.';
 /** Shown when an engine stops working during a game (it crashed and could not be restarted). */
 export const ENGINE_STOPPED = 'The chess engine stopped working.';
 export const ENGINE_STOPPED_ADVICE = 'Tap Try again to restart it. Your game is saved.';
@@ -78,13 +92,34 @@ export interface SoundPort {
 /** What the controller needs from a bot (BotPlayer implements it). */
 export interface BotLike {
   newGame(elo: number): Promise<void>;
-  move(fen: string, elo: number, history: string[], signal?: AbortSignal): Promise<BotMove | null>;
+  /**
+   * `history` = UCI moves from `startFen` (the game's start position; default the initial
+   * position), so the bot can use its opening book and see repetitions.
+   */
+  move(fen: string, elo: number, history: string[], signal?: AbortSignal, startFen?: string): Promise<BotMove | null>;
+}
+
+/** What the controller passes to the engine factory. */
+export interface CreateEnginesRequest {
+  /** `.wasm` download progress of each engine (the boot splash shows the analysis engine's). */
+  onProgress: (progress: EngineLoadProgress) => void;
+}
+
+/** Minimal event source for the `online` event (the window). */
+export interface OnlineEvents {
+  addEventListener(type: 'online', listener: () => void): void;
+  removeEventListener(type: 'online', listener: () => void): void;
 }
 
 /** Injectable dependencies (all optional; tests replace the engine, storage, clock and randomness). */
 export interface ControllerDeps {
-  /** Engine factory (default: `createEngines()` after a WebAssembly SIMD check). */
-  createEngines?: () => Promise<EngineSet>;
+  /**
+   * Engine factory (default: `createEngines()` after a Web Worker / WebAssembly SIMD check). A
+   * rejection should be an `EngineLoadError` when the cause is known (see engine/errors.ts).
+   */
+  createEngines?: (request: CreateEnginesRequest) => Promise<EngineSet>;
+  /** Where the `online` event comes from, to retry a failed engine download (default: window; null = none). */
+  onlineEvents?: OnlineEvents | null;
   /** Storage for settings, profile and the saved game (default: localStorage). */
   storage?: KeyValueStorage | null;
   /** Randomness for the "random" colour (default Math.random). */
@@ -115,9 +150,21 @@ const uciOf = (m: Pick<Move, 'from' | 'to' | 'promotion'>): string => m.from + m
 const LINE_DETAIL = /^(Main line|Key line|The finish):/;
 const prevMoveOf = (p: Ply): PrevMove => ({ to: p.uci.slice(2, 4), ...(p.captured ? { captured: p.captured } : {}) });
 
-async function defaultCreateEngines(): Promise<EngineSet> {
-  if (!engineSupported()) throw new Error('Web Workers or WebAssembly SIMD are not available.');
-  return createEngines();
+async function defaultCreateEngines(request: CreateEnginesRequest): Promise<EngineSet> {
+  if (!engineSupported()) throw new EngineLoadError('Web Workers or WebAssembly SIMD are not available.', 'unsupported');
+  return createEngines({ onProgress: request.onProgress });
+}
+
+/** The error screen's advice for an engine that could not start. */
+export function engineStartAdvice(e: unknown): string {
+  switch (engineFailureKind(e)) {
+    case 'unsupported':
+      return ENGINE_ADVICE;
+    case 'download':
+      return ENGINE_DOWNLOAD_ADVICE;
+    default:
+      return ENGINE_RETRY_ADVICE;
+  }
 }
 
 /**
@@ -188,7 +235,10 @@ export class GameController {
   private readonly sound: SoundPort;
   private readonly now: () => number;
   private readonly thinkDelay: boolean;
-  private readonly makeEngines: () => Promise<EngineSet>;
+  private readonly makeEngines: (request: CreateEnginesRequest) => Promise<EngineSet>;
+  private readonly onlineEvents: OnlineEvents | null;
+  /** Removes the pending "retry when back online" listener, if any. */
+  private offlineRetry: (() => void) | null = null;
   private readonly makeBotPlayer: NonNullable<ControllerDeps['createBot']>;
   private readonly createId: () => string;
   private readonly analysisOptions: AnalysisServiceOptions;
@@ -219,6 +269,8 @@ export class GameController {
     this.now = deps.now ?? Date.now;
     this.thinkDelay = deps.thinkDelay ?? true;
     this.makeEngines = deps.createEngines ?? defaultCreateEngines;
+    this.onlineEvents =
+      deps.onlineEvents !== undefined ? deps.onlineEvents : typeof window === 'undefined' ? null : (window as OnlineEvents);
     this.makeBotPlayer = deps.createBot ?? ((engine, opts) => new BotPlayer(engine, opts));
     this.createId = deps.createId ?? createGameId;
     this.analysisOptions = deps.analysisOptions ?? {};
@@ -249,14 +301,17 @@ export class GameController {
 
   /** Stops everything and terminates the engines. */
   dispose(): void {
+    this.cancelOnlineRetry();
     this.teardown();
   }
 
   private async doBoot(): Promise<void> {
     const s = this.s;
+    this.cancelOnlineRetry();
     batch(() => {
       s.phase.value = 'boot';
       s.error.value = null;
+      s.engineDownload.value = null;
       s.settings.value = loadSettings(this.storage);
       s.profile.value = loadProfile(this.storage);
     });
@@ -267,20 +322,27 @@ export class GameController {
       (e: unknown) => console.warn('[game] opening book unavailable', e),
     );
     let engines: EngineSet;
+    const onProgress = (p: EngineLoadProgress) => {
+      if (p.engine !== 'analysis' || s.phase.value !== 'boot' || !(p.total > 0)) return;
+      s.engineDownload.value = Math.max(0, Math.min(1, p.loaded / p.total));
+    };
     try {
-      engines = await this.makeEngines();
+      engines = await this.makeEngines({ onProgress });
     } catch (e) {
       console.error('[game] engine start failed', e);
       batch(() => {
         s.error.value = {
-          message: 'The chess engine could not start.',
-          advice: ENGINE_ADVICE,
+          message: ENGINE_START_FAILED,
+          advice: engineStartAdvice(e),
           detail: e instanceof Error ? e.message : String(e),
         };
+        s.engineDownload.value = null;
         s.phase.value = 'error';
       });
+      if (engineFailureKind(e) === 'download') this.retryWhenOnline();
       return;
     }
+    s.engineDownload.value = null;
     this.engines = engines;
     const fatal = (which: 'analysis' | 'bot') => (e: unknown) => this.onEngineFailure(engines, which, e);
     this.botEngine = monitorEngine(engines.bot, fatal('bot'));
@@ -304,6 +366,25 @@ export class GameController {
         s.sheet.value = 'new';
       });
     }
+  }
+
+  /** After a failed engine download: boot again (once) when the device comes back online. */
+  private retryWhenOnline(): void {
+    const target = this.onlineEvents;
+    if (!target) return;
+    this.cancelOnlineRetry();
+    const error = this.s.error.value;
+    const onOnline = () => {
+      this.cancelOnlineRetry();
+      if (this.s.phase.value === 'error' && this.s.error.value === error) void this.retry();
+    };
+    target.addEventListener('online', onOnline);
+    this.offlineRetry = () => target.removeEventListener('online', onOnline);
+  }
+
+  private cancelOnlineRetry(): void {
+    this.offlineRetry?.();
+    this.offlineRetry = null;
   }
 
   private teardown(): void {
@@ -460,6 +541,19 @@ export class GameController {
       },
       g.startFen,
     );
+  }
+
+  /**
+   * Sets the player's rating to a starting level (see STARTING_LEVELS in rating/rating.ts) and
+   * saves the profile: the New Game sheet's "Your level" for a brand-new player, and the Menu's
+   * "Set my level". The rating becomes provisional again; "Match my rating" follows it.
+   */
+  setStartingRating(rating: number): void {
+    if (!Number.isFinite(rating)) return;
+    const s = this.s;
+    const profile = withStartingRating(s.profile.value, rating);
+    saveProfile(profile, this.storage);
+    s.profile.value = profile;
   }
 
   private startGame(settings: GameSettings, startFen = START_FEN): void {
@@ -624,7 +718,7 @@ export class GameController {
       try {
         await this.botReady;
         if (!stillCurrent()) return;
-        const move = await bot.move(fen, g.botElo, history, ctl.signal);
+        const move = await bot.move(fen, g.botElo, history, ctl.signal, g.startFen);
         if (this.botCtl === ctl) {
           this.botCtl = null;
           s.botThinking.value = false;
@@ -862,7 +956,11 @@ export class GameController {
     const prev = s.plies.value.at(-1);
     let explanation: Explanation;
     if (line) {
-      const e = explainBestMove(fen, line, { prevMove: prev ? prevMoveOf(prev) : undefined, perspective: 'you' });
+      const e = explainBestMove(fen, line, {
+        prevMove: prev ? prevMoveOf(prev) : undefined,
+        perspective: 'you',
+        lines: r.lines,
+      });
       explanation = { ...e, arrows: e.arrows?.length ? e.arrows : uciArrow(line.pv[0], 'best') };
       this.markAssisted();
     } else {
@@ -991,6 +1089,8 @@ export class GameController {
       const e = explainBestMove(ply.fenBefore, line, {
         prevMove: prev ? prevMoveOf(prev) : undefined,
         perspective: human ? 'you' : 'neutral',
+        // All engine lines, as the hint and the feedback on a best move use them (same wording).
+        lines: before?.lines,
       });
       const san = pvToSan(ply.fenBefore, line.pv, 8);
       const bestLine = san.length > 1 ? `Best line: ${formatLine(ply.fenBefore, san)}` : null;
@@ -1269,6 +1369,10 @@ export class GameController {
       return current() ? 'failed' : 'stale';
     }
     if (!current()) return 'stale';
+    // A search cut short (pre-empted, cancelled, or the engine restarted) below the annotation
+    // depth is not a verdict: retry later. A terminal position legitimately has depth 0.
+    const shallow = (r: AnalysisResult) => r.aborted === true && !r.terminal && r.depth < ANNOTATE_DEPTH;
+    if (shallow(before) || shallow(after)) return 'failed';
     const afterScore = resultScore(after);
     if (!before.lines.length || !afterScore) return 'failed';
     await this.openingsReady;
@@ -1292,6 +1396,7 @@ export class GameController {
       isBook,
       playerRating: human ? s.profile.value.rating : g.botElo,
       prevMove: prevMove ? { to: prevMove.to } : undefined,
+      prevFenBefore: prev?.fenBefore,
     });
     const explanation = repetition
       ? repetitionExplanation(ply.san, classification, { human, botName: g.bot.name })

@@ -10,7 +10,9 @@
  *  - While the worker is silent (no output, no progress) for a few seconds, the `.wasm` is probed
  *    from the main thread (through the same service worker and HTTP cache). An HTTP error, a
  *    network error or a non-wasm content type is reported through `onError` right away, as an
- *    `EngineLoadError` of kind 'download', instead of after the full load timeout.
+ *    `EngineLoadError` of kind 'download', instead of after the full load timeout. The probe
+ *    reads the response headers only and then aborts its request, so it never becomes a second
+ *    download of the engine next to the worker's own (see `probeWasm`).
  */
 import { EngineLoadError } from './errors';
 import type { DownloadProgress, EngineTransport } from './types';
@@ -52,6 +54,8 @@ export function engineSupported(): boolean {
 export interface WorkerTransportOptions {
   /** Silence (no output, no download progress) before the `.wasm` is probed. Doubles after each good probe. Default 3000 ms. */
   probeAfterMs?: number;
+  /** A probe still without response headers after this long is abandoned (no verdict) and tried again later. Default 10000 ms. */
+  probeTimeoutMs?: number;
 }
 
 /**
@@ -110,7 +114,10 @@ export function createWorkerTransport(url: string = engineScriptUrl(), opts: Wor
   // A failed .wasm fetch is invisible from here (the worker only logs it): if the worker stays
   // silent, look at the .wasm ourselves.
   let probeDelay = opts.probeAfterMs ?? 3000;
+  const probeTimeoutMs = opts.probeTimeoutMs ?? 10_000;
   let probeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The probe request in flight (aborted when the engine speaks or the transport closes). */
+  let probe: AbortController | null = null;
   const checkQuiet = () => {
     probeTimer = null;
     if (closed || spoke) return;
@@ -119,7 +126,12 @@ export function createWorkerTransport(url: string = engineScriptUrl(), opts: Wor
       probeTimer = setTimeout(checkQuiet, probeDelay - quiet);
       return;
     }
-    void probeWasm(engineWasmUrl(url)).then((problem) => {
+    const ctl = new AbortController();
+    probe = ctl;
+    const giveUp = setTimeout(() => ctl.abort(), probeTimeoutMs);
+    void probeWasm(engineWasmUrl(url), ctl).then((problem) => {
+      clearTimeout(giveUp);
+      if (probe === ctl) probe = null;
       if (closed || spoke) return;
       if (problem) {
         emitError(new EngineLoadError(problem, 'download'));
@@ -134,6 +146,8 @@ export function createWorkerTransport(url: string = engineScriptUrl(), opts: Wor
   const stopWatching = () => {
     if (probeTimer) clearTimeout(probeTimer);
     probeTimer = null;
+    probe?.abort();
+    probe = null;
     closePort();
   };
 
@@ -202,18 +216,27 @@ export function createWorkerTransport(url: string = engineScriptUrl(), opts: Wor
 }
 
 /**
- * Fetches the `.wasm` from the main thread (headers only; the body is cancelled) and returns
- * what is wrong with it, or null when it looks downloadable.
+ * Requests the `.wasm` from the main thread and returns what is wrong with it, or null when it
+ * looks downloadable. Null too when `ctl` was aborted before the headers came (the transport
+ * closed, or the probe timed out): no verdict.
+ *
+ * Only the headers are wanted, so the request is aborted as soon as they arrive: on a slow first
+ * launch the probe costs a few kilobytes at most, not a second copy of the 1.8 MB file next to the
+ * worker's own download (aborting is the dependable way to stop a transfer; a cancelled body
+ * stream is not guaranteed to stop it in every browser).
+ * It is a GET, not a HEAD, because the service worker (Workbox precache) answers only GETs:
+ * offline, a HEAD would go to the network and fail although the engine is installed.
  */
-async function probeWasm(wasmUrl: string): Promise<string | null> {
+async function probeWasm(wasmUrl: string, ctl: AbortController): Promise<string | null> {
   if (typeof fetch !== 'function') return null;
   let res: Response;
   try {
-    res = await fetch(wasmUrl, { credentials: 'same-origin' });
+    res = await fetch(wasmUrl, { method: 'GET', credentials: 'same-origin', signal: ctl.signal });
   } catch (e) {
+    if (ctl.signal.aborted) return null;
     return `Could not download the chess engine (${e instanceof Error ? e.message : String(e)})`;
   }
-  void res.body?.cancel().catch(() => undefined);
+  ctl.abort(); // the headers are all we need: stop the body download
   if (!res.ok) return `Could not download the chess engine: HTTP ${res.status} for ${wasmUrl}`;
   const type = res.headers.get('content-type');
   // WebAssembly.instantiateStreaming (used by the worker) rejects anything but application/wasm.

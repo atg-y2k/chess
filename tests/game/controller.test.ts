@@ -4,16 +4,30 @@ vi.mock('../../src/analysis/classify', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../src/analysis/classify')>();
   return { ...mod, classifyMove: vi.fn(mod.classifyMove) };
 });
+vi.mock('../../src/analysis/explain', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../src/analysis/explain')>();
+  return { ...mod, explainBestMove: vi.fn(mod.explainBestMove) };
+});
 
 import { Chess } from 'chess.js';
 import { classifyMove } from '../../src/analysis/classify';
+import { explainBestMove } from '../../src/analysis/explain';
 import { START_FEN } from '../../src/chess/utils';
 import { AnalysisService } from '../../src/engine/AnalysisService';
-import type { EngineSet } from '../../src/engine/createEngines';
 import { RETRY_CLASSES, mentionsMove } from '../../src/game/coach';
 import { buildPgn, pgnEval } from '../../src/game/pgn';
 import { summarizeGame } from '../../src/game/review';
-import { ENGINE_ADVICE, ENGINE_STOPPED, GameController, type BotLike } from '../../src/game/controller';
+import { EngineLoadError } from '../../src/engine/errors';
+import {
+  ENGINE_ADVICE,
+  ENGINE_DOWNLOAD_ADVICE,
+  ENGINE_RETRY_ADVICE,
+  ENGINE_STOPPED,
+  GameController,
+  type BotLike,
+  type ControllerDeps,
+  type OnlineEvents,
+} from '../../src/game/controller';
 import { loadGame } from '../../src/game/persistence';
 import { DEFAULT_SETTINGS, type GameSettings, type Ply, type PromotionPiece } from '../../src/game/types';
 import { defaultProfile, loadProfile, saveProfile } from '../../src/rating/rating';
@@ -26,7 +40,8 @@ interface SetupOptions {
   bot?: BotLike;
   storage?: MemoryStorage;
   rng?: () => number;
-  createEngines?: () => Promise<EngineSet>;
+  createEngines?: ControllerDeps['createEngines'];
+  onlineEvents?: OnlineEvents | null;
 }
 
 function setup(o: SetupOptions = {}) {
@@ -36,6 +51,7 @@ function setup(o: SetupOptions = {}) {
   let n = 0;
   const controller = new GameController({
     createEngines: o.createEngines ?? (async () => engines.set),
+    onlineEvents: o.onlineEvents ?? null,
     storage,
     sound,
     thinkDelay: false,
@@ -72,6 +88,7 @@ const annotated = (p: Ply) => !!(p.classification && p.explanation && p.evalWhit
 
 beforeEach(() => {
   vi.mocked(classifyMove).mockClear();
+  vi.mocked(explainBestMove).mockClear();
 });
 
 afterEach(() => {
@@ -99,7 +116,7 @@ describe('boot', () => {
     const engines = fakeEngineSet();
     const { controller, store } = setup({
       createEngines: async () => {
-        if (fail) throw new Error('no SIMD');
+        if (fail) throw new EngineLoadError('Web Workers or WebAssembly SIMD are not available.', 'unsupported');
         return engines.set;
       },
     });
@@ -113,6 +130,131 @@ describe('boot', () => {
     await controller.retry();
     expect(store.phase.value).toBe('setup');
     expect(store.error.value).toBeNull();
+  });
+
+  it('picks the advice by failure kind: a timeout or crash says to try again', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const e of [new EngineLoadError('no answer', 'timeout'), new EngineLoadError('boom', 'crash'), new Error('?')]) {
+      const { controller, store } = setup({ createEngines: async () => Promise.reject(e) });
+      await controller.boot();
+      expect(store.phase.value).toBe('error');
+      expect(store.error.value?.advice).toBe(ENGINE_RETRY_ADVICE);
+      expect(store.error.value?.detail).toBe(e.message);
+    }
+  });
+
+  it('a failed download says to check the connection and retries once when back online', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const online = new EventTarget();
+    let attempts = 0;
+    let fail = true;
+    const engines = fakeEngineSet();
+    const { controller, store } = setup({
+      onlineEvents: online as OnlineEvents,
+      createEngines: async () => {
+        attempts++;
+        if (fail) throw new EngineLoadError('HTTP 503', 'download');
+        return engines.set;
+      },
+    });
+    await controller.boot();
+    expect(store.phase.value).toBe('error');
+    expect(store.error.value?.advice).toBe(ENGINE_DOWNLOAD_ADVICE);
+    expect(ENGINE_DOWNLOAD_ADVICE).toMatch(/^Couldn’t download the chess engine\. Check your connection/);
+    // Still offline: the retry fails the same way and waits for the next 'online' event.
+    online.dispatchEvent(new Event('online'));
+    await vi.waitFor(() => expect(attempts).toBe(2));
+    await vi.waitFor(() => expect(store.phase.value).toBe('error'));
+    fail = false;
+    online.dispatchEvent(new Event('online'));
+    await vi.waitFor(() => expect(store.phase.value).toBe('setup'));
+    expect(attempts).toBe(3);
+    // Once running, going online again does nothing.
+    online.dispatchEvent(new Event('online'));
+    await controller.idle();
+    expect(attempts).toBe(3);
+  });
+
+  it('a manual Try again cancels the pending online retry', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const online = new EventTarget();
+    let attempts = 0;
+    const engines = fakeEngineSet();
+    const { controller, store } = setup({
+      onlineEvents: online as OnlineEvents,
+      createEngines: async () => {
+        if (++attempts === 1) throw new EngineLoadError('offline', 'download');
+        return engines.set;
+      },
+    });
+    await controller.boot();
+    expect(store.phase.value).toBe('error');
+    await controller.retry();
+    expect(store.phase.value).toBe('setup');
+    online.dispatchEvent(new Event('online'));
+    await controller.idle();
+    expect(attempts).toBe(2);
+  });
+
+  it('reports the analysis engine download progress while booting', async () => {
+    const engines = fakeEngineSet();
+    const seen: (number | null)[] = [];
+    let release!: () => void;
+    const { controller, store } = setup({
+      createEngines: async ({ onProgress }) => {
+        onProgress({ engine: 'analysis', loaded: 0, total: 0 });
+        seen.push(store.engineDownload.value);
+        onProgress({ engine: 'analysis', loaded: 500, total: 2000 });
+        seen.push(store.engineDownload.value);
+        onProgress({ engine: 'bot', loaded: 2000, total: 2000 });
+        seen.push(store.engineDownload.value);
+        onProgress({ engine: 'analysis', loaded: 1500, total: 2000 });
+        seen.push(store.engineDownload.value);
+        await new Promise<void>((r) => (release = r));
+        return engines.set;
+      },
+    });
+    const booting = controller.boot();
+    await vi.waitFor(() => expect(seen).toHaveLength(4));
+    expect(seen).toEqual([null, 0.25, 0.25, 0.75]);
+    release();
+    await booting;
+    expect(store.engineDownload.value).toBeNull();
+  });
+});
+
+describe('starting level', () => {
+  it('a brand-new player can pick a level: saved, provisional, and "Match my rating" follows it', async () => {
+    const { controller, store, storage } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    expect(store.sheets.value.newGame.newPlayer).toBe(true);
+    expect(store.sheets.value.newGame.playerRating).toBe(800);
+    controller.setStartingRating(1600);
+    expect(store.profile.value.rating).toBe(1600);
+    expect(store.profile.value.gamesPlayed).toBe(0);
+    expect(loadProfile(storage).rating).toBe(1600);
+    expect(store.sheets.value.newGame.playerRating).toBe(1600);
+    expect(store.sheets.value.newGame.newPlayer).toBe(true);
+    controller.newGame(settings({ adaptive: true }));
+    expect(store.game.value?.botElo).toBe(1600);
+    expect(store.bottomPlayer.value.rating).toBe(1600);
+  });
+
+  it('is not offered once a game is in the history; Set my level still works and keeps it', async () => {
+    const storage = new MemoryStorage();
+    const { controller, store } = setup({ storage });
+    await controller.boot();
+    controller.newGame(settings());
+    controller.resign();
+    expect(store.profile.value.history).toHaveLength(1);
+    expect(store.sheets.value.newGame.newPlayer).toBe(false);
+    controller.setStartingRating(2000);
+    expect(store.profile.value.rating).toBe(2000);
+    expect(store.profile.value.history).toHaveLength(1);
+    expect(store.sheets.value.newGame.newPlayer).toBe(false);
+    expect(loadProfile(storage).rating).toBe(2000);
+    controller.setStartingRating(Number.NaN);
+    expect(store.profile.value.rating).toBe(2000);
   });
 });
 
@@ -327,6 +469,22 @@ describe('game end', () => {
     expect(store.outcome.value?.reason).toBe('Threefold repetition');
   });
 
+  it("passes the game's start position to the bot with the move history", async () => {
+    const bot = new ScriptedBot(['e8d7']);
+    const { controller } = setup({ bot });
+    await controller.boot();
+    const startFen = '4k3/8/8/8/8/8/4P3/4K3 w - - 0 1';
+    controller.newGame(settings(), { startFen });
+    await playAll(controller, ['e2e4', 'e1e2']);
+    expect(bot.calls.map((c) => ({ history: c.history, startFen: c.startFen }))).toEqual([
+      { history: ['e2e4'], startFen },
+      { history: ['e2e4', 'e8d7', 'e1e2'], startFen },
+    ]);
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    expect(bot.calls.at(-1)).toMatchObject({ history: ['e2e4'], startFen: START_FEN });
+  });
+
   it('detects insufficient material and the 50-move rule', async () => {
     const { controller, store } = setup({ bot: new ScriptedBot() });
     await controller.boot();
@@ -378,9 +536,11 @@ describe('annotations and coach', () => {
     for (let i = 1; i < calls.length; i++) {
       expect(calls[i].opponentPrevWinLoss).toBe(plies[i - 1].classification!.winLoss);
       expect(calls[i].prevMove).toEqual({ to: plies[i - 1].uci.slice(2, 4) });
+      expect(calls[i].prevFenBefore).toBe(plies[i - 1].fenBefore);
       expect(calls[i].before.lines.length).toBeGreaterThan(1);
       expect(calls[i].after).toBeDefined();
     }
+    expect(calls[0].prevFenBefore).toBeUndefined();
     expect(calls[0].playerRating).toBe(800);
     expect(calls[1].playerRating).toBe(100);
     expect(plies[0].isBook).toBe(true);
@@ -477,6 +637,25 @@ describe('annotations and coach', () => {
     expect(store.toolbar.value.hint.active).toBe(true);
     await controller.hint(); // toggles it off
     expect(store.coach.value.kind).not.toBe('hint');
+  });
+
+  it('hint passes all engine lines to explainBestMove, so it can compare the alternatives', async () => {
+    const { controller, store, engines } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    await controller.hint();
+    const fen = store.liveFen.value;
+    const calls = vi.mocked(explainBestMove).mock.calls.filter((c) => c[0] === fen);
+    expect(calls).toHaveLength(1);
+    const [, line, opts] = calls[0];
+    const search = engines.analysis.searches.findLast((q) => q.fen === fen);
+    expect(search?.opts.multiPv).toBe(3);
+    expect(opts?.lines).toHaveLength(3);
+    expect(opts?.lines?.[0]).toEqual(line);
+    expect(opts?.lines?.map((l) => l.multipv)).toEqual([1, 2, 3]);
+    expect(opts?.perspective).toBe('you');
+    expect(opts?.prevMove).toEqual({ to: 'e5' });
   });
 
   it('best-move arrows: switching them on mid-game marks it assisted and draws the live top lines', async () => {
@@ -1103,6 +1282,45 @@ describe('engine failure', () => {
     expect(store.plies.value[0].classification).toBeDefined();
     expect(store.coach.value.title).toMatch(/^1\. e4 is /);
   });
+
+  it('a search cut short below the annotation depth is retried, not taken as the verdict', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    controller.newGame(settings());
+    // Pre-empted at depth 6 with lines: a partial result, not an annotation.
+    const ensure = vi.spyOn(AnalysisService.prototype, 'ensure');
+    ensure.mockImplementationOnce(async (fen: string) => ({
+      fen,
+      depth: 6,
+      lines: [{ multipv: 1, depth: 6, score: { kind: 'cp', value: 30 }, pv: ['e7e5'] }],
+      bestMove: null,
+      done: false,
+      aborted: true,
+    }));
+    await playAll(controller, ['e2e4']);
+    expect(store.plies.value[0].classification).toBeUndefined();
+    expect(store.plies.value[0].evalDepth).toBeUndefined();
+    expect(store.coach.value.actions.map((a) => a.id)).toEqual(['retryAnalysis']);
+    ensure.mockRestore();
+    controller.runAction('retryAnalysis');
+    await controller.idle();
+    expect(store.plies.value[0].classification).toBeDefined();
+    expect(store.plies.value[0].evalDepth).toBeGreaterThanOrEqual(14);
+  });
+
+  it('an aborted result that already reached the annotation depth is used', async () => {
+    const { controller, store } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    controller.newGame(settings());
+    const real = AnalysisService.prototype.ensure;
+    vi.spyOn(AnalysisService.prototype, 'ensure').mockImplementation(async function (this: AnalysisService, fen, opts) {
+      const r = await real.call(this, fen, opts);
+      return { ...r, aborted: true, done: false };
+    });
+    await playAll(controller, ['e2e4']);
+    expect(store.plies.value[0].classification).toBeDefined();
+    expect(store.coach.value.title).toMatch(/^1\. e4 is /);
+  });
 });
 
 describe('draws the engine cannot see', () => {
@@ -1150,6 +1368,10 @@ describe('Show best', () => {
     expect(lines).toContain(`You played Qxf7+. ${ply.explanation!.headline}`);
     const variations = lines.filter((l) => /^(Main line|Key line|The finish|Best line):/.test(l));
     expect(variations.length).toBeLessThanOrEqual(1);
+    // Explained with all the engine lines of that position, like the hint.
+    const call = vi.mocked(explainBestMove).mock.calls.findLast((c) => c[0] === ply.fenBefore);
+    expect(call?.[2]?.lines?.length).toBeGreaterThan(1);
+    expect(call?.[2]?.lines).toContainEqual(call?.[1]);
     bot.release();
   });
 });

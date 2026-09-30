@@ -38,7 +38,9 @@ import {
   classLabel,
   classSentence,
   coachTip,
+  mentionsMove,
   moveLabel,
+  offersShowBest,
 } from './coach';
 import type { ReviewSummary } from './review';
 import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings, type Ply } from './types';
@@ -134,6 +136,8 @@ export interface AppState {
   phase: Signal<Phase>;
   error: Signal<AppError | null>;
   engineMode: Signal<EngineMode | null>;
+  /** Download progress (0..1) of the analysis engine's `.wasm` while booting; null when not reported. */
+  engineDownload: Signal<number | null>;
   settings: Signal<GameSettings>;
   profile: Signal<PlayerProfile>;
   game: Signal<GameInfo | null>;
@@ -232,6 +236,8 @@ export interface SheetsView {
     bots: BotPersona[];
     /** A game the human has moved in is still going: starting another ends it (a loss unless unrated). */
     inProgress: { rated: boolean } | null;
+    /** No games played yet: the sheet offers a starting level ("Your level"). */
+    newPlayer: boolean;
   };
   /** The unrated-help confirmation (null unless one is pending). */
   assist: { kind: AssistKind } | null;
@@ -333,6 +339,11 @@ export function positionInfo(fen: string): PositionInfo {
   }
 }
 
+/** A brand-new player: no rated games counted and nothing in the history. */
+export function isNewPlayer(p: PlayerProfile): boolean {
+  return p.gamesPlayed === 0 && p.history.length === 0;
+}
+
 /** The persona the settings describe (adaptive = custom opponent at the suggested Elo). */
 export function personaForSettings(s: GameSettings, profile: PlayerProfile): BotPersona {
   if (s.adaptive) return customPersona(suggestedOpponentElo(profile));
@@ -379,6 +390,7 @@ export function createState(init: { settings?: GameSettings; profile: PlayerProf
     phase: signal<Phase>('boot'),
     error: signal<AppError | null>(null),
     engineMode: signal<EngineMode | null>(null),
+    engineDownload: signal<number | null>(null),
     settings: signal<GameSettings>(init.settings ?? { ...DEFAULT_SETTINGS }),
     profile: signal<PlayerProfile>(init.profile),
     game: signal<GameInfo | null>(null),
@@ -466,8 +478,8 @@ export function createStore(state: AppState): Store {
     }
     if (phase.value === 'review') {
       const ply = displayedPly.value;
-      const best = ply?.classification?.bestMoveUci;
-      if (ply && best && best !== ply.uci && !TOP_CLASSES.has(ply.classification!.cls)) return uciArrow(best, 'best');
+      const cl = ply?.classification;
+      if (ply && cl && offersShowBest(cl, ply.uci)) return uciArrow(cl.bestMoveUci, 'best');
       return NO_ARROWS;
     }
     if (settings.value.showBestMoves && humanToMove.value && isLive.value) {
@@ -720,9 +732,8 @@ export function createStore(state: AppState): Store {
       }
       return { kind: 'review', title: moveLabel(ply), lines: [], busy: true, actions: [] };
     }
-    const lines = explanationLines(ply.explanation, cl.bestMoveSan && !TOP_CLASSES.has(cl.cls) ? `Best was ${cl.bestMoveSan}.` : null);
-    const actions: CoachActionView[] =
-      !TOP_CLASSES.has(cl.cls) && cl.bestMoveUci && cl.bestMoveUci !== ply.uci ? [{ id: 'showBest', label: 'Show best' }] : [];
+    const lines = explanationLines(ply.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null);
+    const actions: CoachActionView[] = offersShowBest(cl, ply.uci) ? [{ id: 'showBest', label: 'Show best' }] : [];
     return { kind: 'review', cls: cl.cls, title: classSentence(moveLabel(ply), cl.cls), lines, busy: false, actions };
   }
 
@@ -798,7 +809,7 @@ export function createStore(state: AppState): Store {
         }
         const actions: CoachActionView[] = [];
         // In a rated game Retry costs the rating, so the free "Show best" is the main action.
-        if (!TOP_CLASSES.has(cl.cls) && cl.bestMoveUci) actions.push({ id: 'showBest', label: 'Show best', primary: !g.assisted });
+        if (offersShowBest(cl, ply.uci)) actions.push({ id: 'showBest', label: 'Show best', primary: !g.assisted });
         if (retry) actions.push({ id: 'retry', label: 'Retry', primary: g.assisted });
         if (!actions.some((a) => a.primary) && actions.length) actions[0] = { ...actions[0], primary: true };
         return { kind: 'coach', cls: cl.cls, title: classSentence(moveLabel(ply), cl.cls), lines, busy: false, actions };
@@ -914,7 +925,13 @@ export function createStore(state: AppState): Store {
     const pending = state.pendingAssist.value;
     return {
       open: state.sheet.value,
-      newGame: { initial: settings.value, playerRating: profile.value.rating, bots: BOTS, inProgress },
+      newGame: {
+        initial: settings.value,
+        playerRating: profile.value.rating,
+        bots: BOTS,
+        inProgress,
+        newPlayer: isNewPlayer(profile.value),
+      },
       assist: pending ? { kind: pending.kind } : null,
       menu: {
         settings: settings.value,
@@ -987,10 +1004,13 @@ export function createStore(state: AppState): Store {
   };
 }
 
-/** [headline, ...details] of an explanation, plus an optional extra line. */
-function explanationLines(e: Explanation | undefined | null, extra?: string | null): string[] {
+/**
+ * [headline, ...details] of an explanation, plus "Best was X." when `bestSan` is given and no line
+ * already names X as a move ("X was needed", "X was better", "You missed X, …").
+ */
+export function explanationLines(e: Explanation | undefined | null, bestSan?: string | null): string[] {
   const lines = e ? [e.headline, ...e.details] : [];
-  if (extra && !lines.some((l) => l.includes(extra.replace(/\.$/, '')))) lines.push(extra);
+  if (bestSan && !lines.some((l) => mentionsMove(l, bestSan))) lines.push(`Best was ${bestSan}.`);
   return lines;
 }
 

@@ -212,6 +212,17 @@ describe('AnalysisService (real engine)', () => {
     await expect(svc.ensure('bad fen', { minDepth: 5 })).rejects.toThrow(/Invalid FEN/);
     svc.watch(null);
   });
+
+  it('analyses positions only: the engine never gets game moves (results are shared by fenKey)', async () => {
+    const mark = out.length;
+    await svc.ensure(FENS.qgd, { minDepth: 6 });
+    svc.watch(FENS.sicilian);
+    await until(() => (svc.get(FENS.sicilian)?.depth ?? 0) >= 6);
+    const positions = out.slice(mark).filter((l) => l.startsWith('position'));
+    expect(positions).toContain(`position fen ${FENS.qgd}`);
+    expect(positions).toContain(`position fen ${FENS.sicilian}`);
+    expect(positions.some((l) => l.includes(' moves '))).toBe(false);
+  });
 });
 
 /** A ChessEngine whose searches the test ends by hand (one at a time, like the real one). */

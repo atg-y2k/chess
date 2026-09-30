@@ -1,0 +1,78 @@
+/* LevelPicker: segmented starting ratings with a caption naming the selected level. */
+
+.lvl-seg {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--lvl-n, 5), minmax(0, 1fr));
+  padding: 3px;
+  border-radius: calc(var(--radius) + 3px);
+  background: var(--sheet-group, var(--surface-2));
+}
+.lvl-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / var(--lvl-n, 5));
+  border-radius: var(--radius);
+  background: var(--accent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
+  transition: transform 0.3s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+.lvl-opt {
+  appearance: none;
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 40px;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-dim);
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    transform 0.12s ease;
+}
+.lvl-opt[aria-checked='true'] {
+  color: var(--accent-text);
+}
+.lvl-opt:active {
+  transform: scale(0.94);
+}
+.lvl-opt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.lvl-caption {
+  min-height: 18px;
+  margin: 7px 4px 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.lvl-caption strong {
+  font-weight: 650;
+  color: var(--text);
+}
+
+:root[data-theme='light'] .lvl-seg {
+  background: var(--surface-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lvl-thumb {
+    transition: none;
+  }
+}

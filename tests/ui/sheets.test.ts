@@ -8,7 +8,9 @@ import {
   snapElo,
   strengthLabel,
 } from '../../src/ui/NewGameSheet';
-import { formatGameDate, formatRatingDelta, recordOutcome } from '../../src/ui/MenuSheet';
+import { engineModeLabel, formatGameDate, formatRatingDelta, recordOutcome, setLevelNote } from '../../src/ui/MenuSheet';
+import { LEVEL_BLURB, levelFor } from '../../src/ui/LevelPicker';
+import { STARTING_LEVELS } from '../../src/rating/rating';
 import { gameOverHeadline, gameOverReason } from '../../src/ui/GameOverSheet';
 
 const bot = (id: string, elo: number): BotPersona => ({ id, name: id, elo, emoji: 'x', color: '#000', tagline: '', greeting: '' });
@@ -92,6 +94,45 @@ describe('MenuSheet helpers', () => {
     expect(formatGameDate(new Date(2026, 8, 12, 12, 0).toISOString(), now, 'en-US')).toBe('Sep 12');
     expect(formatGameDate(new Date(2025, 11, 31, 12, 0).toISOString(), now, 'en-US')).toBe('Dec 31, 2025');
     expect(formatGameDate('nope', now)).toBe('');
+  });
+});
+
+describe('About', () => {
+  it('links the source (overridable at build time) and the shipped license notices', async () => {
+    const { SOURCE_URL, THIRD_PARTY_URL, ENGINE_NOTES_URL } = await import('../../src/ui/About');
+    expect(SOURCE_URL).toBe(import.meta.env.VITE_SOURCE_URL || 'https://github.com/atg-y2k/chess');
+    expect(THIRD_PARTY_URL).toBe(`${import.meta.env.BASE_URL}THIRD-PARTY-LICENSES.txt`);
+    expect(ENGINE_NOTES_URL).toBe(`${import.meta.env.BASE_URL}engine/README.md`);
+  });
+});
+
+describe('Engine row', () => {
+  const now = new Date(2026, 8, 30, 12, 0);
+  it('two workers, one worker (with the date two engines are tried again), or not running', () => {
+    expect(engineModeLabel({ mode: 'dual' }, now, 'en-US')).toBe('2 workers');
+    expect(engineModeLabel({ mode: 'single', singleUntil: new Date(2026, 9, 14, 9, 0).getTime() }, now, 'en-US')).toBe(
+      '1 worker (compatibility mode, until Oct 14)',
+    );
+    expect(engineModeLabel({ mode: 'single', singleUntil: new Date(2027, 0, 3).getTime() }, now, 'en-US')).toBe(
+      '1 worker (compatibility mode, until Jan 3, 2027)',
+    );
+    expect(engineModeLabel({ mode: 'single', singleUntil: null }, now, 'en-US')).toBe('1 worker (compatibility mode)');
+    expect(engineModeLabel({ mode: 'single' }, now, 'en-US')).toBe('1 worker (compatibility mode)');
+    expect(engineModeLabel({ mode: null }, now, 'en-US')).toBe('Not running');
+  });
+});
+
+describe('Starting level', () => {
+  it('finds the level of a rating and describes every level', () => {
+    expect(levelFor(800, STARTING_LEVELS)?.rating).toBe(800);
+    expect(levelFor(1199.6, STARTING_LEVELS)?.rating).toBe(1200);
+    expect(levelFor(1234, STARTING_LEVELS)).toBeUndefined();
+    expect(levelFor(null, STARTING_LEVELS)).toBeUndefined();
+    for (const l of STARTING_LEVELS) expect(LEVEL_BLURB[l.id], l.id).toBeTruthy();
+  });
+  it('says what setting a level does', () => {
+    expect(setLevelNote(1600)).toMatch(/^Your rating becomes 1600 /);
+    expect(setLevelNote(1600)).toMatch(/history stays/);
   });
 });
 

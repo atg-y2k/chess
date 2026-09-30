@@ -700,6 +700,131 @@ describe('fewer vague "improves the position" texts', () => {
   });
 });
 
+describe('hints that compare the engine lines (MultiPV)', () => {
+  /** The MultiPV set, numbered in order. */
+  const set = (...lines: ReturnType<typeof pvLine>[]) => lines.map((l, i) => ({ ...l, multipv: i + 1 }));
+  const hintWith = (fen: string, lines: ReturnType<typeof pvLine>[], opts: Parameters<typeof explainBestMove>[2] = {}) => {
+    const e = explainBestMove(fen, lines[0], { ...opts, lines });
+    expectWellFormed(e);
+    return e;
+  };
+  const LASKER4 = 'rnbqkbnr/pppp2pp/4p3/5p2/3P4/5N2/PPP1PPPP/RNBQKB1R w KQkq - 0 3';
+  const c4 = pvLine(cp(54), ['c2c4', 'g8f6', 'g2g3', 'f8e7', 'f1g2', 'f6e4']);
+  const g3 = (score: number) => pvLine(cp(score), ['g2g3', 'g8f6', 'f1g2', 'd7d5', 'c2c4', 'f8e7']);
+  const bf4 = (score: number) => pvLine(cp(score), ['c1f4', 'g8f6', 'e2e3', 'f8e7', 'c2c4', 'f6h5']);
+
+  it('a quiet move with alternatives about as good: what it keeps, and which moves are as good', () => {
+    expect(text(hintOf(LASKER4, c4.score, c4.pv))).toEqual(['c4 improves the position.', 'Main line: c4 Nf6 g3 Be7 Bg2.']);
+    expect(text(hintWith(LASKER4, set(c4, g3(53), bf4(44))))).toEqual([
+      'c4 keeps a small edge.',
+      'g3 and Bf4 are about as good.',
+      'Main line: c4 Nf6 g3 Be7 Bg2.',
+    ]);
+  });
+
+  it('a quiet move that is a little better than the next one, or the only good one', () => {
+    expect(text(hintWith(LASKER4, set(c4, g3(20), bf4(10))))).toEqual([
+      'c4 keeps a small edge.',
+      'It is more precise than g3.',
+      'Main line: c4 Nf6 g3 Be7 Bg2.',
+    ]);
+    const only = hintWith(LASKER4, set(c4, g3(-150), bf4(-160)));
+    expect(text(only)).toEqual([
+      'c4 is the only move that keeps the balance.',
+      'Anything else gives Black the better game.',
+      'Main line: c4 Nf6 g3 Be7 Bg2.',
+    ]);
+    expect(only.motifs).toContain('onlyGoodMove');
+    const neutral = hintWith(LASKER4, set(pvLine(cp(250), c4.pv), g3(20)), { perspective: 'neutral' });
+    expect(neutral.headline).toBe('c4 is the only move that keeps the advantage.');
+    expect(neutral.details[0]).toBe("Anything else throws away most of White's advantage.");
+  });
+
+  it('says what the move keeps in won and lost positions', () => {
+    const won = '2k1r2r/6bp/1p2p3/p2p1pPP/n7/4R3/P7/4K3 b - - 1 39';
+    expect(
+      text(
+        hintWith(
+          won,
+          set(
+            pvLine(cp(1643), ['c8c7', 'e1d1', 'a4c5', 'e3b3', 'c7c6', 'd1e2']),
+            pvLine(cp(1628), ['c8d7', 'e3g3', 'e8c8', 'g5g6', 'd7d6', 'e1d2']),
+            pvLine(cp(1618), ['a4c5', 'h5h6', 'g7d4', 'e3h3', 'c8d7', 'e1d1']),
+          ),
+        ),
+      ).slice(0, 2),
+    ).toEqual(['Kc7 keeps your winning position.', 'Kd7 and Nc5 are about as good.']);
+    // Expected scores barely differ when winning big: four pawns apart is not "about as good".
+    const ng5 = '8/4k3/8/8/P3P1Kp/7N/P4R1P/7R w - - 0 49';
+    const e = hintWith(
+      ng5,
+      set(
+        pvLine(cp(2553), ['h3g5', 'e7d6', 'f2c2', 'd6e7', 'h1f1', 'e7d6']),
+        pvLine(cp(2140), ['f2c2', 'e7d7', 'h3g5', 'd7d6', 'c2d2', 'd6c5']),
+        pvLine(cp(1756), ['a4a5', 'e7d6', 'h3g5', 'd6c6', 'h1f1', 'c6b5']),
+      ),
+    );
+    expect(text(e).slice(0, 2)).toEqual(['Ng5 keeps your winning position.', 'It is more precise than Rc2.']);
+    const lost = '8/8/8/5kp1/3Kp2p/8/8/8 w - - 0 51';
+    const kd5 = hintWith(
+      lost,
+      set(
+        pvLine(cp(-1675), ['d4d5', 'h4h3', 'd5c4', 'e4e3', 'c4d3', 'h3h2']),
+        pvLine(cp(-1675), ['d4e3', 'h4h3', 'e3d4', 'e4e3', 'd4e3', 'h3h2']),
+        pvLine(cp(-1695), ['d4c5', 'e4e3', 'c5d6', 'e3e2', 'd6d7', 'h4h3']),
+      ),
+    );
+    expect(text(kd5).slice(0, 2)).toEqual(['Kd5 is the best try in a difficult position.', 'Ke3 and Kc5 are about as good.']);
+  });
+
+  it('a plain check says what it keeps too', () => {
+    const fen = 'r2qkbnr/3b1ppp/p1Qp4/1pp5/4P3/1B6/PPP2PPP/RNB1K2R w KQkq - 4 11';
+    const e = hintWith(
+      fen,
+      set(
+        pvLine(cp(-401), ['b3f7', 'e8f7', 'c6d5', 'f7e8', 'c1g5', 'd8c8']),
+        pvLine(cp(-409), ['c6b7', 'c5c4', 'b3c4', 'b5c4', 'c1f4', 'd8c8']),
+        pvLine(cp(-415), ['c6d5', 'c5c4', 'b3c4', 'b5c4', 'd5c4', 'g8f6']),
+      ),
+    );
+    expect(text(e).slice(0, 2)).toEqual([
+      'Bxf7+ gives check and is the best try in a difficult position.',
+      'Qb7 and Qd5 are about as good.',
+    ]);
+  });
+
+  it('adds "the only good move" to a positional reason, and leaves tactics alone', () => {
+    const fen = '4k2r/5p2/p3p2P/1br4N/7Q/2qPP1P1/5P2/3R2K1 w - - 5 36';
+    const lines = set(
+      pvLine(cp(469), ['h5f6', 'e8f8', 'f6e4', 'c5h5', 'h4h5', 'c3c2']),
+      pvLine(cp(-357), ['h6h7', 'e8d7', 'h5f6', 'd7c8', 'f6e4', 'c3c2']),
+    );
+    expect(text(hintWith(fen, lines))).toEqual([
+      'Nf6+ brings the knight to a more active square.',
+      'It is the only good move here.',
+    ]);
+    const fork = hintWith(S.royalFork, set(pvLine(cp(900), analysis(S.royalFork).lines[0].pv), pvLine(cp(0), ['b5d6'])));
+    expect(text(fork)).toEqual(text(hint(S.royalFork)));
+  });
+
+  it('ignores lines that do not fit: one line only, or another move on top', () => {
+    const plain = text(hintOf(LASKER4, c4.score, c4.pv));
+    expect(text(hintWith(LASKER4, set(c4)))).toEqual(plain);
+    expect(text(explainBestMove(LASKER4, c4, { lines: set(g3(60), c4) }))).toEqual(plain);
+    expect(text(explainBestMove(LASKER4, c4, { lines: [] }))).toEqual(plain);
+  });
+
+  it('the feedback on the best move says what the hint says', () => {
+    const lines = set(c4, g3(53), bf4(44));
+    const e = explainWith(LASKER4, 'c2c4', 'best', lines, [pvLine(cp(-54), c4.pv.slice(1))], [0.55, 0.55]);
+    expect(text(e)).toEqual(text(hintWith(LASKER4, lines)));
+    const only = set(c4, g3(-150));
+    const great = explainWith(LASKER4, 'c2c4', 'great', only, [pvLine(cp(-54), c4.pv.slice(1))], [0.55, 0.55]);
+    expect(great.headline).toBe(hintWith(LASKER4, only).headline);
+    expect(great.details).toContain('Anything else gives Black the better game.');
+  });
+});
+
 describe('recaptures and consistency', () => {
   it('a recapture is not counted as material won', () => {
     const qxf4 = hintOf('3qkb1r/r1p2pp1/1pPp1n2/p5B1/4Ppbp/2N1Q3/PPP3PP/R3K1NR w KQk - 0 14', cp(336), ['e3f4', 'g4h5', 'f4h4', 'f8e7'], {
@@ -726,7 +851,7 @@ describe('recaptures and consistency', () => {
       if (before.lines[0]?.pv[0] === uci && !c.isGameOver() && before.lines[0].score.kind === 'cp') {
         const classification = classify(fen, uci, before, after);
         const e = explainMove({ fenBefore: fen, moveUci: uci, classification, before, after, prevMove });
-        expect(e.headline).toBe(explainBestMove(fen, before.lines[0], { prevMove }).headline);
+        expect(e.headline).toBe(explainBestMove(fen, before.lines[0], { prevMove, lines: before.lines }).headline);
         compared++;
       }
       prevMove = { to: m.to, captured: m.captured };
@@ -801,6 +926,9 @@ describe('whole games (engine lines at depth 16)', () => {
         }
         if (!c.isGameOver()) {
           expectWellFormed(explainBestMove(c.fen(), after.lines[0]));
+          const withLines = explainBestMove(c.fen(), after.lines[0], { lines: after.lines, perspective: 'neutral' });
+          expectWellFormed(withLines);
+          expect(text(withLines).join(' ')).not.toMatch(/\b[Yy]our?\b/);
           const t = describeThreat(c.fen());
           if (t) expectWellFormed(t);
         }
