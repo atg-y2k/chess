@@ -36,6 +36,7 @@ import {
 } from '../../src/game/controller';
 import { loadGame } from '../../src/game/persistence';
 import { DEFAULT_SETTINGS, type GameSettings, type Ply, type PromotionPiece } from '../../src/game/types';
+import type { MoveClass } from '../../src/analysis/types';
 import { defaultProfile, loadProfile, saveProfile } from '../../src/rating/rating';
 import { MemoryStorage, RecordingSound, ScriptedBot, fakeEngineSet } from '../helpers/fakeEngine';
 
@@ -1008,6 +1009,41 @@ describe('helpers', () => {
       { index: 1, cls: 'inaccuracy', san: 'e5', text: 'headline 1' },
       { index: 2, cls: 'blunder', san: 'Nf3', text: 'headline 2' },
     ]);
+  });
+
+  it('summarizeGame: a praised move that gives something away is a key moment, ranked with the inaccuracies', () => {
+    const sans = ['e4', 'e5', 'Nf3', 'Nc6', 'Bb5', 'a6', 'Ba4', 'Nf6', 'O-O', 'Be7', 'Re1', 'b5', 'Bb3', 'd6', 'c3', 'O-O'];
+    const annotate = (clsOf: (i: number) => MoveClass, concedes: Record<number, 'material' | 'mate'>) => {
+      const ps = plies(START_FEN, sans);
+      ps.forEach((p, i) => {
+        p.classification = {
+          cls: clsOf(i), winBefore: 0.1, winAfter: 0.09, winLoss: 0.01, accuracy: 90,
+          bestMoveUci: null, bestMoveSan: null, playedMoveSan: p.san,
+        };
+        p.explanation = { headline: `headline ${i}`, details: [], ...(concedes[i] ? { concedes: concedes[i] } : {}) };
+      });
+      return ps;
+    };
+    // A few moments: the concession is listed with its headline, and inaccuracies fill up to three.
+    let r = summarizeGame(START_FEN, null, annotate((i) => (i === 3 ? 'inaccuracy' : i === 6 ? 'blunder' : 'good'), { 5: 'material' }));
+    expect(r.keyMoments).toEqual([
+      { index: 3, cls: 'inaccuracy', san: 'Nc6', text: 'headline 3' },
+      { index: 5, cls: 'good', san: 'a6', text: 'headline 5', concedes: 'material' },
+      { index: 6, cls: 'blunder', san: 'Ba4', text: 'headline 6' },
+    ]);
+    expect(r.counts.b.good).toBe(7); // still counted as its class
+    // A flag on a class that already says the move was weak adds nothing.
+    r = summarizeGame(START_FEN, null, annotate((i) => (i === 6 ? 'blunder' : 'good'), { 6: 'material', 7: 'mate', 9: 'mate' }));
+    expect(r.keyMoments.map((m) => [m.index, m.concedes])).toEqual([[6, undefined], [7, 'mate'], [9, 'mate']]);
+    // Too many (one mistake, one concession and 13 inaccuracies): the concession ranks with the
+    // inaccuracies (in game order), after the mistake.
+    const many = (at: number) => annotate((i) => (i === 0 ? 'mistake' : i === at || i === 1 ? 'good' : 'inaccuracy'), { [at]: 'material' });
+    r = summarizeGame(START_FEN, null, many(2));
+    expect(r.keyMoments.map((m) => m.index)).toEqual([0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(r.keyMoments[1].concedes).toBe('material');
+    r = summarizeGame(START_FEN, null, many(15));
+    expect(r.keyMoments.map((m) => m.index)).toEqual([0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(r.keyMoments.some((m) => m.concedes)).toBe(false);
   });
 
   it('hides the eval bar and graph during play when switched off, and shows them after the game', async () => {

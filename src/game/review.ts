@@ -7,7 +7,7 @@ import type { MoveClass } from '../analysis/types';
 import { sideToMove } from '../chess/utils';
 import type { Score } from '../engine/types';
 import type { KeyMoment } from '../ui/ReviewPanel';
-import { KEY_CLASSES, classLabel } from './coach';
+import { KEY_CLASSES, classLabel, concession } from './coach';
 import type { Color, Ply } from './types';
 
 export interface ReviewSummary {
@@ -39,27 +39,38 @@ export function summarizeGame(startFen: string, startEval: Score | null, plies: 
     const cls = p.classification?.cls;
     if (cls) counts[p.color][cls] = (counts[p.color][cls] ?? 0) + 1;
   }
-  const moment = (p: Ply): KeyMoment => ({
-    index: p.index,
-    cls: p.classification!.cls,
-    san: p.san,
-    text: p.explanation?.headline ?? classLabel(p.classification!.cls),
-  });
-  let keyMoments = plies.filter((p) => p.classification && KEY_CLASSES.has(p.classification.cls)).map(moment);
+  const moment = (p: Ply): KeyMoment => {
+    const m: KeyMoment = {
+      index: p.index,
+      cls: p.classification!.cls,
+      san: p.san,
+      text: p.explanation?.headline ?? classLabel(p.classification!.cls),
+    };
+    const c = concession(p);
+    if (c) m.concedes = c;
+    return m;
+  };
+  // A move whose class praises it but whose text says what it gives away ("This hangs your queen
+  // on b4." for an Excellent Kd8 in a lost position) is worth a look too.
+  const key = (p: Ply) => !!p.classification && (KEY_CLASSES.has(p.classification.cls) || !!concession(p));
+  let keyMoments = plies.filter(key).map(moment);
   if (keyMoments.length < MIN_KEY_MOMENTS) {
-    keyMoments = plies
-      .filter((p) => p.classification && (KEY_CLASSES.has(p.classification.cls) || p.classification.cls === 'inaccuracy'))
-      .map(moment);
+    keyMoments = plies.filter((p) => key(p) || p.classification?.cls === 'inaccuracy').map(moment);
   }
   if (keyMoments.length > MAX_KEY_MOMENTS) {
     // Keep the most important ones (blunders and brilliancies first), then restore game order.
     keyMoments = keyMoments
       .slice()
-      .sort((a, b) => PRIORITY[a.cls] - PRIORITY[b.cls] || a.index - b.index)
+      .sort((a, b) => priority(a) - priority(b) || a.index - b.index)
       .slice(0, MAX_KEY_MOMENTS)
       .sort((a, b) => a.index - b.index);
   }
   return { accuracy, counts, keyMoments };
+}
+
+/** Rank when there are too many key moments (lower first): a concession ranks with the inaccuracies. */
+function priority(m: KeyMoment): number {
+  return m.concedes ? PRIORITY.inaccuracy : PRIORITY[m.cls];
 }
 
 const PRIORITY: Record<MoveClass, number> = {

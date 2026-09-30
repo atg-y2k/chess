@@ -36,11 +36,12 @@ import {
   TOP_CLASSES,
   answerFreeLines,
   classLabel,
-  classSentence,
   coachTip,
+  concession,
   mentionsMove,
   moveLabel,
   offersShowBest,
+  verdictTitle,
 } from './coach';
 import type { ReviewSummary } from './review';
 import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings, type Ply } from './types';
@@ -516,14 +517,15 @@ export function createStore(state: AppState): Store {
       // took the piece there, also en passant), until your next move.
       const fb = plies.value[m.index];
       const cls = fb?.classification?.cls;
-      if (!fb || !cls) return undefined;
+      // No praise icon for a move whose text says what it gives away (see `concession`).
+      if (!fb || !cls || concession(fb)) return undefined;
       const square = fb.uci.slice(2, 4);
       if (m.index < plies.value.length - 1 && pieceColorAt(liveFen.value, square) !== fb.color) return undefined;
       return { square, cls };
     }
     const ply = displayedPly.value;
     const cls = ply?.classification?.cls;
-    if (!ply || !cls) return undefined;
+    if (!ply || !cls || concession(ply)) return undefined;
     const show =
       inReviewLike.value || (phase.value === 'playing' && settings.value.coach && ply.color === game.value?.playerColor);
     return show ? { square: ply.uci.slice(2, 4), cls } : undefined;
@@ -632,7 +634,8 @@ export function createStore(state: AppState): Store {
   // --- move list -------------------------------------------------------------------------------
   const moveList = computed<MoveListView>(() => {
     const review = phase.value === 'review';
-    const ps = phase.value === 'playing' ? plies.value.map((p) => (showsClass(p) ? p : stripClass(p))) : plies.value;
+    // Like the board badge: no class icon (nor class in the label) for a move that gives something away.
+    const ps = plies.value.map((p) => (showsClass(p) && !concession(p) ? p : stripClass(p)));
     return {
       plies: ps,
       current: current.value,
@@ -753,8 +756,7 @@ export function createStore(state: AppState): Store {
     }
     const lines = explanationLines(ply.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null);
     const actions: CoachActionView[] = offersShowBest(cl, ply.uci) ? [{ id: 'showBest', label: 'Show best' }] : [];
-    const title = classSentence(moveLabel(ply), cl.cls);
-    return { kind: 'review', cls: cl.cls, title, titleMove: moveLabel(ply), lines, busy: false, actions };
+    return { kind: 'review', ...verdictTitle(ply), titleMove: moveLabel(ply), lines, busy: false, actions };
   }
 
   function playingCoach(): Omit<CoachView, 'collapsed'> {
@@ -773,8 +775,7 @@ export function createStore(state: AppState): Store {
         const hide = base.kind === 'feedback' && base.index === ply.index && canRetry(ply);
         return {
           kind: 'coach',
-          cls: cl.cls,
-          title: classSentence(moveLabel(ply), cl.cls),
+          ...verdictTitle(ply),
           titleMove: moveLabel(ply),
           lines: hide ? answerFreeLines(ply.explanation, cl) : explanationLines(ply.explanation),
           busy: false,
@@ -834,8 +835,7 @@ export function createStore(state: AppState): Store {
         if (offersShowBest(cl, ply.uci)) actions.push({ id: 'showBest', label: 'Show best', primary: !g.assisted });
         if (retry) actions.push({ id: 'retry', label: 'Retry', primary: g.assisted });
         if (!actions.some((a) => a.primary) && actions.length) actions[0] = { ...actions[0], primary: true };
-        const title = classSentence(moveLabel(ply), cl.cls);
-        return { kind: 'coach', cls: cl.cls, title, titleMove: moveLabel(ply), lines, busy: false, actions };
+        return { kind: 'coach', ...verdictTitle(ply), titleMove: moveLabel(ply), lines, busy: false, actions };
       }
     }
     return idleCoach();

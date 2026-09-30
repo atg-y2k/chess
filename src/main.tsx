@@ -1,15 +1,16 @@
 /**
- * Bootstrap: iOS guards (zoom, first-tap audio unlock), the service worker (offline + updates),
- * page visibility -> controller, then either the game (<App/>) or, with `?enginetest`, the engine
- * self-test page for checking Stockfish on a real device.
+ * Bootstrap: iOS guards (zoom, first-tap audio unlock), the service worker (offline + updates,
+ * "Available offline" in the UI), page visibility -> controller, then either the game (<App/>)
+ * or, with `?enginetest`, the engine self-test page for checking Stockfish on a real device.
  */
+import { signal } from '@preact/signals';
 import { render } from 'preact';
 import './styles/app.css';
 import { App } from './App';
 import { GameController, bindPageLifecycle } from './game/controller';
 import { unlockAudio } from './game/sound';
 import { installIosGuards } from './ios';
-import { registerServiceWorker } from './pwa';
+import { registerServiceWorker, type OfflineStatus } from './pwa';
 import { applyTheme, loadTheme } from './theme';
 
 const root = document.getElementById('app')!;
@@ -35,12 +36,18 @@ if (params.has('enginetest')) {
   });
 } else {
   const controller = new GameController();
+  const offline = signal<OfflineStatus | null>(null);
+  // A page the service worker already controls was loaded from the offline cache: nothing new to announce.
+  const cachedAtStart = 'serviceWorker' in navigator && navigator.serviceWorker.controller !== null;
   // A finished game may reload onto a new build at once; with a sheet open over it, only in the background.
   registerServiceWorker({
     canReloadNow: () => controller.canReloadNow({ hidden: document.visibilityState === 'hidden' }),
+    onOfflineReady: () => {
+      offline.value = cachedAtStart ? 'cached' : 'installed';
+    },
   });
   bindPageLifecycle(controller);
-  render(<App controller={controller} />, root);
+  render(<App controller={controller} offline={offline} />, root);
   void controller.boot();
   // Debug / e2e hook (e.g. `await __chessCoach.controller.idle()` in the console).
   (window as unknown as { __chessCoach?: { controller: GameController } }).__chessCoach = { controller };

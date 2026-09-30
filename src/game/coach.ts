@@ -31,6 +31,44 @@ export function classSentence(san: string, cls: MoveClass): string {
   return `${san} ${PHRASE[cls]}`;
 }
 
+/** Classes that already say the move was weak, so an explanation can never contradict them. */
+const WEAK_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['inaccuracy', 'mistake', 'miss', 'blunder']);
+
+/** Expected score from which a side counts as winning (as in the explanations: "You are still winning."). */
+const WINNING = 0.75;
+
+/**
+ * What a move gives away when its class would praise it (`Explanation.concedes`): in a decided
+ * position an "Excellent" Kd8 can leave the queen en prise, because the expected score barely
+ * moves. Such a move gets a neutral verdict (`verdictTitle`) and no praise icon anywhere. Null
+ * for every other move.
+ */
+export function concession(ply: Pick<Ply, 'classification' | 'explanation'>): 'material' | 'mate' | null {
+  const c = ply.explanation?.concedes;
+  const cls = ply.classification?.cls;
+  return (c === 'material' || c === 'mate') && cls && !WEAK_CLASSES.has(cls) ? c : null;
+}
+
+/**
+ * The coach's verdict on a classified move, e.g. "12. Nf3 is a mistake" (`classSentence`), with
+ * the class icon to show beside it. A move whose text says what it gives away (`concession`) gets
+ * a neutral verdict and no icon instead: "10… Kd8 doesn't change the result" when the game was
+ * already lost (also when it only lets the opponent mate faster), "25. Rd1 still wins, but gives
+ * up material" when still winning, else "gives up material".
+ */
+export function verdictTitle(
+  ply: Pick<Ply, 'fenBefore' | 'san' | 'color' | 'index' | 'classification' | 'explanation'>,
+): { title: string; cls?: MoveClass } {
+  const label = moveLabel(ply);
+  const cl = ply.classification;
+  if (!cl) return { title: label };
+  const c = concession(ply);
+  if (!c) return { title: classSentence(label, cl.cls), cls: cl.cls };
+  if (c === 'mate' || cl.winBefore <= 1 - WINNING) return { title: `${label} doesn’t change the result` };
+  if (cl.winAfter >= WINNING) return { title: `${label} still wins, but gives up material` };
+  return { title: `${label} gives up material` };
+}
+
 /** Classes that do not need a "Show best" (the move was already the best or the only option). */
 export const TOP_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['brilliant', 'great', 'best', 'book', 'forced']);
 

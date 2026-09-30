@@ -495,4 +495,48 @@ describe('registerServiceWorker', () => {
     calls[1]!.onNeedReload?.(); // a later update took over; the page is untouched
     expect(reload).toHaveBeenCalledTimes(1);
   });
+
+  it('a lazy chunk that fails while an update waits reloads even on a touched page, never over a game', async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const { registerServiceWorker } = await import('../../src/pwa');
+    const { registerSW } = await import('virtual:pwa-register');
+    const sw = new FakeServiceWorkers('https://example.test/');
+    const windowListeners = new Map<string, Listener[]>();
+    const documentListeners = new Map<string, Listener[]>();
+    const reload = vi.fn();
+    vi.stubGlobal('window', {
+      isSecureContext: true,
+      location: { href: 'https://example.test/', reload },
+      addEventListener: on(windowListeners),
+    });
+    vi.stubGlobal('document', {
+      visibilityState: 'visible',
+      addEventListener: on(documentListeners),
+      removeEventListener: () => {},
+    });
+    vi.stubGlobal('navigator', { onLine: true, serviceWorker: { getRegistration: sw.getRegistration } });
+    const calls: Parameters<typeof registerSW>[0][] = [];
+    vi.mocked(registerSW).mockImplementation((options = {}) => {
+      calls.push(options);
+      void sw.register().then((reg) => options.onRegisteredSW?.('/sw.js', reg as unknown as ServiceWorkerRegistration));
+      return async () => {};
+    });
+    let playing = true;
+    registerServiceWorker({ canReloadNow: () => !playing });
+    await vi.advanceTimersByTimeAsync(0);
+
+    fire(windowListeners, 'vite:preloadError'); // no update waiting: an ordinary failure
+    fire(documentListeners, 'pointerdown'); // the user is using the page
+    calls[0]!.onNeedReload?.();
+    fire(windowListeners, 'vite:preloadError'); // a game is in progress
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reload).not.toHaveBeenCalled();
+
+    playing = false; // the game is over, but the page is still in use: the gate alone would wait
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reload).not.toHaveBeenCalled();
+    fire(windowListeners, 'vite:preloadError');
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
 });

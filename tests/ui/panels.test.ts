@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Chess } from 'chess.js';
 import { groupCaptured } from '../../src/ui/PlayerStrip';
 import { pairMoves, NOTABLE_CLASSES } from '../../src/ui/MoveList';
-import { visibleReviewClasses, formatAccuracy, CORE_REVIEW_CLASSES } from '../../src/ui/ReviewPanel';
+import { visibleReviewClasses, formatAccuracy, momentLabel, CORE_REVIEW_CLASSES } from '../../src/ui/ReviewPanel';
 import type { Ply } from '../../src/game/types';
 
 function plies(fen: string | undefined, sans: string[]): Ply[] {
@@ -63,5 +63,10 @@ describe('ReviewPanel helpers', () => {
     expect(formatAccuracy(100)).toBe('100.0');
     expect(formatAccuracy(null)).toBe('–');
     expect(formatAccuracy(Number.NaN)).toBe('–');
+  });
+  it('labels a key moment by its class, or by what a praised move gives away', () => {
+    expect(momentLabel({ cls: 'blunder' })).toBe('Blunder');
+    expect(momentLabel({ cls: 'excellent', concedes: 'material' })).toBe('Gives up material');
+    expect(momentLabel({ cls: 'good', concedes: 'mate' })).toBe('Faster mate');
   });
 });

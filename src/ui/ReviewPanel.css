@@ -332,3 +332,7 @@
 :root[data-theme='light'] .review {
   --tone-mix: 72%;
 }
+
+.review-moment-concedes {
+  background: var(--cls-forced);
+}

@@ -19,6 +19,7 @@ import { rememberedEngineMode, resetEngineMode } from './engine/createEngines';
 import type { GameController } from './game/controller';
 import type { ReadonlyStore, ToolbarId } from './game/store';
 import type { PromotionPiece } from './game/types';
+import type { OfflineStatus } from './pwa';
 import { STARTING_LEVELS } from './rating/rating';
 import { applyTheme, loadTheme, saveTheme, watchSystemTheme, type ThemePref } from './theme';
 import { Board } from './ui/Board';
@@ -49,6 +50,11 @@ import './App.css';
 
 export interface AppProps {
   controller: GameController;
+  /**
+   * Whether the app is cached for offline use (reported by the service worker, see main.tsx): the
+   * Menu then says "Available offline", and a toast says it once when that happened during this visit.
+   */
+  offline?: ReadonlySignal<OfflineStatus | null>;
 }
 
 /**
@@ -70,7 +76,7 @@ const GRAPH_MIN_SPAN = 40;
 type Notify = (text: string) => void;
 
 /** Root component: the game screen, its sheets, the boot splash and the engine error screen. */
-export function App({ controller: c }: AppProps) {
+export function App({ controller: c, offline }: AppProps) {
   const s = c.store;
   const phase = s.phase.value;
   const evalVisible = useComputed(() => s.evalBar.value.visible).value;
@@ -109,6 +115,17 @@ export function App({ controller: c }: AppProps) {
     const t = window.setTimeout(() => setToast(null), TOAST_MS);
     return () => window.clearTimeout(t);
   }, [toast]);
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
+
+  // The first download finished during this visit: say once that the app now works offline (after
+  // the splash, and without replacing another message; the Menu keeps saying it).
+  const offlineAnnounced = useRef(false);
+  useSignalEffect(() => {
+    if (offlineAnnounced.current || offline?.value !== 'installed' || s.phase.value === 'boot') return;
+    offlineAnnounced.current = true;
+    if (!toastRef.current) notify('Available offline');
+  });
 
   const exportPgn = () => void sharePgn(c, notify);
 
@@ -146,7 +163,14 @@ export function App({ controller: c }: AppProps) {
         <Moves c={c} />
         <Tools c={c} summary={reviewSummary} />
       </main>
-      <Sheets c={c} theme={theme} onTheme={changeTheme} onExport={exportPgn} notify={notify} />
+      <Sheets
+        c={c}
+        theme={theme}
+        onTheme={changeTheme}
+        onExport={exportPgn}
+        notify={notify}
+        offlineReady={!!offline?.value}
+      />
       <Splash phase={phase} download={s.engineDownload} />
       {phase === 'error' && <ErrorScreen c={c} />}
       <div class="app-toast-host" role="status" aria-live="polite">
@@ -384,12 +408,14 @@ function Sheets({
   onTheme,
   onExport,
   notify,
+  offlineReady,
 }: {
   c: GameController;
   theme: ThemePref;
   onTheme: (t: ThemePref) => void;
   onExport: () => void;
   notify: Notify;
+  offlineReady: boolean;
 }) {
   const sh = c.store.sheets.value;
   const engineMode = c.store.engineMode.value;
@@ -451,6 +477,7 @@ function Sheets({
         onNewGame={() => c.openSheet('new')}
         engine={{ mode: engineMode, singleUntil }}
         onRetryDualEngines={retryDualEngines}
+        offlineReady={offlineReady}
         levels={STARTING_LEVELS}
         onSetLevel={(rating) => {
           c.setStartingRating(rating);

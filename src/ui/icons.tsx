@@ -134,3 +134,10 @@ export const IconGauge = (p: IconProps) => (
     <circle cx="12" cy="14" r="1.2" />
   </Svg>
 );
+
+export const IconCheckCircle = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="m8 12.5 2.8 2.8L16.5 9.5" />
+  </Svg>
+);

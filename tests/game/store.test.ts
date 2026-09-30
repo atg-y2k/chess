@@ -114,6 +114,89 @@ describe('coach view: Brilliant that is not the top move', () => {
   });
 });
 
+describe('a praised move whose text says what it gives away (Explanation.concedes)', () => {
+  // 10… Kd8 leaves the queen on b4 en prise; the position was lost, so the class is Excellent.
+  const FEN = '1nb1kbnr/1p4pp/1rp1Pp2/p7/1q1P4/P1NB1N2/1PP2PPP/R1BQR1K1 b k - 0 10';
+
+  function concedeStore(phase: 'review' | 'playing', concedes?: Explanation['concedes']) {
+    const chess = new Chess(FEN);
+    const mv = chess.move('Kd8');
+    const ply: Ply = {
+      index: 0,
+      color: 'b',
+      san: mv.san,
+      uci: 'e8d8',
+      fenBefore: FEN,
+      fenAfter: chess.fen(),
+      evalWhite: { kind: 'cp', value: 1600 },
+      evalDepth: 14,
+      classification: cl({
+        cls: 'excellent',
+        winBefore: 0.02,
+        winAfter: 0.003,
+        winLoss: 0.017,
+        accuracy: 95,
+        bestMoveUci: 'b4d6',
+        bestMoveSan: 'Qd6',
+        playedMoveSan: 'Kd8',
+      }),
+      explanation: {
+        headline: 'This does nothing about the threat to your queen on b4.',
+        details: ['White plays axb4 and wins the queen for a pawn.', 'The position was already lost.'],
+        ...(concedes ? { concedes } : {}),
+      },
+    };
+    const bot = customPersona(1200);
+    const state = createState({ settings: DEFAULT_SETTINGS, profile: defaultProfile() });
+    state.game.value = {
+      id: 'g1',
+      startFen: FEN,
+      playerColor: 'b',
+      bot,
+      botElo: bot.elo,
+      startedAt: new Date(0).toISOString(),
+      assisted: false,
+      settings: { ...DEFAULT_SETTINGS, playerColor: 'b' },
+    };
+    state.plies.value = [ply];
+    state.phase.value = phase;
+    if (phase === 'review') state.viewIndex.value = 1;
+    else state.coachMode.value = { kind: 'feedback', index: 0 };
+    return createStore(state);
+  }
+
+  for (const phase of ['review', 'playing'] as const) {
+    it(`${phase}: a neutral title, and no praise icon on the coach, the board or the move list`, () => {
+      const store = concedeStore(phase, 'material');
+      const coach = store.coach.value;
+      expect(coach.title).toBe('10… Kd8 doesn’t change the result');
+      expect(coach.titleMove).toBe('10… Kd8');
+      expect(coach.cls).toBeUndefined();
+      expect(coach.lines[0]).toBe('This does nothing about the threat to your queen on b4.');
+      expect(coach.actions.map((a) => a.id)).toContain('showBest');
+      expect(store.board.value.badge).toBeUndefined();
+      expect(store.moveList.value.plies[0].classification).toBeUndefined();
+    });
+
+    it(`${phase}: without the flag, the class verdict, badge and icon`, () => {
+      const store = concedeStore(phase);
+      expect(store.coach.value.title).toBe('10… Kd8 is excellent');
+      expect(store.coach.value.cls).toBe('excellent');
+      expect(store.board.value.badge).toEqual({ square: 'd8', cls: 'excellent' });
+      expect(store.moveList.value.plies[0].classification?.cls).toBe('excellent');
+    });
+  }
+
+  it('browsing back to the move during the game shows the same neutral verdict', () => {
+    const store = concedeStore('playing', 'mate');
+    store.viewIndex.value = 1; // not live: the history view of the same move
+    expect(store.isLive.value).toBe(false);
+    expect(store.coach.value.title).toBe('10… Kd8 doesn’t change the result');
+    expect(store.coach.value.cls).toBeUndefined();
+    expect(store.board.value.badge).toBeUndefined();
+  });
+});
+
 describe('pieceColorAt', () => {
   it('reads the colour of the piece on a square, null when empty', () => {
     const start = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';

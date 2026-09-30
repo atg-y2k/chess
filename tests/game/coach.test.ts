@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Classification, Explanation } from '../../src/analysis/types';
-import { answerFreeLines, mentionsMove, repetitionExplanation } from '../../src/game/coach';
+import { answerFreeLines, concession, mentionsMove, repetitionExplanation, verdictTitle } from '../../src/game/coach';
 
 const cl = (over: Partial<Classification> = {}): Classification => ({
   cls: 'blunder',
@@ -75,5 +75,53 @@ describe('repetitionExplanation', () => {
   it('and one that saved a lost game', () => {
     const e = repetitionExplanation('Kh1', cl({ winBefore: 0.1, cls: 'best' }), { human: false, botName: 'Pip' });
     expect(e.details).toEqual(['Pip was losing, so a draw is a good result for it.']);
+  });
+});
+
+describe('verdictTitle / concession', () => {
+  // 10… Kd8 leaves the queen on b4 en prise; in a lost position the class is still Excellent.
+  const base = {
+    fenBefore: '1nb1kbnr/1p4pp/1rp1Pp2/p7/1q1P4/P1NB1N2/1PP2PPP/R1BQR1K1 b k - 0 10',
+    san: 'Kd8',
+    color: 'b' as const,
+    index: 19,
+  };
+  const ply = (over: Partial<Classification>, concedes?: Explanation['concedes'] | 'queen') => ({
+    ...base,
+    classification: cl({ cls: 'excellent', winBefore: 0.02, winAfter: 0.003, winLoss: 0.017, playedMoveSan: 'Kd8', ...over }),
+    explanation: {
+      headline: 'This does nothing about the threat to your queen on b4.',
+      details: [],
+      ...(concedes ? { concedes: concedes as Explanation['concedes'] } : {}),
+    },
+  });
+
+  it('the class verdict and icon when the text does not contradict it', () => {
+    expect(verdictTitle(ply({}))).toEqual({ title: '10… Kd8 is excellent', cls: 'excellent' });
+    expect(verdictTitle(ply({ cls: 'blunder' }))).toEqual({ title: '10… Kd8 is a blunder', cls: 'blunder' });
+    expect(verdictTitle({ ...base })).toEqual({ title: '10… Kd8' });
+    expect(concession(ply({}))).toBeNull();
+  });
+
+  it('a neutral verdict and no icon for a praised move that gives something away', () => {
+    expect(verdictTitle(ply({}, 'material'))).toEqual({ title: '10… Kd8 doesn’t change the result' });
+    expect(verdictTitle(ply({ cls: 'good' }, 'mate'))).toEqual({ title: '10… Kd8 doesn’t change the result' });
+    expect(verdictTitle(ply({ winBefore: 0.97, winAfter: 0.9, winLoss: 0.07 }, 'material'))).toEqual({
+      title: '10… Kd8 still wins, but gives up material',
+    });
+    expect(verdictTitle(ply({ winBefore: 0.8, winAfter: 0.7, winLoss: 0.1 }, 'material'))).toEqual({
+      title: '10… Kd8 gives up material',
+    });
+    expect(concession(ply({}, 'material'))).toBe('material');
+    expect(concession(ply({ cls: 'good' }, 'mate'))).toBe('mate');
+  });
+
+  it('ignores the flag on a class that already says the move was weak, or an unknown value', () => {
+    for (const cls of ['inaccuracy', 'mistake', 'miss', 'blunder'] as const) {
+      expect(concession(ply({ cls }, 'material'))).toBeNull();
+      expect(verdictTitle(ply({ cls }, 'material')).cls).toBe(cls);
+    }
+    expect(concession(ply({}, 'queen'))).toBeNull();
+    expect(concession({ explanation: { headline: 'x', details: [], concedes: 'material' } })).toBeNull();
   });
 });

@@ -3,8 +3,8 @@
  * emulation, see playwright.config.ts): new-game sheet, moves by tapping squares, bot replies,
  * eval bar, coach feedback, hint arrows, undo, flip, reload restore, resign, game over sheet and
  * game review; a game as Black; the starting-level picker, "Set my level" and the Menu's Engine
- * row (and compatibility mode); engine download progress and a failed download; and the
- * `?enginetest` diagnostics page.
+ * row (and compatibility mode); "Available offline"; engine download progress and a failed
+ * download; and the `?enginetest` diagnostics page.
  *
  * Moves are made by tapping the centres of squares, computed from the board's bounding box and
  * orientation. The legal-move choice for later moves and a few waits read the app's state through
@@ -457,6 +457,28 @@ test.describe('Game', () => {
     expect(await page.evaluate(() => (window.__chessCoach!.controller.store as unknown as { engineMode: { value: string } }).engineMode.value)).toBe(
       'dual',
     );
+  });
+
+  test('says once that the app is available offline; the Menu keeps saying so', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto('./');
+    // The first download finishes during this visit: one toast (after the splash).
+    await expect(page.locator('.app-toast')).toHaveText('Available offline', { timeout: 60_000 });
+    const sheet = page.getByRole('dialog', { name: 'New game' });
+    await expect(sheet).toBeVisible();
+    await sheet.getByRole('button', { name: 'Close' }).tap();
+    await page.locator('.toolbar-btn[data-id="menu"]').tap();
+    const menu = page.getByRole('dialog', { name: 'Menu' });
+    await expect(menu.locator('[data-id="offline-ready"]')).toContainText('Available offline');
+
+    // Opened again from the offline cache: the Menu says so, and there is nothing new to announce.
+    await page.reload();
+    await expect(sheet).toBeVisible({ timeout: 30_000 });
+    expect(await page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
+    await sheet.getByRole('button', { name: 'Close' }).tap();
+    await page.locator('.toolbar-btn[data-id="menu"]').tap();
+    await expect(menu.locator('[data-id="offline-ready"]')).toBeVisible();
+    await expect(page.locator('.app-toast')).toHaveCount(0);
   });
 
   test('a slow first download shows the engine download progress on the splash', async ({ page, context }) => {

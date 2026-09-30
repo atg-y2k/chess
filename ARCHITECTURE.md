@@ -14,8 +14,8 @@ no server and no account, and it works offline once installed.
 
 ```
 src/
-  main.tsx                 bootstrap: iOS guards, service worker, visibility -> controller; renders <App/>
-                           (or the engine self-test page with ?enginetest) and calls controller.boot()
+  main.tsx                 bootstrap: iOS guards, service worker (+ "Available offline" signal), visibility ->
+                           controller; renders <App/> (or the engine self-test page with ?enginetest), calls boot()
   App.tsx / App.css        screen layout + wiring of store/controller to components (see "App shell")
   theme.ts                 color theme preference (dark default / light / system) -> <html data-theme>
   clipboard.ts             copyText() with a legacy fallback (PGN export, self-test log)
@@ -41,8 +41,8 @@ src/
     classify.ts            chess.com-style move classification
     sacrifice.ts           sacrifice detection for Brilliant
     accuracy.ts            per-move and per-game accuracy (lichess formulas)
-    see.ts                 attackers / static exchange evaluation helpers
-    motifs.ts              tactic / threat detectors (fork, pin, hanging, mate threats, ...)
+    see.ts                 attackers / static exchange evaluation helpers (see, exchangeCounts, hangingPieces)
+    motifs.ts              tactic / threat detectors (fork, pin, hanging, trapped, mate threats, ...; passTurn)
     explain.ts             plain-English coaching explanations
   bot/
     types.ts               CONTRACT: BotPersona, OpeningInfo, BotMove
@@ -59,7 +59,8 @@ src/
     store.ts               app state as signals + computed view models (one per component)
     controller.ts          GameController: player move -> coach -> bot move; analysis orchestration, review
     coach.ts               coach wording and rules that need no engine (class sentences, move labels, tips,
-                           which actions a classification offers, answer-free text while Retry is offered)
+                           which actions a classification offers, answer-free text while Retry is offered,
+                           neutral verdicts for praised moves that give something away)
     review.ts              game summary (accuracy, counts, key moments)
     pgn.ts                 PGN export with [%eval] comments and NAGs
     persistence.ts         save/restore the current (or just finished) game + settings
@@ -249,6 +250,31 @@ export function classifyMove(p: {
   prevMove?: { to: string };       // the opponent's previous move (a recapture is never "great")
   prevFenBefore?: string;          // position before the opponent's previous move: ignoring a fresh threat can count as a sacrifice
 }): Classification;
+//   The played move's score comes from `before.lines` when the move is among them (same search), else from `after`.
+//   A forced mate that the deeper `after` search finds, for either side, replaces a centipawn score from `before`,
+//   so the class agrees with the explanation, which describes that mate.
+// analysis/types.ts (excerpt)
+export interface Explanation {
+  headline: string; details: string[];     // one short sentence + 0-3 more
+  bestLineSan?: string[]; arrows?: Arrow[];
+  title?: string;                          // e.g. "Fork", "Hanging piece", "Missed recapture"
+  motifs?: string[];                       // e.g. ["fork"], ["allowsMate", "backRank"], ["missedRecapture"]
+  /** Set on a Good / Excellent move (a decided position, where the expected score barely moves) whose text says
+   *  what it gives away: 'material' ("This hangs your queen on b4.") or 'mate' ("This lets White mate faster.").
+   *  The UI then shows a neutral verdict and no class icon (game/coach.ts `verdictTitle`), and the review lists
+   *  the move as a key moment. */
+  concedes?: 'material' | 'mate';
+}
+// analysis/see.ts, analysis/motifs.ts (excerpt)
+export function see(fen: string, target: Square, side: Color, firstFrom?: Square): number; // static exchange gain, pawns
+/** Pieces each side can bring to `target`: x-rays included (a rook behind a queen), absolutely pinned pieces left out. */
+export function exchangeCounts(fen: string, target: Square, side: Color, firstFrom?: Square): { attackers: number; defenders: number };
+/** The same position with the other side to move: the "before" baseline when a null move is illegal (in check). */
+export function passTurn(fen: string): string;
+//   The `freeCapture` motif carries { captured, attackers, defenders, pinned, by }, for "takes the pawn on d5 (attacked
+//   twice, defended only once)", "(its defender is pinned)" or "(taking back would lose material)". A move that
+//   leaves a piece the opponent just took unanswered is explained as "You didn't recapture the bishop on c6."
+//   (title 'Missed recapture', motif `missedRecapture`), not as a missed tactic.
 // analysis/explain.ts
 export type Perspective = 'you' | 'neutral';              // "your knight" vs "White's knight"
 export function explainMove(p: {
@@ -269,14 +295,16 @@ export function describeThreat(fen: string, opts?: { perspective?: Perspective }
 export const DEFAULT_RATING = 800; export const MIN_K = 16; export const HISTORY_LIMIT = 200;
 export const STARTING_LEVELS: readonly { id: string; label: string; rating: number }[]; // Beginner 400, Casual 800, Intermediate 1200, Advanced 1600, Expert 2000
 export function expectedScore(rating: number, opponent: number): number;  // 1 / (1 + 10^((opp - r) / 400))
-/** Glicko-1 against a fixed-rated bot: RD starts at 350 and shrinks each game; the weight grows with
- *  E(1-E). Against an equal bot: 350 for the first game, ~58 at game 10, ~22 at game 30, never below 16. */
-export function kFactor(gamesPlayed: number, expected?: number /*0.5*/): number;
+/** Glicko-1 against a fixed-rated bot, every game weighted as an even one: RD starts at 350 and shrinks each game,
+ *  K = q·RD² after the game: 350 for the first game, ~58 at game 10, ~22 at game 30, never below 16.
+ *  One game moves the rating by at most K (so at most ~350 for a new rating, e.g. 800 -> 456 after losing to the 100 bot). */
+export function kFactor(gamesPlayed: number): number;
 /** gamesPlayed, lowered to 8 when the last 6 rated games beat or missed their expected score by >= 2.5 in total. */
 export function effectiveGames(profile: PlayerProfile): number;
 /** Sets the rating to a level and makes it provisional again (gamesPlayed = 0); keeps the record and history. Pure. */
 export function setStartingRating(profile: PlayerProfile, rating: number): PlayerProfile;
-/** Rated: R += kFactor(effectiveGames(profile), E) * (S - E), clamped to 100..3200. Unrated: rating unchanged, still in history and W/D/L. */
+/** Rated: R += kFactor(effectiveGames(profile)) * (S - E), clamped to 100..3200. Resigned and Abandoned games are rated
+ *  losses like any other. Unrated: rating unchanged, still in history and W/D/L. */
 export function applyGameResult(profile: PlayerProfile, record: Omit<GameRecord, 'ratingBefore' | 'ratingAfter'>): { profile: PlayerProfile; record: GameRecord };
 export function updateGameRecord(profile: PlayerProfile, id: string, patch: Partial<Pick<GameRecord, 'accuracy' | 'pgn' | 'reason'>>): PlayerProfile;
 export function loadProfile(): PlayerProfile;
@@ -289,7 +317,10 @@ export interface SavedGame {
   assisted: boolean; startedAt: string; annotations: Record<number, Pick<Ply, 'evalWhite' | 'evalDepth' | 'classification' | 'explanation' | 'isBook'>>;
   /** Set once the game has ended. A finished game stays saved (game-over state, review) until the next game starts. */
   over?: { outcome: GameOutcome; ratingChange: { before: number; after: number; rated: boolean } };
-}   // unknown extra fields survive sanitizing (the controller also stores `startEval`)
+  /** The coach's "Try again" prompt after a Retry (game in progress only), also saved while a hint is open over it. */
+  retry?: { san: string; cls: MoveClass; headline: string | null };
+}   // unknown extra fields survive sanitizing (the controller also stores `startEval`); an explanation's `concedes`
+    // must be 'material' or 'mate', else it is dropped
 export function saveGame(g: SavedGame): boolean; export function loadGame(): SavedGame | null; export function clearGame(): void;
 export function saveSettings(s: GameSettings): void; export function loadSettings(): GameSettings;
 export function requestPersistentStorage(): Promise<boolean>;
@@ -299,14 +330,26 @@ export const RETRY_CLASSES: ReadonlySet<MoveClass>;  // mistake, miss, blunder
 export function answerFreeLines(e: Explanation | undefined | null, cl: Classification): string[]; // text that does not give the better move away (while Retry is offered)
 export function mentionsMove(text: string, san: string): boolean;
 export function classSentence(san: string, cls: MoveClass): string; // "3. Qxf7+ is a blunder"
+export function moveLabel(ply: Pick<Ply, 'fenBefore' | 'san' | 'color' | 'index'>): string; // "12. Nf3" / "12… Nf6"
+export const KEY_CLASSES: ReadonlySet<MoveClass>;    // brilliant, great, mistake, miss, blunder (graph markers, key moments)
+/** Explanation.concedes, unless the class already says the move was weak (inaccuracy and worse). */
+export function concession(ply: Pick<Ply, 'classification' | 'explanation'>): 'material' | 'mate' | null;
+/** The coach title and icon: "12. Nf3 is a mistake" + cls; for a concession a neutral title and no icon:
+ *  "10… Kd8 doesn’t change the result" (already lost, or 'mate'), "… still wins, but gives up material", "… gives up material". */
+export function verdictTitle(ply: Pick<Ply, 'fenBefore' | 'san' | 'color' | 'index' | 'classification' | 'explanation'>): { title: string; cls?: MoveClass };
 // game/store.ts
 export function explanationLines(e: Explanation | undefined | null, bestSan?: string | null): string[]; // adds "Best was X." unless a line already names X
 // game/sound.ts
 export type SoundKind = 'move' | 'capture' | 'check' | 'castle' | 'promote' | 'gameStart' | 'gameEnd' | 'illegal' | 'notify';
 export function unlockAudio(): void; export function setSoundEnabled(on: boolean): void; export function playSound(kind: SoundKind): void;
 // pwa.ts / ios.ts
-/** onOfflineReady: once per page load, when the app is known to be cached for offline use. */
+/** onOfflineReady: once per page load, when the app is known to be cached for offline use (at startup when it already
+ *  was, else when the first install completes). A lazy chunk that fails to load (`vite:preloadError`) while an update
+ *  waits reloads at once, even on a touched page, but only when canReloadNow() allows it. */
 export function registerServiceWorker(opts: { canReloadNow: () => boolean; onOfflineReady?: () => void }): void;
+/** How main.tsx reports offline readiness to App: 'cached' (the page was controlled at startup) or 'installed'
+ *  (the first download finished during this visit: App shows an "Available offline" toast once). */
+export type OfflineStatus = 'cached' | 'installed';
 /** Registers again when the registration is missing (a failed first install deletes it), else looks for updates; retries a failed first install with a backoff. */
 export function createRegistrationKeeper(opts: { scope: string; getRegistration: () => Promise<KeeperRegistration | undefined>; register: () => Promise<KeeperRegistration | undefined>; onReady?: () => void; online?: () => boolean }): { start(): Promise<void>; check(force?: boolean): Promise<void> };
 /** Reloads onto a new build only when canReloadNow() and the page is hidden or untouched since it was loaded or shown. */
@@ -345,7 +388,7 @@ interface BoardProps {
   /** Highlight the side-to-move king as in check. */
   check?: boolean;
   arrows?: Arrow[];                          // from analysis/types.ts
-  badge?: { square: string; cls: MoveClass }; // classification icon at a square (like chess.com)
+  badge?: { square: string; cls: MoveClass }; // classification icon at a square (like chess.com); none for a concession
   /** A user move. Accept it by passing the new `fen` in the same task (e.g. synchronously from a store
    *  update); if `fen` is unchanged shortly afterwards, the board snaps back. Pawn moves to the last
    *  rank first show the promotion picker. */
@@ -399,13 +442,17 @@ interface MoveListProps {
   iconSet?: 'notable' | 'all';  // default 'notable' (brilliant, great, inaccuracy, mistake, miss, blunder); 'all' in review
 }
 ```
-A horizontally scrolling list of move numbers and SAN, with small class icons. It keeps the current move in view.
+A horizontally scrolling list of move numbers and SAN, with small class icons. It keeps the current move in view,
+also when the set of moves with an icon changes (a review starting); a mere re-annotation does not move a row the
+user has swiped. The store strips the class from the plies it passes where it must not show: the bot's moves
+during play, and concessions (which get no badge on the board either).
 
 ### CoachPanel.tsx
 ```ts
 interface CoachPanelProps {
-  cls?: MoveClass;            // shows ClassIcon + colored title when present
+  cls?: MoveClass;            // shows ClassIcon + colored title when present (not for a concession)
   title: string;              // e.g. "3. Qxf7+ is a blunder" / "Your move" / "Hint"
+  titleMove?: string;         // the move part of such a title ("3. Qxf7+"): a one-line row cuts it before the verdict
   lines: string[];            // explanation sentences
   busy?: boolean;             // analyzing spinner
   actions?: { id: string; label: string; onClick: () => void; primary?: boolean }[];
@@ -432,7 +479,7 @@ interface PlayerStripProps {
 
 ### Toolbar.tsx + icons.tsx
 `Toolbar({ items: { id, label, icon: preact.ComponentChild, onClick, disabled?, active? }[], label? })` is the bottom bar with 44px+ tap targets.
-`icons.tsx` exports simple inline SVG icons: `IconPlus, IconUndo, IconBulb, IconFlip, IconCoach, IconMenu, IconChart, IconClose, IconChevronLeft, IconChevronRight, IconShare, IconFlag, IconEye, IconSound, IconCpu, IconGauge`.
+`icons.tsx` exports simple inline SVG icons: `IconPlus, IconUndo, IconBulb, IconFlip, IconCoach, IconMenu, IconChart, IconClose, IconChevronLeft, IconChevronRight, IconShare, IconFlag, IconEye, IconSound, IconCpu, IconGauge, IconCheckCircle`.
 `Toggle({ label, description?, checked, onChange, disabled?, icon?, iconColor?, id? })` is the switch row used by the sheets.
 
 ### Sheet.tsx (base) and sheets
@@ -443,15 +490,18 @@ interface PlayerStripProps {
   - `inProgress: { rated } | null`: a game the player has moved in is still going. The sheet warns that it ends as a loss
     (rated unless already unrated) and the button reads "Resign & play".
   - `newPlayer` with `levels` + `onSetLevel`: a "Your level" LevelPicker at the top sets the starting rating before the first game.
+    Picking a level also switches the opponent to "Match my rating", unless the player already picked a bot, the slider or
+    the toggle in the sheet.
 - `LevelPicker({ levels, value: number | null, onChange(rating), labelledBy?, id? })`: five-way segmented control over
   `STARTING_LEVELS` with a caption describing the selected level (`LEVEL_BLURB`).
-- `MenuSheet({ open, settings, profile, canResign, onChange(partial), onResign, onExportPgn, onFlip, onNewGame, onClose, bots?, theme?, onThemeChange?, engine?, onRetryDualEngines?, selfTestHref?, levels?, onSetLevel? })`:
+- `MenuSheet({ open, settings, profile, canResign, onChange(partial), onResign, onExportPgn, onFlip, onNewGame, onClose, bots?, theme?, onThemeChange?, engine?, onRetryDualEngines?, selfTestHref?, offlineReady?, levels?, onSetLevel? })`:
   action tiles (flip, export, new game, resign with an inline confirmation), in-game toggles, the Appearance picker
   (with `theme` + `onThemeChange`), profile stats with "Set my level" (LevelPicker + confirmation, with `levels` + `onSetLevel`),
   recent games, the Engine section and About. Its callbacks do not close the sheet; App does.
   - `engine: { mode: 'dual' | 'single' | null; singleUntil?: number | null }`: a "Stockfish 19" row reading "2 workers" or
     "1 worker (compatibility mode, until Oct 14)"; in single mode a "Try two engines again" row (`onRetryDualEngines`) and a
-    note; always a "Run engine self-test" link (`selfTestHref`, default `?enginetest`).
+    note; with `offlineReady` an "Available offline" row; always a "Run engine self-test" link (`selfTestHref`, default
+    `?enginetest`).
 - `GameOverSheet({ open, outcome: GameOutcome, playerColor, botName, ratingChange?: { before: number; after: number; rated: boolean }, onReview, onRematch, onNewGame, onClose, botEmoji?, botColor?, botElo? })`.
 - `ConfirmSheet({ open, title, message, confirmLabel, cancelLabel?, onConfirm, onClose })`: a small confirmation sheet.
   `assistPrompt(kind: 'hint' | 'undo' | 'retry')` gives its wording for "this makes the game unrated".
@@ -469,23 +519,35 @@ interface ReviewPanelProps {
   counts: Record<Color, Partial<Record<MoveClass, number>>>;
   playerColor: Color;
   names: { w: string; b: string };
-  keyMoments: { index: number; cls: MoveClass; san: string; text: string }[];
+  keyMoments: KeyMoment[];    // { index; cls; san; text; concedes?: 'material' | 'mate' }
   onSelectPly: (current: number) => void;
   onClose: () => void;
 }
 ```
+A key moment with `concedes` shows a neutral grey marker and the label "Gives up material" / "Faster mate"
+(`momentLabel`) instead of its (praising) class.
 
 ## App shell (App.tsx) and the controller
 
 `main.tsx` creates one `GameController` (src/game/controller.ts), binds page visibility to it
-(`bindPageLifecycle`), and registers the service worker with `canReloadNow: () => controller.canReloadNow()`.
-`canReloadNow()` is true only in the `setup` and `error` phases. It is false while playing, and also
-after a game: the finished game is saved and survives a restart, but a reload would still close its
-game-over sheet or interrupt the review. The new service worker is active anyway, so the next
-launch runs the new version. `pwa.ts` also waits until the page is hidden, or has not been touched
-since it was opened or brought back, so an update never reloads the New game sheet while the user
-is choosing. `main.tsx` also installs the iOS guards with `onFirstGesture: unlockAudio`, renders
-`<App controller/>` and calls `boot()`. `window.__chessCoach.controller` is exposed for debugging and the e2e tests.
+(`bindPageLifecycle`), and registers the service worker with
+`canReloadNow: () => controller.canReloadNow({ hidden: document.visibilityState === 'hidden' })`:
+- true in the `setup` and `error` phases;
+- in `over` (a finished game), true when no sheet is open; with a sheet open over it (such as the
+  game-over sheet the player may be reading), only while the page is hidden. The finished game is
+  saved with its result and restored as it was (phase `over`, same result, rating and history);
+- false while playing or reviewing. The new service worker is active anyway, so the next launch
+  runs the new version. (Playing while hidden stays false on purpose: a reload would lose the board
+  flip, the viewed move and an open hint.)
+
+`pwa.ts` also waits until the page is hidden, or has not been touched since it was opened or brought
+back, so an update never reloads the New game sheet while the user is choosing (the one exception, a
+lazy chunk that fails while an update waits, is described in `pwa.ts`). `main.tsx` also passes
+`onOfflineReady`, which sets an `OfflineStatus` signal (`'cached'` when the page was controlled at
+startup, else `'installed'`); `App` shows "Available offline" in the Menu's Engine section, and as a
+toast once after the splash when it is `'installed'` (not over another toast). `main.tsx` installs
+the iOS guards with `onFirstGesture: unlockAudio`, renders `<App controller offline/>` and calls
+`boot()`. `window.__chessCoach.controller` is exposed for debugging and the e2e tests.
 
 The controller owns all state as signals (`controller.store`, see store.ts). Phases: `boot`, `error`,
 `setup`, `playing`, `over`, `review`. The store also exposes ready-made **view models**, one per
@@ -509,7 +571,7 @@ component (`board`, `evalBar`, `evalGraph`, `moveList`, `coach`, `topPlayer`, `b
 **Controller API** (besides the table): `boot()`, `retry()` (the error screen's *Try again*),
 `dispose()`, `newGame(settings, { startFen? })`, `rematch()`, `setStartingRating(rating)` (applies a
 starting level and saves the profile), `playerMove(from, to, promotion?)`, `undo()`, `hint()`,
-`resign()`, `goTo(index | null)`, `backToLive()`, `canReloadNow()`, `exportPgn()`,
+`resign()`, `goTo(index | null)`, `backToLive()`, `canReloadNow({ hidden? })`, `exportPgn()`,
 `onVisibilityChange(hidden)` and `idle()` (tests). `engineStartAdvice(e)` picks the error screen's
 advice by `engineFailureKind`. Dependencies are injectable (`ControllerDeps`): `createEngines(request:
 { onProgress })` (a zero-argument factory also type-checks), `onlineEvents` (where `online` comes
@@ -521,24 +583,41 @@ handling too.
 **Rated vs unrated.** A hint, takeback or Retry makes a rated game unrated, so `requestHint()`,
 `requestUndo()` and the coach's Retry action ask first in a rated game: they set
 `store.pendingAssist` and open the `'assist'` sheet; `confirmAssist()` runs the help and
-`closeSheet()` cancels. In an unrated game they run at once. Switching best-move arrows on marks the
-game unrated immediately (a game started with them on is unrated from the start). Starting a new
-game after the player has moved records the old one as a loss by "Abandoned" (rated unless already
-unrated); before the first move it is discarded. Resigning before the first move is unrated.
+`closeSheet()` cancels. In an unrated game they run at once. While a takeback (Undo or Retry) waits
+for confirmation in a rated game, the bot's reply is stopped and held: confirming takes the move back,
+and cancelling (closing the sheet, or opening another one) lets the bot reply. Otherwise a reply that
+ended the game would drop the takeback and record the rated loss the player was taking back.
+Switching best-move arrows on marks the game unrated immediately (a game started with them on is
+unrated from the start). Starting a new game after the player has moved records the old one as a
+loss by "Abandoned" (rated unless already unrated); with Match my rating the new opponent is chosen
+before that loss is recorded, so it is the Elo the sheet showed. Before the first move the old game is
+discarded. Resigning is a rated loss (unless already unrated), except before the first move.
 
 **Coach flow.** Every ply is annotated in the background (`ensure` depth 14, MultiPV 3, before and
 after the move; `classifyMove` gets `prevFenBefore` from the previous ply). A result that was
 aborted, is not terminal and is shallower than depth 14 counts as failed, so the coach offers *Try
 again* instead of a shallow verdict. The feedback title names the move ("3. Qxf7+ is a blunder") and
-the badge stays on it after the bot replies. *Show best* is offered when `offersShowBest` says so
+the badge stays on it after the bot replies, as long as the player's piece is still on that square
+(not after the reply took it, en passant included). *Show best* is offered when `offersShowBest` says so
 (any move but a top one, including a Brilliant that isn't the engine's top move); in a rated game
 it is the primary action and Retry is secondary. While Retry is offered, the text drops anything
-that names the better move (`answerFreeLines`). *Hint* and *Show best* pass all engine lines to
-`explainBestMove`, so they compare the move with the alternatives the same way the feedback on that
-move does. A move that ends the game by threefold repetition is classified and explained as a
-draw.
+that names the better move (`answerFreeLines`; an underpromotion headline is replaced too), and the
+"Try again" prompt after a Retry is saved with the game (`SavedGame.retry`). *Hint* and *Show best*
+pass all engine lines to `explainBestMove`, so they compare the move with the alternatives the same
+way the feedback on that move does. When the position's engine lines are no longer cached (after a
+restart or a restore), *Show best* shows the saved explanation at once with a spinner, analyzes the
+position again (the `showBest` coach mode's `pending`; `idle()` waits for it) and then fills in the best move's
+explanation and "Best line"; a late result is dropped if the player has moved on. "You played X."
+leaves out the move's own explanation when it only repeats the best move's. Browsing earlier moves
+while a hint is open shows the history view; the hint comes back at the live position (the Hint
+button is not highlighted meanwhile). A move whose explanation has `concedes` (a Good / Excellent
+move that gives something away) gets `verdictTitle`'s neutral title and no class icon in the coach,
+on the board or in the move list. A move that ends the game by threefold repetition is classified and
+explained as a draw.
 
-**Boot, errors and the splash.** While booting, the splash shows "Starting the engine…". When the
+**Boot, errors and the splash.** `boot()` starts the engines first and only then loads the opening
+book (0.9 MB, only a game needs it), so the book never competes with the engine download. While
+booting, the splash shows "Starting the engine…". When the
 analysis engine's `.wasm` download is still running after 300 ms, it shows "Downloading engine
 NN%…" with a thin progress bar (`store.engineDownload`, 0..1, analysis engine only, set only while
 booting). The error screen shows *Try again* (`retry()`) and a link to `?enginetest`, with advice by
@@ -555,7 +634,8 @@ failure kind:
 `SavedGame.over`) instead of clearing it, and the review saves again when it ends. On boot,
 `restore()` reopens a finished game in the `over` phase (no bot move), recording the result if the
 profile's history lacks it, or continues a game in progress with the coach's verdict on the last
-human move. The next game overwrites the save.
+human move (or the "Try again" prompt of a Retry, from `SavedGame.retry`). The next game overwrites
+the save.
 
 Each screen area is its own small component that reads only its signals, so a live-analysis update
 re-renders the eval bar and graph but not the board. App-level extras: the boot splash, the engine
@@ -564,7 +644,12 @@ else clipboard, with a toast), ← / → keys to step through moves, the theme p
 the Menu's Engine section: "Try two engines again" calls `resetEngineMode()` and reloads (dropping
 an `?engines` parameter from the address instead, which would force one engine again).
 
-**Review.** In phase `review` the panel slot shows the ReviewPanel summary first; stepping to another
+**Review.** `summarizeGame` (review.ts) lists as key moments the plies in `KEY_CLASSES` plus the
+concessions (`concession(ply)`), and adds the inaccuracies when that makes fewer than 3; over 12, it
+keeps the most important (concessions rank with the inaccuracies). Counts and accuracy use the
+classes as they are.
+
+In phase `review` the panel slot shows the ReviewPanel summary first; stepping to another
 move (toolbar ‹ ›, move list, graph, a key moment) swaps it for the coach's comment on that move
 (`store.coach` in review mode, with *Show best*). The toolbar's *Report* button toggles back. When
 the panel slot is under 300 px tall (phones), the summary floats over the board as a card.
@@ -629,17 +714,20 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
 
 ## Tests
 
-- `npm test`: Vitest unit tests in node, 603 tests in 29 files (`tests/bot/calibration.slow.test.ts`
-  is skipped unless `CALIBRATE=1`, see `npm run calibrate`). They cover pure logic, the engine layer
-  against scripted transports, the controller against a fake engine and a scripted bot
-  (`tests/helpers/fakeEngine.ts`), UI helpers, and some real-engine checks that run the vendored
-  Stockfish WASM in node (`tests/helpers/nodeTransport.ts`: engine searches, the position history,
-  bot mates and conversions).
+- `npm test`: Vitest unit tests in node, 676 tests in 30 files (the one test in
+  `tests/bot/calibration.slow.test.ts` is skipped unless `CALIBRATE=1`, see `npm run calibrate`). They
+  cover pure logic, the engine layer against scripted transports, the controller against a fake
+  engine and a scripted bot (`tests/helpers/fakeEngine.ts`), the store's view models, UI helpers, the
+  service-worker registration keeper and reload gate, and some real-engine checks that run the
+  vendored Stockfish WASM in node (`tests/helpers/nodeTransport.ts`: engine searches, the position
+  history, bot mates and conversions).
 - `npm run e2e`: Playwright on the production build with the real engine, iPhone 15 Pro emulation,
-  17 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest, iOS tags, engine MIME types,
-  service worker and precache, offline, license notices served as files, full-screen layout);
-  `e2e/game.spec.ts` (10) plays through the UI (moves by tapping squares, coach, hint, undo, flip,
-  reload, resign, review, a game as Black, a mating promotion, coach readability at six phone
-  heights, the landscape review header, the starting level and Set my level, the Engine rows and
-  compatibility mode, download progress on the splash, a failed download that recovers when back
-  online, and `?enginetest`).
+  20 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id`, iOS tags, engine MIME
+  types, service worker and precache, offline, license notices served as files, full-screen layout);
+  `e2e/game.spec.ts` (13) plays through the UI (moves by tapping squares, coach, hint, undo, flip,
+  reload, resign, review, a game as Black, a mating promotion, the move list staying on the current
+  move when a review starts, coach readability at six phone heights, landscape (the Unrated pill
+  and the Back to game chip, the coach verdict, the floating review header), the starting level and
+  Set my level, the Engine rows and compatibility mode, "Available offline", download progress on
+  the splash, a failed download that recovers when back online, and `?enginetest`).
+  `E2E_REQUIRE_APP_SW=1` makes the PWA tests fail if the app does not register its service worker.

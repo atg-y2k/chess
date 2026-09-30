@@ -10,6 +10,11 @@ export interface KeyMoment {
   cls: MoveClass;
   san: string;
   text: string;
+  /**
+   * The class praises the move but `text` says what it gives away (`Explanation.concedes`): the
+   * moment is shown with a neutral marker and label instead of the class.
+   */
+  concedes?: 'material' | 'mate';
 }
 
 export interface ReviewPanelProps {
@@ -52,6 +57,31 @@ function moveLabel(index: number): string {
 }
 
 const SIDES: Color[] = ['w', 'b'];
+
+/** Row tone of a key moment that gives something away: the neutral grey of Forced. */
+const CONCESSION_TONE = 'var(--cls-forced)';
+
+/** Label of a key moment: its class ("Blunder"), or what a praised move gives away. */
+export function momentLabel(m: Pick<KeyMoment, 'cls' | 'concedes'>): string {
+  if (m.concedes === 'mate') return 'Faster mate';
+  if (m.concedes === 'material') return 'Gives up material';
+  return CLASS_META[m.cls].label;
+}
+
+/** Neutral marker for a key moment that gives something away (no class icon praising it). */
+function ConcessionIcon({ label, size }: { label: string; size: number }) {
+  return (
+    <span
+      class="class-icon review-moment-concedes"
+      role="img"
+      aria-label={label}
+      title={label}
+      style={{ width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.62)}px` }}
+    >
+      −
+    </span>
+  );
+}
 
 /**
  * Post-game review summary (replaces the coach panel in review mode): accuracy per side,
@@ -163,15 +193,16 @@ export function ReviewPanel({
                     type="button"
                     class="review-moment"
                     data-index={m.index}
-                    style={{ '--row-tone': CLASS_META[m.cls].color }}
+                    data-concedes={m.concedes}
+                    style={{ '--row-tone': m.concedes ? CONCESSION_TONE : CLASS_META[m.cls].color }}
                     onClick={() => onSelectPly(m.index + 1)}
                   >
-                    <ClassIcon cls={m.cls} size={24} />
+                    {m.concedes ? <ConcessionIcon label={momentLabel(m)} size={24} /> : <ClassIcon cls={m.cls} size={24} />}
                     <span class="review-moment-main">
                       <span class="review-moment-head">
                         <span class="review-moment-no">{moveLabel(m.index)}</span>
                         <span class="review-moment-san">{m.san}</span>
-                        <span class="review-moment-cls">{CLASS_META[m.cls].label}</span>
+                        <span class="review-moment-cls">{momentLabel(m)}</span>
                       </span>
                       <span class="review-moment-text">{m.text}</span>
                     </span>

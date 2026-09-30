@@ -271,6 +271,7 @@ function sanitizeExplanation(v: unknown): Explanation | null {
     if (key in e && !isStringArray(e[key])) delete e[key];
   }
   if ('title' in e && typeof e.title !== 'string') delete e.title;
+  if ('concedes' in e && e.concedes !== 'material' && e.concedes !== 'mate') delete e.concedes;
   if ('arrows' in e) {
     const isArrow = (a: unknown) =>
       isObject(a) && typeof a.from === 'string' && typeof a.to === 'string' && typeof a.brush === 'string';

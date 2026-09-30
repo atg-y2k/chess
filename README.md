@@ -18,7 +18,8 @@ after the first visit.
   once a game has been reviewed).
 - **A live evaluation bar** next to the board, and a graph of the whole game under the coach.
 - **A coach** that classifies each of your moves (Best, Mistake, Blunder…) and says why: what it
-  wins or loses, the tactic you missed, the threat you allowed, and what the best move was.
+  wins or loses, the tactic or recapture you missed, the threat you allowed, and what the best move
+  was.
 - **Hints, Show best and Retry** to learn from your mistakes during the game.
 - **Game review** after the game: accuracy for both sides, key moments, and coaching for every move
   of both players.
@@ -43,22 +44,31 @@ tab before installing does not carry over.
 The first visit downloads about 3.3 MB (less if the site compresses it). Most of that is the chess
 engine (1.8 MB) and the opening book (0.9 MB). On a slow connection, the start screen shows
 "Downloading engine NN%…". Once a launch has finished that download while online, the app works
-**offline**, in airplane mode too. The Home Screen app keeps its own storage (see above), so open it
-once while online after adding it. If the connection drops during that first download, the app
-finishes it by itself the next time it is online.
+**offline**, in airplane mode too: it says **Available offline** once when the download is done,
+and the Menu's Engine section keeps saying so. The Home Screen app keeps its own storage (see
+above), so open it once while online after adding it. If the connection drops during that first
+download, the app finishes it by itself the next time it is online.
 
-**Updates** download in the background. The new version starts the next time the app starts from
-scratch, for example after iOS has closed it in the background or after you swipe it away in the
-app switcher. The app never reloads itself during a game, on a finished game's screen or during a
-review, and never while you are touching it.
+**Updates** download in the background and switch over only when that cannot get in your way:
+
+- **Never during a game or a review.** The new version starts the next time the app starts from
+  scratch, for example after iOS has closed it in the background or after you swipe it away in the
+  app switcher.
+- **Before a game, or on a finished game**, the app reloads onto the new version when you open it
+  or come back to it, or while it is in the background. A finished game comes back as it was, with
+  its result, ready for review. While the game-over sheet (or another sheet) is open over a finished
+  game, this happens only in the background.
+- It normally waits until you are not using the app, so it does not reload while you are choosing
+  an opponent.
 
 ## Playing a game
 
 The first time you open the app, and whenever you tap **New**, the **New game** sheet asks you to:
 
 - **Pick your level** (first game only): Beginner (400), Casual (800), Intermediate (1200),
-  Advanced (1600) or Expert (2000). This sets your starting rating. You can change it later in the
-  Menu with **Set my level**.
+  Advanced (1600) or Expert (2000). This sets your starting rating and switches the opponent to
+  **Match my rating**, so your first game is against a bot of your level (unless you already picked
+  an opponent in the sheet). You can change your level later in the Menu with **Set my level**.
 - **Pick an opponent:** a named bot, **Custom** (the slider, 100 to 3200 in steps of 50) or
   **Match my rating** (an opponent at your rating, rounded to 50, chosen again for every game).
 - **Pick a color:** White, Random or Black.
@@ -80,12 +90,24 @@ After each of your moves the coach names the kind of move (see [Move classificat
 and explains it. For example, "14. Qg4 is a blunder" with "This hangs your queen on g4."
 
 - **Show best** puts the engine's best move and the move you played on the board as arrows, and
-  explains the best move. It appears when the engine preferred a different move.
+  explains the best move. It appears when the engine preferred a different move. After the app has
+  been closed and reopened, it may take a moment: the coach looks at the position again first.
 - **Retry** (after a mistake, miss or blunder, when takebacks are on) takes your move back so you
-  can look for a better one. While Retry is on offer, the coach does not give away the answer.
+  can look for a better one. While Retry is on offer, the coach does not give away the answer. The
+  "Try again" prompt is still there if iOS closes the app in the meantime.
 - **Hint** shows the best move with an arrow and a short reason, and how it compares with the other
-  good moves, for example "c4 keeps a small edge. g3 and Bf4 are about as good."
+  good moves, for example "c4 keeps a small edge. g3 and Bf4 are about as good." You can still
+  step back through the moves while a hint is open; the hint comes back when you return to the game.
 - **Best-move arrows** (an option) show the engine's top three moves all the time.
+
+If you don't take back a piece your opponent just captured, the coach says so, for example "You
+didn't recapture the bishop on c6."
+
+**Good moves that give something away.** When the game is already decided, a move can hardly change
+your winning chances, so it can count as Good or Excellent even if it gives up material. The coach
+does not praise such a move: it says, for example, "10… Kd8 doesn't change the result" (the game
+was already lost) or "25. Rd1 still wins, but gives up material", explains what the move gives away,
+and shows no move icon for it. Game review lists it among the key moments.
 
 The coach needs a moment to check each move. If that fails (rarely), it says "Couldn't check …"
 with a **Try again** button.
@@ -105,8 +127,10 @@ moments. The Evaluation bar option hides both.
 
 After the game, tap **Review** (or **Game review** in the coach panel). The engine goes through
 every move of both players. You then see each side's **accuracy**, a count of each kind of move,
-and the **key moments**. Tap a moment or step through the moves with ‹ › to read the coach's comment
-on each move, with **Show best** for the better move. **Report** returns to the summary.
+and the **key moments**: brilliant and great moves, mistakes, misses and blunders, and good moves
+that gave something away (inaccuracies too when there are few). Tap a moment or step through the
+moves with ‹ › to read the coach's comment on each move, with **Show best** for the better move.
+**Report** returns to the summary.
 
 ## Your rating (what Elo means)
 
@@ -118,11 +142,12 @@ gains more than beating a weaker one.
 
 - **Starting level.** You start at the level you picked (Casual, 800, if you skip it). **Set my
   level** in the Menu sets a new level at any time; your game history stays.
-- **New ratings move fast.** Your rating is uncertain at first, so your first rated game can move it
-  by about 175 points against an equal bot (more if you beat a much stronger one). The steps
-  shrink as you play: about ±30 after 10 games, about ±11 after 30, and ±8 from about 40 games on.
-  (The step size follows the Glicko rating system.) After you set a new level, the rating moves
-  fast again.
+- **New ratings move fast.** Your rating is uncertain at first, so your first rated game moves it
+  by about 175 points against an equal bot, and by up to about 350 if you beat a much stronger bot
+  or lose to a much weaker one. The steps shrink as you play: about ±30 after 10 games, about ±11
+  after 30, and ±8 from about 40 games on. (The step size follows the Glicko rating system.) If a
+  new rating starts off wrong, **Set my level** in the Menu resets it at any time, and the rating
+  moves fast again after that.
 - **Catching up.** If your last 6 rated games together went much better, or much worse, than
   expected (by 2.5 points or more), the rating speeds up again as if you had played only 8 games,
   so it can catch up with a player who has improved.
@@ -132,13 +157,16 @@ gains more than beating a weaker one.
 
 - A **takeback** (Undo), a **hint**, **Retry** or **best-move arrows** make the game unrated. The
   coach and the evaluation bar are fine in rated games.
-- In a rated game, the first hint, takeback or Retry asks you to confirm. Switching best-move arrows
-  on (in the Menu, or when starting the game) makes it unrated at once.
+- In a rated game, the first hint, takeback or Retry asks you to confirm. While a takeback or Retry
+  is waiting for your answer, your opponent holds its reply; if you cancel, it plays on. Switching
+  best-move arrows on (in the Menu, or when starting the game) makes it unrated at once.
 - An **Unrated** tag on your player strip shows when a game no longer counts.
-- **Resigning** is a loss. Resigning before you have made a move does not change your rating.
-- **Starting a new game** while one is going, after you have made a move, counts as a loss
-  ("Abandoned"). It is rated unless the game was already unrated. The New game sheet warns you and
-  its button reads **Resign & play**. Before your first move, the old game is simply dropped.
+- **Resigning** counts as a loss, rated unless the game was already unrated. Resigning before you
+  have made a move does not change your rating.
+- **Starting a new game** while one is going, after you have made a move, also counts as a loss
+  ("Abandoned"), rated unless the game was already unrated. The New game sheet warns you and its
+  button reads **Resign & play** (with **Match my rating**, you play the opponent the sheet showed).
+  Before your first move, the old game is simply dropped.
 
 Unrated games still appear in your history and in your win, draw and loss record.
 
@@ -201,8 +229,9 @@ match chess.com exactly. The Brilliant and Great thresholds depend on your ratin
 - **Appearance:** Dark, Light or Automatic (follows iOS).
 - **Your stats:** rating, peak, games, wins/draws/losses and **Set my level**; then your
   **Recent games** (the last 10).
-- **Engine:** "Stockfish 19" with "2 workers", or "1 worker (compatibility mode, until …)", plus
-  **Run engine self-test**. See below.
+- **Engine:** "Stockfish 19" with "2 workers", or "1 worker (compatibility mode, until …)";
+  **Available offline** once the app and the engine are saved on the phone; and **Run engine
+  self-test**. See below.
 - **About:** the license notice, a link to the source code, the credits, and links to the
   third-party licenses and the engine's source and license.
 
@@ -261,12 +290,12 @@ Requires Node 24 (chessground declares `engines.node >= 24`).
 ```sh
 npm ci                 # install
 npm run dev            # dev server with hot reload (http://localhost:5173)
-npm test               # unit tests (Vitest: 603 tests in 29 files; the calibration file is skipped)
+npm test               # unit tests (Vitest: 676 tests in 30 files; the calibration test is skipped)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
 npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting
 npm run preview        # serve dist/
-npm run e2e            # Playwright (17 tests): builds, serves and runs e2e/ on an emulated iPhone 15 Pro
+npm run e2e            # Playwright (20 tests): builds, serves and runs e2e/ on an emulated iPhone 15 Pro
 npm run build:openings # regenerate src/data/openings.json from the lichess chess-openings data
 npm run calibrate      # play bot-vs-bot matches with the real engine to check the Elo ladder
 ```

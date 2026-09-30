@@ -7,6 +7,7 @@ import type { ThemePref } from '../theme';
 import { About } from './About';
 import {
   IconChart,
+  IconCheckCircle,
   IconChevronRight,
   IconCoach,
   IconCpu,
@@ -48,6 +49,8 @@ export interface MenuSheetProps {
   onRetryDualEngines?: () => void;
   /** Link to the engine self-test page. Default `?enginetest`. */
   selfTestHref?: string;
+  /** The app and the engine are cached for offline use: the Engine section says so. */
+  offlineReady?: boolean;
   /** Starting levels for "Set my level" in the stats card (with `onSetLevel`). */
   levels?: readonly StartingLevel[];
   /** Called after the "Set my level" confirmation with the chosen rating. */
@@ -133,6 +136,7 @@ export function MenuSheet({
   engine,
   onRetryDualEngines,
   selfTestHref = '?enginetest',
+  offlineReady = false,
   levels,
   onSetLevel,
 }: MenuSheetProps) {
@@ -280,6 +284,17 @@ export function MenuSheet({
               <button type="button" class="menu-row menu-row--action" data-id="engine-retry-dual" onClick={onRetryDualEngines}>
                 <span class="menu-row-label">Try two engines again</span>
               </button>
+            )}
+            {offlineReady && (
+              <div class="menu-row" data-id="offline-ready">
+                <span class="menu-row-icon" style={{ background: 'var(--cls-best)' }} aria-hidden="true">
+                  <IconCheckCircle />
+                </span>
+                <span class="menu-row-text">
+                  <span class="menu-row-label">Available offline</span>
+                  <span class="menu-row-desc">Saved on this device, engine included</span>
+                </span>
+              </div>
             )}
             <a class="menu-row menu-row--link" href={selfTestHref} data-id="engine-selftest">
               <span class="menu-row-icon" style={{ background: 'var(--cls-forced)' }} aria-hidden="true">

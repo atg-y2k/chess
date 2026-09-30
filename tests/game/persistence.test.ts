@@ -129,7 +129,7 @@ describe('saved game', () => {
 
   it('sanitises annotations and optional fields', () => {
     const raw = {
-      ...savedGame(),
+      ...savedGame({ moves: ['e2e4', 'e7e5', 'g1f3', 'b8c6', 'f1b5', 'a7a6', 'b5a4'] }),
       botElo: 5000,
       botName: 7,
       assisted: 'yes',
@@ -137,8 +137,11 @@ describe('saved game', () => {
       annotations: {
         '0': { evalWhite: { kind: 'cp', value: 'x' }, evalDepth: 12, isBook: 'no' },
         '1': { classification: { ...classification, cls: 'awesome' } },
-        '2': { explanation: { headline: 'Hi', details: ['a'], arrows: 'nope', title: 3, extra: 'kept' } },
+        '2': { explanation: { headline: 'Hi', details: ['a'], arrows: 'nope', title: 3, concedes: 'queen', extra: 'kept' } },
+        '3': { explanation: { headline: 'Hangs', details: [], concedes: 'material' } },
         '4': { explanation: { headline: 5, details: [] } },
+        '5': { explanation: { headline: 'Faster', details: [], concedes: 'mate' } },
+        '6': { explanation: { headline: 'Odd', details: [], concedes: null } },
         '99': { evalDepth: 10 },
         foo: { evalDepth: 10 },
       },
@@ -152,6 +155,9 @@ describe('saved game', () => {
     expect(loaded.annotations).toEqual({
       0: { evalDepth: 12 },
       2: { explanation: { headline: 'Hi', details: ['a'], extra: 'kept' } },
+      3: { explanation: { headline: 'Hangs', details: [], concedes: 'material' } },
+      5: { explanation: { headline: 'Faster', details: [], concedes: 'mate' } },
+      6: { explanation: { headline: 'Odd', details: [] } },
     });
   });
 
