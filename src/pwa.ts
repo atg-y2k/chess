@@ -14,6 +14,11 @@
  * new service worker by itself. We check whenever the app becomes visible, when it comes back
  * online, and every hour.
  *
+ * The first install is all or nothing: if one precache download fails (a dropped connection), the
+ * browser deletes the registration and the app would not work offline until the next launch. The
+ * same checks therefore register the service worker again when its registration is missing, and a
+ * failed first install is retried on its own with a backoff (see `createRegistrationKeeper`).
+ *
  * Everything here is a no-op where service workers are unavailable (node, old browsers, http://,
  * `vite dev` where the plugin provides a stub).
  */
@@ -26,7 +31,10 @@ export interface RegisterServiceWorkerOptions {
    * It is polled while an update waits, so keep it cheap and free of side effects.
    */
   canReloadNow: () => boolean;
-  /** Called once, when the app has been cached for offline use for the first time. */
+  /**
+   * Called once per page load, as soon as the app is known to be cached for offline use: at startup
+   * when it already was, otherwise when the first install completes.
+   */
   onOfflineReady?: () => void;
 }
 
@@ -60,6 +68,8 @@ export interface ReloadGateOptions {
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 /** Visibility/online update checks closer together than this are skipped. */
 const MIN_CHECK_GAP_MS = 60 * 1000;
+/** First wait before registering again after a failed first install; it doubles up to an hour. */
+const FIRST_RETRY_MS = 30 * 1000;
 /** How often the reload conditions are re-checked while an update waits. */
 const RELOAD_POLL_MS = 5 * 1000;
 /** Input that means the user is using the page: a reload now could lose a tap, a drag or a choice. */
@@ -68,8 +78,8 @@ const INPUT_EVENTS = ['pointerdown', 'touchstart', 'keydown'] as const;
 let registered = false;
 
 /**
- * Registers the service worker (once) and keeps the app up to date. Call it at startup.
- * Updates are applied by reloading the page (see `createReloadGate` for when).
+ * Registers the service worker (once) and keeps the app installed and up to date. Call it at
+ * startup. Updates are applied by reloading the page (see `createReloadGate` for when).
  */
 export function registerServiceWorker(opts: RegisterServiceWorkerOptions): void {
   if (registered || !serviceWorkerSupported()) return;
@@ -77,27 +87,157 @@ export function registerServiceWorker(opts: RegisterServiceWorkerOptions): void 
 
   const gate = createReloadGate(opts.canReloadNow, () => window.location.reload());
   let offlineReady = false;
-  registerSW({
-    immediate: true,
-    // In autoUpdate mode this fires once the new service worker controls the page.
-    onNeedReload: () => gate.request(),
-    // The plugin also reports later updates as "offline ready" when the page started uncontrolled.
-    onOfflineReady: () => {
-      if (offlineReady) return;
-      offlineReady = true;
-      opts.onOfflineReady?.();
-    },
-    onRegisteredSW: (_url, reg) => {
-      if (reg) watchForUpdates(reg);
-    },
-    onRegisterError: (err: unknown) => console.warn('[pwa] service worker registration failed', err),
+  const onOfflineReady = (): void => {
+    if (offlineReady) return;
+    offlineReady = true;
+    opts.onOfflineReady?.();
+  };
+  // The plugin registers `${BASE_URL}sw.js` with the base URL as its scope.
+  const scope = new URL(import.meta.env.BASE_URL, window.location.href).href;
+  const keeper = createRegistrationKeeper({
+    scope,
+    getRegistration: () => navigator.serviceWorker.getRegistration(scope),
+    // Each call sets up a new workbox-window instance for the registration it makes, so one made
+    // again after a failed first install reports its updates here too.
+    register: () =>
+      new Promise((resolve) => {
+        registerSW({
+          immediate: true,
+          // In autoUpdate mode this fires once the new service worker controls the page.
+          onNeedReload: () => gate.request(),
+          // The plugin also reports later updates as "offline ready" when the page started uncontrolled.
+          onOfflineReady,
+          onRegisteredSW: (_url, reg) => resolve(reg),
+          onRegisterError: (err: unknown) => {
+            console.warn('[pwa] service worker registration failed', err);
+            resolve(undefined);
+          },
+        });
+      }),
+    onReady: onOfflineReady,
   });
+  void keeper.start();
+  setInterval(() => void keeper.check(true), UPDATE_CHECK_INTERVAL_MS);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void keeper.check();
+  });
+  window.addEventListener('online', () => void keeper.check());
 
   // After an update the old build's lazy chunks are gone from both the server and the cache, so a
   // failing dynamic import can only be fixed by loading the new build.
   window.addEventListener('vite:preloadError', () => {
     if (gate.pending()) gate.reloadNow();
   });
+}
+
+/** The parts of a `ServiceWorker` the registration keeper uses (a fake one in unit tests). */
+export interface KeeperWorker {
+  readonly state: ServiceWorkerState;
+  addEventListener(type: 'statechange', listener: () => void): void;
+  removeEventListener(type: 'statechange', listener: () => void): void;
+}
+
+/** The parts of a `ServiceWorkerRegistration` the registration keeper uses. */
+export interface KeeperRegistration {
+  readonly scope: string;
+  readonly installing: KeeperWorker | null;
+  readonly waiting: KeeperWorker | null;
+  readonly active: KeeperWorker | null;
+  update(): Promise<unknown>;
+}
+
+export interface RegistrationKeeperOptions {
+  /** The absolute URL of the app's service-worker scope (its base URL). */
+  scope: string;
+  /** The registration for `scope`, if any (`navigator.serviceWorker.getRegistration`). */
+  getRegistration: () => Promise<KeeperRegistration | undefined>;
+  /** Registers the service worker; resolves with the registration, or undefined if that failed. */
+  register: () => Promise<KeeperRegistration | undefined>;
+  /** Called when an installed worker is found: the app is cached for offline use (maybe again). */
+  onReady?: () => void;
+  /** False when the browser knows it is offline. Default: `navigator.onLine`. */
+  online?: () => boolean;
+}
+
+export interface RegistrationKeeper {
+  /** Registers the service worker. Call it once, at startup. */
+  start(): Promise<void>;
+  /**
+   * Registers again if the registration is missing (a failed first install deletes it). Otherwise
+   * looks for a new version, at most once a minute unless `force`. Overlapping calls share one run.
+   */
+  check(force?: boolean): Promise<void>;
+}
+
+/**
+ * Keeps the app installed and up to date (exported for tests). `registerServiceWorker` calls
+ * `check()` hourly, when the app becomes visible and when it comes back online. A registration
+ * whose first install fails, or that could not be made, is tried again after 30 s, then after
+ * twice as long each time (up to an hour), or at the next check if that comes first.
+ */
+export function createRegistrationKeeper(opts: RegistrationKeeperOptions): RegistrationKeeper {
+  const online = opts.online ?? (() => typeof navigator === 'undefined' || navigator.onLine !== false);
+  /** The registration or check in progress. */
+  let busy: Promise<void> | undefined;
+  let lastCheck = -Infinity;
+  let retryMs = FIRST_RETRY_MS;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const exclusive = (task: () => Promise<void>): Promise<void> => {
+    busy ??= task()
+      .catch(() => {
+        /* offline or a server hiccup: the next check retries */
+      })
+      .finally(() => {
+        busy = undefined;
+      });
+    return busy;
+  };
+  const retryLater = (): void => {
+    if (retryTimer !== undefined) return;
+    const delay = retryMs;
+    retryMs = Math.min(retryMs * 2, UPDATE_CHECK_INTERVAL_MS);
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined;
+      void check(true);
+    }, delay);
+  };
+  const installed = (): void => {
+    clearTimeout(retryTimer);
+    retryTimer = undefined;
+    retryMs = FIRST_RETRY_MS;
+    opts.onReady?.();
+  };
+  /** Follows a new registration until its worker has installed, or retries later if it fails. */
+  const follow = (reg: KeeperRegistration | undefined): void => {
+    if (reg?.active || reg?.waiting) return installed();
+    const sw = reg?.installing;
+    if (!sw) return retryLater(); // not registered, or the install has already failed
+    const onStateChange = (): void => {
+      if (sw.state === 'installing' || sw.state === 'parsed') return;
+      sw.removeEventListener('statechange', onStateChange);
+      if (sw.state === 'redundant') retryLater();
+      else installed();
+    };
+    sw.addEventListener('statechange', onStateChange);
+    onStateChange(); // it may have finished (or failed) before we got here
+  };
+  const register = async (): Promise<void> => {
+    lastCheck = Date.now(); // registering fetches sw.js, which is an update check too
+    follow(await opts.register());
+  };
+  const checkNow = async (force: boolean): Promise<void> => {
+    if (!online()) return;
+    const reg = await opts.getRegistration();
+    // A registration for another scope (say an app at the origin root) does not control this app.
+    if (reg?.scope !== opts.scope || !(reg.installing ?? reg.waiting ?? reg.active)) return register();
+    if (reg.installing || (!force && Date.now() - lastCheck < MIN_CHECK_GAP_MS)) return;
+    lastCheck = Date.now();
+    await reg.update();
+  };
+  const check = (force = false): Promise<void> => exclusive(() => checkNow(force));
+
+  return { start: () => exclusive(register), check };
 }
 
 /**
@@ -187,23 +327,4 @@ function serviceWorkerSupported(): boolean {
     'serviceWorker' in navigator &&
     window.isSecureContext !== false
   );
-}
-
-/** Polls for a new service worker: hourly, when the app becomes visible, and when back online. */
-function watchForUpdates(reg: ServiceWorkerRegistration): void {
-  let lastCheck = Date.now(); // registration itself just fetched sw.js
-  const check = (force: boolean): void => {
-    const now = Date.now();
-    if (!force && now - lastCheck < MIN_CHECK_GAP_MS) return;
-    if (navigator.onLine === false || reg.installing) return;
-    lastCheck = now;
-    reg.update().catch(() => {
-      /* offline or a server hiccup: the next check retries */
-    });
-  };
-  setInterval(() => check(true), UPDATE_CHECK_INTERVAL_MS);
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') check(false);
-  });
-  window.addEventListener('online', () => check(false));
 }

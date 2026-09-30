@@ -60,10 +60,22 @@ export function pairMoves(plies: Ply[]): MovePair[] {
   return pairs;
 }
 
-/** Horizontally scrolling row of numbered moves; keeps the current move centred in view. */
+/**
+ * Horizontally scrolling row of numbered moves; keeps the current move centred in view (also when
+ * the row changes width under it: icons appear as moves are classified, or for every move when a
+ * review starts).
+ */
 export function MoveList({ plies, current, onSelect, showClassIcons, iconSet = 'notable' }: MoveListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const mounted = useRef(false);
+
+  const iconFor = (ply: Ply): MoveClass | null => {
+    const cls = ply.classification?.cls;
+    return showClassIcons && cls && (iconSet === 'all' || NOTABLE_CLASSES.has(cls)) ? cls : null;
+  };
+  // Which moves have an icon: a change moves the current move (not a mere re-annotation, which
+  // would snap back a row the user has swiped).
+  const iconKey = plies.map((p) => (iconFor(p) ? '1' : '0')).join('');
 
   useEffect(() => {
     const box = scrollRef.current;
@@ -78,7 +90,7 @@ export function MoveList({ plies, current, onSelect, showClassIcons, iconSet = '
       box.scrollTo({ left, behavior: mounted.current && delta < box.clientWidth * 1.5 ? 'smooth' : 'auto' });
     }
     mounted.current = true;
-  }, [current, plies.length]);
+  }, [current, plies.length, iconKey]);
 
   // Desktop: let a vertical mouse wheel scroll the row sideways.
   const onWheel = (e: WheelEvent) => {
@@ -89,9 +101,8 @@ export function MoveList({ plies, current, onSelect, showClassIcons, iconSet = '
   };
 
   const icon = (ply: Ply) => {
-    const cls = ply.classification?.cls;
-    if (!showClassIcons || !cls || (iconSet === 'notable' && !NOTABLE_CLASSES.has(cls))) return null;
-    return <ClassIcon cls={cls} size={15} />;
+    const cls = iconFor(ply);
+    return cls ? <ClassIcon cls={cls} size={15} /> : null;
   };
 
   const move = (ply: Ply) => {

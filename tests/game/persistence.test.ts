@@ -333,3 +333,36 @@ describe('finished game result (over)', () => {
     expect(loadGame()?.over).toEqual(draw);
   });
 });
+
+describe('"Try again" prompt after a Retry (retry)', () => {
+  const retry = { san: 'Qxf7+', cls: 'blunder' as const, headline: 'Qxf7+ grabs a pawn, but it hangs your queen on f7.' };
+
+  it('round-trips, with or without a headline', () => {
+    saveGame(savedGame({ retry }));
+    expect(loadGame()?.retry).toEqual(retry);
+    saveGame(savedGame({ retry: { ...retry, headline: null } }));
+    expect(loadGame()?.retry).toEqual({ ...retry, headline: null });
+  });
+
+  it('drops a malformed prompt, or one on a finished game, but keeps the game', () => {
+    const over = {
+      outcome: { result: '0-1' as const, winner: 'b' as const, reason: 'Resignation' },
+      ratingChange: { before: 800, after: 741, rated: true },
+    };
+    const bad: [unknown, object?][] = [
+      [{ ...retry, san: '' }],
+      [{ ...retry, san: 'x'.repeat(40) }],
+      [{ ...retry, cls: 'awful' }],
+      [{ ...retry, headline: 7 }],
+      [{ ...retry, headline: 'x'.repeat(1000) }],
+      ['retry'],
+      [retry, { over }],
+    ];
+    for (const [b, extra] of bad) {
+      storage.setItem(GAME_KEY, JSON.stringify({ ...savedGame(), ...extra, retry: b }));
+      const loaded = loadGame();
+      expect(loaded?.id).toBe('game-1');
+      expect(loaded && 'retry' in loaded).toBe(false);
+    }
+  });
+});

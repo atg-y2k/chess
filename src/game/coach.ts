@@ -119,15 +119,19 @@ const ANSWER_FREE_LEAD: Partial<Record<MoveClass, string>> = {
 
 /**
  * The explanation of a move the player may still Retry, without giving the better move away: no
- * line that names it ("Best was Nf3, which …", "You missed Qxh5, which wins a knight."), and no
- * description of a missed tactic. "Show best" reveals the rest. Always at least one line.
+ * line that names it ("Best was Nf3, which …", "You missed Qxh5, which wins a knight."), no
+ * description of a missed tactic, and no "promotes to a knight instead of a queen" (which says
+ * what to promote to). "Show best" reveals the rest. Always at least one line.
  */
 export function answerFreeLines(e: Explanation | undefined | null, cl: Classification): string[] {
   const all = e ? [e.headline, ...e.details] : [];
   const best = cl.bestMoveSan;
   const motifs = e?.motifs ?? [];
   const missedTactic = motifs.includes('missedTactic');
-  const lines = all.filter((line, i) => !(best && mentionsMove(line, best)) && !(missedTactic && i > 0));
+  const underpromotion = motifs.includes('underpromotion');
+  const lines = all.filter(
+    (line, i) => !(best && mentionsMove(line, best)) && !(missedTactic && i > 0) && !(underpromotion && i === 0),
+  );
   if (e && lines[0] !== e.headline) {
     const lead = motifs.includes('missedMate')
       ? 'You missed a checkmate.'

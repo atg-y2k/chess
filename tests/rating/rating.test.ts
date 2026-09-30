@@ -77,9 +77,8 @@ describe('Elo maths', () => {
     expect(kFactor(42)).toBe(MIN_K);
     expect(kFactor(5000)).toBe(MIN_K);
     for (let n = 1; n < 60; n++) expect(kFactor(n)).toBeLessThanOrEqual(kFactor(n - 1));
-    // A lopsided pairing tells less per game, so it may move a new rating further per point.
-    expect(kFactor(0, 0.1)).toBeGreaterThan(kFactor(0, 0.5));
-    expect(kFactor(Number.NaN, Number.NaN)).toBeCloseTo(350, 0);
+    expect(kFactor(Number.NaN)).toBeCloseTo(350, 0);
+    expect(kFactor(-3)).toBeCloseTo(350, 0);
   });
 
   it('expectedScore follows the Elo logistic and is symmetric', () => {
@@ -128,15 +127,51 @@ describe('applyGameResult', () => {
 
   it('a draw against a stronger bot gains, a loss to a weaker bot costs', () => {
     const draw = applyGameResult(profile(), game({ botElo: 1000, result: '1/2-1/2', playerScore: 0.5 }));
-    // K(0, E = 0.2403) = 405: 405 * (0.5 - 0.2403) = 105.2
-    expect(draw.profile.rating).toBe(905);
+    // K(0) = 350: 350 * (0.5 - 0.2403) = 90.9
+    expect(draw.profile.rating).toBe(891);
     expect([draw.profile.wins, draw.profile.draws, draw.profile.losses]).toEqual([0, 1, 0]);
 
     const loss = applyGameResult(profile(), game({ botElo: 600, result: '0-1', playerScore: 0 }));
-    // 405 * (0 - 0.7597) = -307.7
-    expect(loss.profile.rating).toBe(492);
+    // 350 * (0 - 0.7597) = -265.9
+    expect(loss.profile.rating).toBe(534);
     expect(loss.profile.peak).toBe(800); // peak never drops
     expect([loss.profile.wins, loss.profile.draws, loss.profile.losses]).toEqual([0, 0, 1]);
+  });
+
+  it('one lopsided game moves a new rating by at most 350 (K does not grow for an upset)', () => {
+    // A new Casual player loses (or abandons after one move, or resigns) against the 100 bot:
+    // 350 * (0 - 0.9825) = -343.9. The E(1-E)-weighted K of full Glicko-1 (~660) gave 152.
+    const loss = (over: Partial<GameRecordInput>) =>
+      applyGameResult(profile(), game({ botElo: 100, result: '0-1', playerScore: 0, ...over })).profile.rating;
+    expect(loss({ reason: 'Checkmate' })).toBe(456);
+    expect(loss({ reason: 'Abandoned' })).toBe(456);
+    expect(loss({ reason: 'Resigned', playerColor: 'b', result: '1-0' })).toBe(456);
+    // An Expert start losing once to the 400 bot keeps most of the level (was 1295).
+    expect(applyGameResult(setStartingRating(defaultProfile(), 2000), game({ botElo: 400, result: '0-1', playerScore: 0 })).profile.rating).toBe(1650);
+    // Beating a much stronger bot still gains more than beating an equal one (+175), up to +350.
+    expect(applyGameResult(profile(), game({ botElo: 1600 })).profile.rating).toBe(1147);
+    // Whatever the level, bot and result, the first game moves the rating by at most K(0) = 350,
+    // and every later game by at most its own K.
+    for (const start of [100, ...STARTING_LEVELS.map((l) => l.rating), 3200]) {
+      for (let botElo = 100; botElo <= 3200; botElo += 50) {
+        for (const playerScore of [0, 0.5, 1] as const) {
+          const result = playerScore === 1 ? '1-0' : playerScore === 0 ? '0-1' : '1/2-1/2';
+          for (const gamesPlayed of [0, 1, 5, 20]) {
+            const before = profile({ rating: start, peak: start, gamesPlayed });
+            const after = applyGameResult(before, game({ botElo, result, playerScore })).profile.rating;
+            expect(Math.abs(after - start)).toBeLessThanOrEqual(Math.round(kFactor(gamesPlayed)));
+            expect(Math.abs(after - start)).toBeLessThanOrEqual(350);
+          }
+        }
+      }
+    }
+  });
+
+  it('a few wins at "Match my rating" win back an early upset loss', () => {
+    let p = applyGameResult(profile(), game({ botElo: 100, result: '0-1', playerScore: 0, reason: 'Abandoned' })).profile;
+    expect(p.rating).toBe(456);
+    for (let i = 0; i < 5; i++) p = applyGameResult(p, game({ botElo: suggestedOpponentElo(p) })).profile;
+    expect(p.rating).toBeGreaterThanOrEqual(800);
   });
 
   it('uses the K-factor of the number of rated games played so far', () => {

@@ -5,6 +5,7 @@ import {
   attacksFrom,
   between,
   effectiveAttackers,
+  exchangeCounts,
   hangingPieces,
   scratch,
   see,
@@ -16,6 +17,20 @@ const fenOf = (sans: string) => {
   for (const s of sans.split(' ').filter(Boolean)) c.move(s);
   return c.fen();
 };
+
+describe('exchangeCounts', () => {
+  it('counts x-ray attackers and leaves pinned defenders out', () => {
+    // Queen with the rook behind it against the king.
+    expect(exchangeCounts('3qk3/8/8/8/8/8/3Q4/3RK3 w - - 0 1', 'd8', 'w', 'd2')).toEqual({ attackers: 2, defenders: 1 });
+    // The knight on e7 is pinned by the rook on e1.
+    expect(exchangeCounts('4k3/4n1pp/8/3p4/8/1B6/5PPP/4R1K1 w - - 0 1', 'd5', 'w')).toEqual({ attackers: 1, defenders: 0 });
+    // Two pawns against a knight and the queen behind it.
+    expect(exchangeCounts('rnbqkb1r/ppp2ppp/5n2/3p4/2PPP3/8/PP3PPP/RNBQKBNR w KQkq - 0 4', 'd5', 'w', 'c4')).toEqual({
+      attackers: 2,
+      defenders: 2,
+    });
+  });
+});
 
 describe('see (static exchange evaluation)', () => {
   it('matches the swap-algorithm reference values', () => {

@@ -73,13 +73,17 @@
   min-height: 24px;
 }
 
+/* Up to two lines in the bubble (a narrow side column cannot fit "23… Qxf7+ is an inaccuracy"). */
 .coach-title {
   flex: 1 1 auto;
   min-width: 0;
   margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -260,8 +264,33 @@
 }
 .coach-row .coach-title {
   flex: none;
+  display: block;
+  -webkit-line-clamp: none;
+  line-clamp: none;
   max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 14px;
+}
+/* One line, "<move> <verdict>": the move label gives way first ("4. Bx… is a blunder"). */
+.coach-row .coach-title--split {
+  display: flex;
+  gap: 0.25em;
+  max-width: 55%;
+}
+.coach-row .coach-title-move,
+.coach-row .coach-title-verdict {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.coach-row .coach-title-move {
+  flex: 0 1000 auto;
+  min-width: 1.6em; /* at least "2…", never a sliver of a glyph */
+}
+.coach-row .coach-title-verdict {
+  flex: 0 1 auto;
 }
 .coach-summary {
   flex: 1 1 auto;

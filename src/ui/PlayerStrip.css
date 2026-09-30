@@ -69,7 +69,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-.pstrip-unrated {
+.pstrip-unrated,
+.pstrip-caps-unrated {
   flex: none;
   align-self: center;
   padding: 1px 6px;
@@ -82,6 +83,15 @@
   line-height: 14px;
   letter-spacing: 0.01em;
   text-transform: uppercase;
+}
+
+/*
+ * A second copy of the pill at the start of the captured-pieces row, hidden unless the page moves
+ * "Unrated" there: when something covers the right end of a narrow strip (App.css, the "Back to
+ * game" chip), after the name and rating it would be hidden.
+ */
+.pstrip-caps-unrated {
+  display: none;
 }
 
 .pstrip-caps {

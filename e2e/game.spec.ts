@@ -247,6 +247,34 @@ test.describe('Game', () => {
     await expect(over).toBeVisible();
   });
 
+  test('the move list keeps the current move in view when the review puts an icon on every move', async ({ page }) => {
+    test.setTimeout(180_000);
+    await startGame(page, 'pip', 'w');
+    for (let i = 0; i < 11; i++) {
+      await waitForMyTurn(page);
+      const count = await moves(page).count();
+      const uci = await quietMove(page);
+      await page.evaluate((u) => (window.__chessCoach!.controller as unknown as { playerMove(f: string, t: string): boolean }).playerMove(u.slice(0, 2), u.slice(2, 4)), uci);
+      await expect(moves(page)).toHaveCount(count + 2, { timeout: 30_000 });
+    }
+    const list = page.locator('.mlist');
+    expect(await list.evaluate((el) => el.scrollWidth > el.clientWidth * 1.5)).toBe(true); // it scrolls
+    await page.evaluate(() => {
+      const c = window.__chessCoach!.controller as unknown as { resign(): void; startReview(): Promise<void> };
+      c.resign();
+      void c.startReview();
+    });
+    const review = page.getByRole('region', { name: 'Game review' });
+    await expect(review.locator('.review-acc').first()).toHaveText(/^\d+\.\d$/, { timeout: 120_000 });
+    await expect
+      .poll(async () => {
+        const box = await list.boundingBox();
+        const cur = await list.locator('[aria-current="true"]').boundingBox();
+        return !!box && !!cur && cur.x >= box.x - 1 && cur.x + cur.width <= box.x + box.width + 1;
+      })
+      .toBe(true);
+  });
+
   test('the coach text is readable at every phone height (or the panel collapses to one row)', async ({ page }) => {
     test.setTimeout(90_000);
     await startGame(page, 'pip', 'w');
@@ -268,6 +296,43 @@ test.describe('Game', () => {
 
   test.describe('landscape', () => {
     test.use({ viewport: { width: 852, height: 393 } });
+    test('the side column keeps "Unrated" clear of the Back to game chip, and the coach verdict readable', async ({ page }) => {
+      test.setTimeout(120_000);
+      await page.goto('./');
+      await expect(page.getByRole('dialog', { name: 'New game' })).toBeVisible({ timeout: 30_000 });
+      await page.evaluate(() => {
+        const c = window.__chessCoach!.controller as unknown as { setStartingRating(r: number): void } & Hook['controller'];
+        c.setStartingRating(2000); // a 4-digit rating: the longest "You (2000) Unrated"
+        c.newGame({ ...c.store.settings.value, playerColor: 'w', botId: 'pip', botElo: 100, adaptive: false, showBestMoves: true });
+      });
+      await waitForMyTurn(page);
+      await play(page, 'e2e4');
+      await waitForMyTurn(page);
+      await play(page, await quietMove(page));
+      await waitForMyTurn(page);
+      await expect(page.locator('.app-panel .coach .class-icon').first()).toBeVisible({ timeout: 30_000 });
+      const intersects = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
+        a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+      for (const [width, height] of [[667, 375], [844, 390], [852, 393], [932, 430]]) {
+        await page.setViewportSize({ width, height });
+        // The coach names the move and its verdict: up to two lines, nothing cut off.
+        await page.evaluate(() => (window.__chessCoach!.controller as unknown as { goTo(i: number | null): void }).goTo(null));
+        const title = page.locator('.app-panel .coach-title');
+        await expect(title).toContainText(/^\d+\. \S+ is /);
+        const fit = await title.evaluate((el) => el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1);
+        expect(fit, `${width}x${height}: coach title fits`).toBe(true);
+        // Browsing: the chip covers the right end of your strip; "Unrated" stays visible.
+        await page.evaluate(() => (window.__chessCoach!.controller as unknown as { goTo(i: number | null): void }).goTo(1));
+        const chip = page.locator('[data-id="back-to-game"]');
+        await expect(chip).toBeVisible();
+        const pill = page.locator('.app-player--bottom :is(.pstrip-unrated, .pstrip-caps-unrated):visible');
+        await expect(pill).toHaveCount(1);
+        await expect(pill).toHaveText('Unrated');
+        const [a, b] = [await pill.boundingBox(), await chip.boundingBox()];
+        expect(intersects(a!, b!), `${width}x${height}: pill ${JSON.stringify(a)} chip ${JSON.stringify(b)}`).toBe(false);
+      }
+    });
+
     test('the floating review summary keeps its header (accuracy, close) on screen', async ({ page }) => {
       test.setTimeout(120_000);
       await page.goto('./');
@@ -310,11 +375,23 @@ test.describe('Game', () => {
     const adaptive = sheet.locator('.toggle[data-id="adaptive"]');
     await expect(adaptive).toContainText('Match my rating (800)');
 
-    // Picking a level sets (and saves) the rating; "Match my rating" follows it.
+    // Picking a level sets (and saves) the rating and switches the opponent to "Match my rating",
+    // so the first game is against a bot of that level.
+    await expect(sheet.locator('.ngs-hero-elo-num')).toHaveText('800');
     await level.locator('[data-level="advanced"]').tap();
     await expect(level.locator('[data-level="advanced"]')).toHaveAttribute('aria-checked', 'true');
     await expect(sheet.locator('.lvl-caption')).toContainText('Advanced');
     await expect(adaptive).toContainText('Match my rating (1600)');
+    await expect(adaptive).toHaveAttribute('aria-checked', 'true');
+    await expect(sheet.locator('.ngs-hero-elo-num')).toHaveText('1600');
+    expect(await rating()).toBe(1600);
+    // An opponent picked first is kept.
+    await sheet.locator('.ngs-bot[data-bot="custom"]').tap();
+    await level.locator('[data-level="beginner"]').tap();
+    await expect(adaptive).toContainText('Match my rating (400)');
+    await expect(adaptive).toHaveAttribute('aria-checked', 'false');
+    await expect(sheet.locator('.ngs-hero-elo-num')).toHaveText('800');
+    await level.locator('[data-level="advanced"]').tap();
     expect(await rating()).toBe(1600);
     await page.reload();
     await expect(sheet.getByRole('radiogroup', { name: 'Your level' }).locator('[data-level="advanced"]')).toHaveAttribute(

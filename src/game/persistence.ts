@@ -9,7 +9,7 @@
  */
 import { Chess } from 'chess.js';
 import { MOVE_CLASS_ORDER } from '../analysis/types';
-import type { Classification, Explanation } from '../analysis/types';
+import type { Classification, Explanation, MoveClass } from '../analysis/types';
 import { parseUci, toUci } from '../chess/utils';
 import type { Score } from '../engine/types';
 import { DEFAULT_SETTINGS } from './types';
@@ -45,6 +45,20 @@ export interface SavedGame {
   annotations: Record<number, PlyAnnotation>;
   /** Set once the game has ended: its result and the rating change it caused. */
   over?: SavedResult;
+  /**
+   * The coach's "Try again" prompt after a Retry, while the player is still looking for a better
+   * move (the retried move itself is no longer in `moves`). Only in a game in progress.
+   */
+  retry?: SavedRetry;
+}
+
+/** The "Try again" prompt after a Retry (the coach's 'retry' mode). */
+export interface SavedRetry {
+  /** SAN of the move that was taken back. */
+  san: string;
+  cls: MoveClass;
+  /** What was wrong with it, without giving the better move away (null when unknown). */
+  headline: string | null;
 }
 
 /** How a saved game ended. */
@@ -177,7 +191,20 @@ export function sanitizeSavedGame(raw: unknown): SavedGame | null {
   const over = sanitizeResult(raw.over);
   if (over) game.over = over;
   else delete game.over;
+  const retry = over ? null : sanitizeRetry(raw.retry);
+  if (retry) game.retry = retry;
+  else delete game.retry;
   return game;
+}
+
+/** A saved "Try again" prompt, or null when it is missing or malformed. */
+function sanitizeRetry(v: unknown): SavedRetry | null {
+  if (!isObject(v)) return null;
+  const { san, cls, headline } = v;
+  if (typeof san !== 'string' || !san || san.length > 12) return null;
+  if (!MOVE_CLASS_ORDER.includes(cls as MoveClass)) return null;
+  if (headline !== null && (typeof headline !== 'string' || headline.length > 400)) return null;
+  return { san, cls: cls as MoveClass, headline };
 }
 
 /** A saved result, or null when it is missing or inconsistent. */

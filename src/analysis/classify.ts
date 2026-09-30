@@ -115,8 +115,9 @@ export interface ClassifyFacts {
   playedUci: string;
   /**
    * Evaluation after the played move: the matching line's score when the move is in `lines` (same
-   * search), otherwise the converted child search. null = unknown (the worst line is then used as an
-   * optimistic estimate and the class is capped at Good).
+   * search; a forced mate the child search finds replaces a centipawn score there), otherwise the
+   * converted child search. null = unknown (the worst line is then used as an optimistic estimate
+   * and the class is capped at Good).
    */
   played: MoverEval | null;
   legalMoveCount: number;
@@ -375,10 +376,13 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
     .map((l) => ({ uci: l.pv[0], score: l.score }));
   const inLines = lines.find((l) => l.uci === p.moveUci);
   const childBest = p.after?.lines[0];
+  const child = childBest ? childToMover(childBest.score) : null;
   let played: MoverEval | null = null;
   if (result != null) played = { kind: 'result', value: result };
-  else if (inLines) played = inLines.score;
-  else if (childBest) played = childToMover(childBest.score);
+  // The child search is one ply deeper on this move: a forced mate it finds (for either side) beats
+  // the before-search's centipawn score, as the explanation already describes that mate.
+  else if (inLines) played = child?.kind === 'mate' && inLines.score.kind !== 'mate' ? child : inLines.score;
+  else if (child) played = child;
 
   const sacrifice = playedSan ? detectSacrifice(p.fenBefore, p.moveUci, p.prevFenBefore) : null;
   const v = classifyFromEvals({
@@ -417,8 +421,9 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
  * chess.com-style classification of `moveUci` played in `fenBefore`.
  *
  * The played move's value comes from `before.lines` when the move is among them (same search,
- * consistent depth), otherwise from `after.lines[0]` converted to the mover's point of view; a
- * checkmate / stalemate on the board (or `after.terminal`) overrides both. Never throws on normal
+ * consistent depth; but a forced mate found by the deeper `after` search replaces a centipawn
+ * score), otherwise from `after.lines[0]` converted to the mover's point of view; a checkmate /
+ * stalemate on the board (or `after.terminal`) overrides both. Never throws on normal
  * game input; with missing analysis it returns a neutral "good" (or book / forced when those apply).
  */
 export function classifyMove(p: ClassifyMoveInput): Classification {

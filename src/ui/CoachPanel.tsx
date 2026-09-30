@@ -14,8 +14,13 @@ export interface CoachAction {
 export interface CoachPanelProps {
   /** Shows ClassIcon + coloured title when present. */
   cls?: MoveClass;
-  /** e.g. "Mistake" / "Your move" / "Hint". */
+  /** e.g. "12. Nf3 is a mistake" / "Your move" / "Hint". */
   title: string;
+  /**
+   * When the title is "<move> <verdict>" (e.g. "4. Bxf7+ is a blunder"), the move part: on one
+   * line that runs out of room, it is cut before the verdict is.
+   */
+  titleMove?: string;
   /** Explanation sentences; the first one is emphasised. */
   lines: string[];
   /** Analysing spinner (and a text skeleton while `lines` is empty). */
@@ -36,9 +41,28 @@ export const COACH_EMOJI = '🎓';
  * (give it `flex: 1 1 0` inside a flex column to let it absorb spare height; the cap is
  * `--coach-max-height`, default 196px).
  */
-export function CoachPanel({ cls, title, lines, busy = false, actions, collapsed = false, onToggleCollapsed }: CoachPanelProps) {
+export function CoachPanel({
+  cls,
+  title,
+  titleMove,
+  lines,
+  busy = false,
+  actions,
+  collapsed = false,
+  onToggleCollapsed,
+}: CoachPanelProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const text = lines.join('\n');
+  const split = !!titleMove && title.length > titleMove.length && title.startsWith(titleMove);
+  const titleText = split ? (
+    <>
+      <span class="coach-title-move">{titleMove}</span>{' '}
+      <span class="coach-title-verdict">{title.slice(titleMove.length).trimStart()}</span>
+    </>
+  ) : (
+    title
+  );
+  const titleClass = split ? 'coach-title coach-title--split' : 'coach-title';
 
   // Fade the bottom edge while more text is hidden below (updates on scroll and resize).
   useLayoutEffect(() => {
@@ -82,7 +106,7 @@ export function CoachPanel({ cls, title, lines, busy = false, actions, collapsed
             {COACH_EMOJI}
           </span>
           {badge}
-          <span class="coach-title">{title}</span>
+          <span class={titleClass}>{titleText}</span>
           {lines[0] && <span class="coach-summary">{lines[0]}</span>}
           {onToggleCollapsed && <IconChevronRight size={18} class="coach-chevron coach-chevron--up" />}
         </button>
@@ -98,7 +122,7 @@ export function CoachPanel({ cls, title, lines, busy = false, actions, collapsed
       <div class="coach-bubble">
         <div class="coach-head">
           {badge}
-          <h2 class="coach-title">{title}</h2>
+          <h2 class={titleClass}>{titleText}</h2>
           {onToggleCollapsed && (
             <button type="button" class="coach-toggle" aria-label="Collapse coach" aria-expanded="true" onClick={onToggleCollapsed}>
               <IconChevronRight size={18} class="coach-chevron" />

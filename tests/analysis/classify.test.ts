@@ -271,6 +271,28 @@ describe('classifyMove on real positions', () => {
     expect(c.winAfter).toBeCloseTo(0.477, 3);
   });
 
+  it('uses a forced mate the after-search finds instead of the before-search centipawn score', () => {
+    // 40...Qc3+ was line 2 at +20.57, but the deeper child search sees mate: it ties the best line
+    // (no "Show best" contradicting "Qc3+ leads to a forced mate in 12").
+    const fen = '5k2/8/p3p3/7p/1q5P/5PP1/b7/2K5 b - - 0 40';
+    const before = analysis(fen, [line(1, cp(2206), ['a6a5']), line(2, cp(2057), ['b4c3']), line(3, cp(1932), ['a2b3'])]);
+    const after = analysis(fenAfter(['Qc3+'], fen), [line(1, mate(-11), ['c1d1'])]);
+    const c = classifyMoveDetailed({ fenBefore: fen, moveUci: 'b4c3', before, after });
+    expect(c.classification.cls).toBe('best');
+    expect(c.classification.winAfter).toBe(1);
+    // The other way round: the child search finds a mate against the mover.
+    const bad = analysis(fenAfter(['Nf6'], ITALIAN), [line(1, mate(3), ['f3g5'])]);
+    const lines = analysis(ITALIAN, [line(1, cp(-20), ['f8c5']), line(2, cp(-25), ['g8f6'])]);
+    const m = classifyMoveDetailed({ fenBefore: ITALIAN, moveUci: 'g8f6', before: lines, after: bad });
+    expect(m.classification.cls).toBe('blunder');
+    expect(m.reasons).toContain('allowed_mate');
+    // Mate scores on both sides keep the same-search value.
+    const both = analysis(fen, [line(1, mate(5), ['a6a5']), line(2, mate(7), ['b4c3'])]);
+    const same = classifyMoveDetailed({ fenBefore: fen, moveUci: 'b4c3', before: both, after });
+    expect(same.reasons).toContain('mate_slower');
+    expect(same.classification.cls).toBe('excellent');
+  });
+
   it('falls back to after.lines[0] converted to the mover when the move is not in before.lines', () => {
     const before = analysis(ITALIAN, [line(1, cp(-20), ['f8c5']), line(2, cp(-25), ['g8f6'])]);
     const afterFen = fenAfter(['Qh4'], ITALIAN);

@@ -225,6 +225,30 @@ export function see(fen: string, target: Square, side: Color, firstFrom?: Square
   return gain[0];
 }
 
+/**
+ * How many pieces each side can use to capture on `target`, x-rays included (a rook behind a
+ * queen, a bishop behind a pawn) and absolutely pinned pieces left out: `attackers` for `side`
+ * (starting with the piece on `firstFrom` when given), `defenders` for the other side. Every
+ * such piece is counted, not only as far as the exchange would sensibly go.
+ */
+export function exchangeCounts(
+  fen: string,
+  target: Square,
+  side: Color,
+  firstFrom?: Square,
+): { attackers: number; defenders: number } {
+  const count = (c: Color, first?: Square): number => {
+    const b = scratch(fen);
+    let n = 0;
+    for (let from = first ?? leastValuableAttacker(b, target, c); from && n < 16; n++) {
+      b.remove(from); // x-ray attackers behind it now show up
+      from = leastValuableAttacker(b, target, c);
+    }
+    return n;
+  };
+  return { attackers: count(side, firstFrom), defenders: count(other(side)) };
+}
+
 /** A piece the opponent can win by capture. */
 export interface Hanging {
   piece: PieceOn;

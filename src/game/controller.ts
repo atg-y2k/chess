@@ -33,7 +33,7 @@ import {
   updateGameRecord,
 } from '../rating/rating';
 import type { GameRecord } from '../rating/types';
-import { answerFreeLines, repetitionExplanation } from './coach';
+import { answerFreeLines, mentionsMove, repetitionExplanation } from './coach';
 import {
   clearGame,
   createGameId,
@@ -207,6 +207,7 @@ function isThirdRepetition(startFen: string, plies: readonly Ply[], index: numbe
 /**
  * The coach mode after a restore: the verdict on the human's last move, while it is still the
  * move being discussed (the last ply, or followed only by the bot's reply), as in live play.
+ * (A saved "Try again" prompt after a Retry takes precedence, see `restore`.)
  */
 function restoredCoachMode(plies: readonly Ply[], playerColor: Color): CoachMode {
   for (let i = plies.length - 1; i >= 0 && i >= plies.length - 2; i--) {
@@ -258,6 +259,8 @@ export class GameController {
   private botTask: Promise<void> | null = null;
   private annotating: Promise<void> | null = null;
   private reviewTask: Promise<void> | null = null;
+  /** Completing a Show best whose engine lines were not cached (see `showBest`). */
+  private showBestTask: Promise<void> | null = null;
   private booting: Promise<void> | null = null;
   private hidden = false;
   private openingsReady: Promise<void> = Promise.resolve();
@@ -282,8 +285,9 @@ export class GameController {
   // Boot
 
   /**
-   * Loads settings and profile, starts the engines and the opening book, then restores a saved
-   * game (the bot moves if it is its turn) or enters 'setup' with the new-game sheet open.
+   * Loads settings and profile, starts the engines (then the opening book, which only a game
+   * needs), then restores a saved game (the bot moves if it is its turn) or enters 'setup' with
+   * the new-game sheet open.
    * On engine failure the phase becomes 'error' (see `store.error`); call `retry()`.
    */
   boot(): Promise<void> {
@@ -317,10 +321,6 @@ export class GameController {
     });
     // Sound starts enabled; turning it on (which unlocks Web Audio) waits for a tap: newGame() / setSettings().
     if (!s.settings.value.sound) this.sound.setEnabled(false);
-    this.openingsReady = loadOpenings().then(
-      () => this.refreshOpenings(),
-      (e: unknown) => console.warn('[game] opening book unavailable', e),
-    );
     let engines: EngineSet;
     const onProgress = (p: EngineLoadProgress) => {
       if (p.engine !== 'analysis' || s.phase.value !== 'boot' || !(p.total > 0)) return;
@@ -343,6 +343,12 @@ export class GameController {
       return;
     }
     s.engineDownload.value = null;
+    // The opening book (~0.9 MB) is only needed once a game starts (the bot and the annotations
+    // wait for it), so on a slow first visit it does not share the connection with the engine.
+    this.openingsReady = loadOpenings().then(
+      () => this.refreshOpenings(),
+      (e: unknown) => console.warn('[game] opening book unavailable', e),
+    );
     this.engines = engines;
     const fatal = (which: 'analysis' | 'bot') => (e: unknown) => this.onEngineFailure(engines, which, e);
     this.botEngine = monitorEngine(engines.bot, fatal('bot'));
@@ -481,7 +487,11 @@ export class GameController {
       s.outcome.value = over?.outcome ?? null;
       s.ratingChange.value = over?.ratingChange ?? null;
       s.reviewState.value = null;
-      s.coachMode.value = over ? { kind: 'idle' } : restoredCoachMode(plies, game.playerColor);
+      s.coachMode.value = over
+        ? { kind: 'idle' }
+        : saved.retry && chess.turn() === game.playerColor
+          ? { kind: 'retry', ...saved.retry }
+          : restoredCoachMode(plies, game.playerColor);
       s.coachCollapsed.value = null;
       s.live.value = null;
       s.botThinking.value = false;
@@ -568,6 +578,9 @@ export class GameController {
       chess = new Chess();
     }
     const s = this.s;
+    // The opponent the New Game sheet showed: an adaptive ("Match my rating") Elo comes from the
+    // rating before the loss that abandoning the current game records below.
+    const bot = personaForSettings(settings, s.profile.value);
     this.abandonCurrent();
     this.abortBot();
     this.analysis.cancelAll();
@@ -578,7 +591,6 @@ export class GameController {
     this.clearFailed();
     const playerColor: Color =
       settings.playerColor === 'random' ? (this.rng() < 0.5 ? 'w' : 'b') : settings.playerColor;
-    const bot = personaForSettings(settings, s.profile.value);
     const id = this.createId();
     const game: GameInfo = {
       id,
@@ -694,12 +706,17 @@ export class GameController {
     return ply;
   }
 
-  /** Asks the bot for a move when it is its turn (no-op otherwise, or while the page is hidden). */
+  /**
+   * Asks the bot for a move when it is its turn (no-op otherwise, while the page is hidden, or
+   * while a takeback waits for confirmation).
+   */
   private requestBotMove(): void {
     const s = this.s;
     const g = s.game.value;
     if (!g || !this.bot || s.phase.value !== 'playing' || s.outcome.value || this.hidden || this.botCtl) return;
     if (this.chess.turn() === g.playerColor || this.chess.isGameOver()) return;
+    // A takeback waiting for confirmation: the reply waits for the answer (see requestAssist).
+    if (s.pendingAssist.value) return;
     const ctl = new AbortController();
     this.botCtl = ctl;
     const epoch = this.epoch;
@@ -988,11 +1005,14 @@ export class GameController {
   /**
    * A hint, takeback or Retry makes a rated game unrated, so the first one in a rated game opens
    * the 'assist' sheet to confirm (`confirmAssist()` runs it, `closeSheet()` cancels). In an
-   * unrated game it runs at once.
+   * unrated game it runs at once. While a takeback (Undo, Retry) waits for the answer, the bot's
+   * reply is put on hold, as an unrated takeback cancels it at once: otherwise a reply that ends
+   * the game would drop the takeback and record the rated loss the player was taking back.
    */
   private requestAssist(a: PendingAssist): void {
     const s = this.s;
     if (s.game.value?.assisted === false) {
+      if (a.kind !== 'hint') this.abortBot();
       batch(() => {
         s.pendingAssist.value = a;
         s.sheet.value = 'assist';
@@ -1011,6 +1031,7 @@ export class GameController {
       if (s.sheet.value === 'assist') s.sheet.value = null;
     });
     if (a) this.runAssist(a);
+    this.requestBotMove(); // the held reply, when nothing was taken back after all
   }
 
   private runAssist(a: PendingAssist): void {
@@ -1068,23 +1089,99 @@ export class GameController {
     }
   }
 
-  /** Shows the position before ply `index` with the best move and the played move as arrows. */
+  /**
+   * Shows the position before ply `index` with the best move and the played move as arrows, and
+   * explains the best move from the engine lines of that position. When they are not at hand
+   * (the analysis cache lives in memory only: after a relaunch, or in the review of a restored
+   * game) the panel first shows what the saved explanation says, busy, and fills in the
+   * explanation and the best line once the position has been analysed again.
+   */
   private showBest(index: number): void {
     const s = this.s;
     const g = s.game.value;
     const ply = s.plies.value[index];
-    const cl = ply?.classification;
-    if (!g || !ply || !cl) return;
-    const before = this.analysis?.get(ply.fenBefore);
+    if (!g || !ply?.classification) return;
+    const svc = this.analysis;
+    const text = this.showBestText(g, ply, svc?.get(ply.fenBefore));
+    const pending = !text.explained && !!svc;
+    batch(() => {
+      s.coachMode.value = {
+        kind: 'showBest',
+        index,
+        bestUci: text.bestUci,
+        bestSan: text.bestSan,
+        lines: text.lines,
+        returnTo: s.viewIndex.value,
+        prev: s.coachMode.value,
+        ...(pending ? { pending: true } : {}),
+      };
+      s.viewIndex.value = index;
+    });
+    this.updateWatch();
+    if (pending) this.trackShowBest(this.fillShowBest(svc, g.id, ply));
+  }
+
+  /** Analyses the position before `ply` and completes the Show best text (see `showBest`). */
+  private async fillShowBest(svc: AnalysisService, gameId: string, ply: Ply): Promise<void> {
+    const s = this.s;
+    let r: AnalysisResult | undefined;
+    try {
+      r = await svc.ensure(ply.fenBefore, { minDepth: ANNOTATE_DEPTH, multiPv: ANNOTATE_MULTIPV });
+    } catch (e) {
+      console.warn('[game] show best: analysis failed', e);
+    }
+    const m = s.coachMode.value;
+    const g = s.game.value;
+    const now = s.plies.value[ply.index];
+    if (
+      this.analysis !== svc ||
+      !g ||
+      g.id !== gameId ||
+      m.kind !== 'showBest' ||
+      m.index !== ply.index ||
+      !m.pending ||
+      now?.fenBefore !== ply.fenBefore ||
+      now.uci !== ply.uci
+    ) {
+      return;
+    }
+    const text = r ? this.showBestText(g, now, r) : null;
+    const { pending: _done, ...rest } = m;
+    s.coachMode.value = text?.explained
+      ? { ...rest, bestUci: text.bestUci, bestSan: text.bestSan, lines: text.lines }
+      : rest; // no line for the best move (an aborted or different search): keep the saved text
+  }
+
+  private trackShowBest(task: Promise<void>): void {
+    const t: Promise<void> = task
+      .catch((e: unknown) => console.error('[game] show best failed', e))
+      .finally(() => {
+        if (this.showBestTask === t) this.showBestTask = null;
+      });
+    this.showBestTask = t;
+  }
+
+  /**
+   * The Show best text for `ply`: the best move explained from the engine lines `before` (of the
+   * position before the ply), what was played, and the best line. `explained` is false when
+   * `before` has no line for the best move: the text is then built from the saved explanation.
+   */
+  private showBestText(
+    g: GameInfo,
+    ply: Ply,
+    before: AnalysisResult | undefined,
+  ): { bestUci: string | null; bestSan: string | null; lines: string[]; explained: boolean } {
+    const s = this.s;
+    const cl = ply.classification!;
     const bestUci = cl.bestMoveUci ?? before?.lines[0]?.pv[0] ?? null;
+    const bestSan = cl.bestMoveSan ?? (bestUci ? uciToSan(ply.fenBefore, bestUci) : null);
     const line = before?.lines.find((l) => l.pv[0] === bestUci) ?? null;
     const human = ply.color === g.playerColor;
-    const prev = index > 0 ? s.plies.value[index - 1] : undefined;
-    const lines: string[] = [];
+    const prev = ply.index > 0 ? s.plies.value[ply.index - 1] : undefined;
+    const saved = ply.explanation;
     const played = human ? `You played ${ply.san}.` : `${g.bot.name} played ${ply.san}.`;
-    // What was wrong with the played move (not repeated when it only says what the best move was).
-    const why = ply.explanation?.headline;
-    const playedLine = why && !why.startsWith('Best was') ? `${played} ${why}` : played;
+    const why = saved?.headline;
+    const lines: string[] = [];
     if (line) {
       const e = explainBestMove(ply.fenBefore, line, {
         prevMove: prev ? prevMoveOf(prev) : undefined,
@@ -1092,29 +1189,40 @@ export class GameController {
         // All engine lines, as the hint and the feedback on a best move use them (same wording).
         lines: before?.lines,
       });
+      // What was wrong with the played move, unless it only restates the best move, which the
+      // lines above already explain: "Best was X …", "You missed X, which wins a rook.", "You
+      // missed a forced mate in 2." (A missed chance that does not name the move still says what
+      // kind of chance it was.)
+      const restatesBest =
+        !!why &&
+        (why.startsWith('Best was') ||
+          (!!bestSan && mentionsMove(why, bestSan)) ||
+          (saved?.motifs?.includes('missedMate') ?? false));
+      const playedLine = why && !restatesBest ? `${played} ${why}` : played;
       const san = pvToSan(ply.fenBefore, line.pv, 8);
       const bestLine = san.length > 1 ? `Best line: ${formatLine(ply.fenBefore, san)}` : null;
       // The "Best line" below already shows the variation: skip the explanation's own copy.
       const details = bestLine ? e.details.filter((d) => !LINE_DETAIL.test(d)) : e.details;
       lines.push(e.headline, ...details.slice(0, 2), playedLine);
       if (bestLine) lines.push(bestLine);
-    } else {
-      lines.push(playedLine);
+      return { bestUci, bestSan, lines, explained: true };
     }
-    const bestSan = cl.bestMoveSan ?? (bestUci ? uciToSan(ply.fenBefore, bestUci) : null);
-    batch(() => {
-      s.coachMode.value = {
-        kind: 'showBest',
-        index,
-        bestUci,
-        bestSan,
-        lines,
-        returnTo: s.viewIndex.value,
-        prev: s.coachMode.value,
-      };
-      s.viewIndex.value = index;
-    });
-    this.updateWatch();
+    // No engine lines: what the saved explanation says. Its "Best was X, which …" becomes the
+    // reason for X ("X wins a rook."), as the engine explanation would put it first.
+    const reason = saved?.details
+      .map((d) => /^Best was (\S+?), which (.+)$/.exec(d))
+      .find((mm) => mm && (!bestSan || mm[1] === bestSan));
+    if (reason) lines.push(`${reason[1]} ${reason[2]}`);
+    lines.push(why && !why.startsWith('Best was') ? `${played} ${why}` : played);
+    const bestLineSan = saved?.bestLineSan ?? [];
+    const bestLine =
+      bestLineSan.length > 1 && (!bestSan || bestLineSan[0] === bestSan)
+        ? `Best line: ${formatLine(ply.fenBefore, bestLineSan)}`
+        : null;
+    const details = (saved?.details ?? []).filter((d) => !d.startsWith('Best was') && !(bestLine && LINE_DETAIL.test(d)));
+    lines.push(...details.slice(0, 2));
+    if (bestLine) lines.push(bestLine);
+    return { bestUci, bestSan, lines, explained: false };
   }
 
   private backFromShowBest(): void {
@@ -1164,14 +1272,16 @@ export class GameController {
       if (name !== 'assist') this.s.pendingAssist.value = null;
       this.s.sheet.value = name;
     });
+    this.requestBotMove(); // a cancelled takeback releases the bot's reply
   }
 
-  /** Closes the open sheet (cancelling a pending assist). */
+  /** Closes the open sheet (cancelling a pending assist, which lets a held bot reply go ahead). */
   closeSheet(): void {
     batch(() => {
       this.s.pendingAssist.value = null;
       this.s.sheet.value = null;
     });
+    this.requestBotMove();
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -1496,14 +1606,20 @@ export class GameController {
   }
 
   /**
-   * Whether a service-worker update may reload the page now: only before a game (setup) or on the
-   * engine error screen. Not while playing, and not after a game either: the finished game is
-   * saved, but a reload would still close its game-over sheet or interrupt the review. A new
-   * service worker is active anyway, so the next launch runs the new version.
+   * Whether a service-worker update may reload the page now (the update gate in pwa.ts also waits
+   * until the page is hidden or untouched). Yes before a game (setup) and on the engine error
+   * screen. Yes on a finished game: it is saved with its result and restored as it was (phase
+   * 'over', same result, rating and history), unless a sheet is open over it, such as the
+   * game-over sheet the player may be reading: then only while the app is in the background
+   * (`hidden`). Never while playing or reviewing, which a reload would interrupt. When it stays
+   * no, the new service worker is active anyway and the next launch runs the new version.
    */
-  canReloadNow(): boolean {
-    const p = this.s.phase.value;
-    return p === 'setup' || p === 'error';
+  canReloadNow(opts: { hidden?: boolean } = {}): boolean {
+    const s = this.s;
+    const p = s.phase.value;
+    if (p === 'setup' || p === 'error') return true;
+    if (p === 'over') return s.sheet.value === null || opts.hidden === true;
+    return false;
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -1568,6 +1684,11 @@ export class GameController {
       annotations,
     };
     if (s.startEval.value) saved.startEval = s.startEval.value;
+    // The "Try again" prompt after a Retry (also under a hint asked for meanwhile): the retried
+    // move is gone from `moves`, so a restore could not rebuild it.
+    const m0 = s.coachMode.value;
+    const m = m0.kind === 'hint' ? m0.prev : m0;
+    if (playing && m.kind === 'retry') saved.retry = { san: m.san, cls: m.cls, headline: m.headline };
     if (finished && o) {
       const rc = s.ratingChange.value;
       const rating = s.profile.value.rating;
@@ -1580,11 +1701,12 @@ export class GameController {
   // Test / e2e support
 
   /**
-   * Resolves once no boot, bot move, background annotation or review is pending. For tests and
-   * e2e scripts (do not await it while a bot move is blocked on purpose).
+   * Resolves once no boot, bot move, background annotation, review or Show best analysis is
+   * pending. For tests and e2e scripts (do not await it while a bot move is blocked on purpose).
    */
   async idle(): Promise<void> {
-    const pending = () => [this.booting, this.botTask, this.annotating, this.reviewTask].filter((p) => p !== null);
+    const pending = () =>
+      [this.booting, this.botTask, this.annotating, this.reviewTask, this.showBestTask].filter((p) => p !== null);
     for (let i = 0; i < 100_000; i++) {
       const p = pending();
       if (p.length) {

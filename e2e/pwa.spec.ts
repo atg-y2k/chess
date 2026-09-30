@@ -98,6 +98,7 @@ test.describe('PWA shell', () => {
     expect(res.headers()['content-type']).toMatch(/application\/(manifest\+)?json/);
 
     const manifest = (await res.json()) as {
+      id: string;
       name: string;
       short_name: string;
       description: string;
@@ -121,6 +122,9 @@ test.describe('PWA shell', () => {
     const appUrl = new URL('./', page.url()).href;
     expect(new URL(manifest.start_url, manifestUrl).href).toBe(appUrl);
     expect(new URL(manifest.scope, manifestUrl).href).toBe(appUrl);
+    // So does the app's identity, which is resolved against start_url's origin instead: an id of
+    // "." would make it the whole origin (every app on atg-y2k.github.io).
+    expect(new URL(manifest.id, new URL(manifest.start_url, manifestUrl).origin).href).toBe(appUrl);
 
     const find = (sizes: string, purpose?: string) =>
       manifest.icons.find((i) => i.sizes === sizes && (i.purpose ?? 'any') === (purpose ?? 'any'));

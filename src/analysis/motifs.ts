@@ -11,8 +11,11 @@ import { Chess, type Color, type Move, type PieceSymbol, type Square } from 'che
 import { parseUci } from '../chess/utils';
 import {
   VALUE,
+  absolutePinner,
   attacksFrom,
   between,
+  effectiveAttackers,
+  exchangeCounts,
   fileOf,
   hangingPieces,
   kingSquare,
@@ -44,7 +47,19 @@ export type Motif =
   | { kind: 'pin'; by: PieceOn; pinned: PieceOn; behind: PieceOn; exploit?: boolean; frozen?: boolean }
   | { kind: 'skewer'; by: PieceOn; front: PieceOn; back: PieceOn }
   | { kind: 'discovered'; by: PieceOn; target: PieceOn }
-  | { kind: 'freeCapture'; captured: PieceOn; attackers: number; defenders: number }
+  /**
+   * A capture that wins material. `attackers` / `defenders`: pieces each side can bring to the
+   * square, x-rays included and pinned pieces left out (see `exchangeCounts`); `pinned`: direct
+   * defenders that cannot take back because they are pinned; `by`: the capturing piece.
+   */
+  | {
+      kind: 'freeCapture';
+      captured: PieceOn;
+      attackers: number;
+      defenders: number;
+      pinned: number;
+      by: PieceSymbol;
+    }
   | { kind: 'losingCapture'; captured: PieceOn; see: number }
   | ({ kind: 'hanging' } & Hanging)
   | { kind: 'trapped'; piece: PieceOn }
@@ -99,6 +114,17 @@ export function nullMoveFen(fen: string): string | null {
   if (c.inCheck()) return null;
   c.move(null);
   return c.fen();
+}
+
+/**
+ * The same position with the other side to move (en passant cleared): a baseline "before the
+ * move" when a null move is illegal because the side to move is in check. chess.js accepts it.
+ */
+export function passTurn(fen: string): string {
+  const f = fen.split(' ');
+  f[1] = f[1] === 'b' ? 'w' : 'b';
+  if (f.length > 3) f[3] = '-';
+  return f.join(' ');
 }
 
 /**
@@ -311,7 +337,8 @@ export function linesFrom(fen: string, color: Color, only?: Square): Motif[] {
 
 /**
  * Pieces (not pawns or the king) of the side to move that are attacked, lose material where they
- * stand, and lose material on every square they can go to (lichess tagger `is_trapped`).
+ * stand, and lose material on every square they can go to (lichess tagger `is_trapped`), and that
+ * no other move saves either (blocking the attack, taking the attacker, defending the piece).
  */
 export function trappedPieces(fen: string): PieceOn[] {
   const c = new Chess(fen);
@@ -319,12 +346,19 @@ export function trappedPieces(fen: string): PieceOn[] {
   const owner = c.turn();
   const opp = other(owner);
   const out: PieceOn[] = [];
+  let all: Move[] | null = null;
   for (const p of pieces(c, owner)) {
     if (p.type === 'p' || p.type === 'k' || see(fen, p.square, opp) <= 0) continue;
-    const escapes = c
-      .moves({ square: p.square, verbose: true })
-      .some((m) => (m.captured && VALUE[m.captured] >= VALUE[p.type]) || see(m.after, m.to, opp) <= 0);
-    if (!escapes) out.push(p);
+    // The move trades it for as much, or leaves it (on its new square if it moved) safe. (On a
+    // `passTurn` baseline the opponent may be in check: taking the king saves nothing.)
+    const saves = (m: Move) =>
+      m.captured !== 'k' &&
+      ((!!m.captured && VALUE[m.captured] >= VALUE[p.type]) ||
+        see(m.after, m.from === p.square ? m.to : p.square, opp) <= 0);
+    if (c.moves({ square: p.square, verbose: true }).some(saves)) continue;
+    all ??= c.moves({ verbose: true });
+    if (all.some((m) => m.from !== p.square && saves(m))) continue;
+    out.push(p);
   }
   return out;
 }
@@ -410,6 +444,9 @@ function computeMoveMotifs(fen: string, uci: string): MoveMotifs {
   const me = c.turn();
   const opp = other(me);
   const before = scratch(fen);
+  // Escaping check: the "before" baselines (threats and trapped pieces the mover already had) can
+  // not be probed with a null move, and only check evasions are legal there.
+  const inCheckBefore = c.inCheck();
   const move = c.move(parseUci(uci));
   const after = c.fen();
   const motifs: Motif[] = [];
@@ -427,11 +464,15 @@ function computeMoveMotifs(fen: string, uci: string): MoveMotifs {
     const square = move.isEnPassant() ? ((move.to[0] + move.from[1]) as Square) : move.to;
     const captured: PieceOn = { square, type: move.captured, color: opp };
     if (g >= VALUE[move.captured] && g > 0) {
+      const ex = exchangeCounts(fen, move.to, me, move.from);
+      const direct = before.attackers(move.to, opp).length;
       motifs.push({
         kind: 'freeCapture',
         captured,
-        attackers: before.attackers(move.to, me).length,
-        defenders: before.attackers(move.to, opp).length,
+        attackers: ex.attackers,
+        defenders: ex.defenders,
+        pinned: Math.max(0, direct - effectiveAttackers(before, move.to, opp).length),
+        by: move.piece,
       });
     } else if (g < 0) motifs.push({ kind: 'losingCapture', captured, see: g });
   }
@@ -473,12 +514,14 @@ function computeMoveMotifs(fen: string, uci: string): MoveMotifs {
   }, undefined);
 
   // Only pieces this move traps (not ones that were trapped already).
-  const trappedBefore = safe(() => {
-    const nf = nullMoveFen(fen);
-    return nf ? trappedPieces(nf).map((p) => p.square) : [];
-  }, [] as Square[]);
+  const trappedBefore = safe(
+    () => trappedPieces(nullMoveFen(fen) ?? passTurn(fen)).map((p) => p.square),
+    [] as Square[],
+  );
+  // A piece pinned to its king is lost to the pin (lichess `is_trapped` skips it too).
   for (const p of safe(() => trappedPieces(after), [])) {
-    if (!trappedBefore.includes(p.square)) motifs.push({ kind: 'trapped', piece: p });
+    if (trappedBefore.includes(p.square) || absolutePinner(c, p.square)) continue;
+    motifs.push({ kind: 'trapped', piece: p });
   }
 
   // A threat by a piece the opponent can simply take (for more than it captured) is no threat.
@@ -497,10 +540,16 @@ function computeMoveMotifs(fen: string, uci: string): MoveMotifs {
         probe.undo();
         return m.from === move.to;
       };
-      const mates = mateInOne(nf).filter((m) => !oldMates.has(m) && (moverSafe || !byMover(m)));
+      // After a check evasion only threats by the moved piece are surely new: the baselines below
+      // only see the evasions that were legal.
+      const mates = mateInOne(nf).filter(
+        (m) => !oldMates.has(m) && (moverSafe || !byMover(m)) && (!inCheckBefore || byMover(m)),
+      );
       if (mates.length) motifs.push({ kind: 'mateThreat', san: mates[0] });
       const oldPromos = new Set(promotionPushes(fen).map((p) => p.to));
-      const promo = promotionPushes(nf).find((p) => !oldPromos.has(p.to));
+      const promo = promotionPushes(nf).find(
+        (p) => !oldPromos.has(p.to) && (!inCheckBefore || p.from === move.to),
+      );
       if (promo && !move.promotion) motifs.push({ kind: 'promotionThreat', san: promo.san });
       if (!moverSafe) return;
       // Targets already explained by a discovered attack are not repeated as plain threats.
@@ -511,6 +560,7 @@ function computeMoveMotifs(fen: string, uci: string): MoveMotifs {
       // One capture per target, the best one (winningCaptures sorts best first).
       const byTarget: WinningCapture[] = [];
       for (const w of winningCaptures(nf)) {
+        if (inCheckBefore && w.from !== move.to) continue;
         if (!oldTargets.has(w.to) && !byTarget.some((x) => x.to === w.to)) byTarget.push(w);
       }
       if (byTarget.length >= 2 && !fork.length) {
@@ -656,12 +706,18 @@ function calm(fen: string): boolean {
 
 const ORDER: PieceSymbol[] = ['q', 'r', 'b', 'n', 'p'];
 
+/** Extra plies `materialOutcome` may play past `maxPlies` to finish an exchange still running. */
+const EXCHANGE_EXTENSION = 6;
+
 /**
  * Material won or lost by `pov` along an engine line. Plays up to `maxPlies` and stops at the
  * first ply >= 2 that is quiet (no capture, promotion or check, next move not a capture) and calm
- * (pending forks and double attacks are cashed in first). Falls back to the last quiet ply; if the
- * window ends mid-exchange the last capture square is settled with SEE. Like-for-like trades are
- * cancelled (identical types, then bishop for knight).
+ * (pending forks and double attacks are cashed in first). Falls back to the last quiet ply; with
+ * none inside `maxPlies` it plays on (at most `EXCHANGE_EXTENSION` plies) to the first quiet one,
+ * and if the line still ends mid-exchange the last capture square is settled with SEE (the
+ * capturer taken back is counted in `won` / `lost` too; when SEE says more than that piece,
+ * `net` and the piece lists differ). Like-for-like trades are cancelled (identical types, then
+ * bishop for knight).
  */
 export function materialOutcome(fen: string, pv: readonly string[], pov: Color, maxPlies = 10): MaterialOutcome {
   const empty: MaterialOutcome = {
@@ -684,6 +740,8 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
     plies: number;
     promos: Promos;
     adj: number;
+    /** The piece that made this ply's capture (taken back when `adj` is not 0). */
+    capturer?: { color: Color; type: PieceSymbol };
     quiet: boolean;
     calm: boolean;
     fen: string;
@@ -693,7 +751,7 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
   // The first minor piece each side captured: a single net minor is named after it.
   const firstMinor: Partial<Record<Color, PieceSymbol>> = {};
   const promos: Promos = { w: {}, b: {} };
-  for (let i = 0; i < Math.min(pv.length, maxPlies); i++) {
+  for (let i = 0; i < Math.min(pv.length, maxPlies + EXCHANGE_EXTENSION); i++) {
     let m: Move;
     try {
       m = c.move(parseUci(pv[i]));
@@ -709,7 +767,8 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
     const quiet = !m.isCapture() && !m.isPromotion() && !c.inCheck() && !nextCaptures;
     let adj = 0;
     if (m.isCapture()) {
-      const g = see(c.fen(), m.to, c.turn());
+      // The side to move takes back only when that wins something (SEE forces the first capture).
+      const g = Math.max(0, see(c.fen(), m.to, c.turn()));
       adj = c.turn() === pov ? g : -g;
     }
     const isCalm = quiet && calm(c.fen());
@@ -718,11 +777,14 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
       plies: i + 1,
       promos: { w: { ...promos.w }, b: { ...promos.b } },
       adj,
+      ...(m.isCapture() ? { capturer: { color: m.color, type: m.promotion ?? m.piece } } : {}),
       quiet,
       calm: isCalm,
       fen: c.fen(),
     });
     if (i >= 1 && isCalm) break;
+    // Past the window only an exchange still running is finished (to its first quiet ply).
+    if (i + 1 >= maxPlies && snaps.some((x) => x.plies >= 2 && x.quiet)) break;
   }
   const rev = [...snaps].reverse();
   const pick =
@@ -756,6 +818,15 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
   const theirs = removed(them);
   const won: Partial<Counts> = theirs.lost;
   const lost: Partial<Counts> = mine.lost;
+  // Ending mid-exchange: the capturer that SEE says is taken back is named too (the queen taken on
+  // the last ply comes back: "wins a pawn", not "wins a pawn for the queen").
+  let pending = pick.quiet ? 0 : pick.adj;
+  if (pending !== 0 && pick.capturer) {
+    const { color, type } = pick.capturer;
+    const x = color === pov ? lost : won;
+    x[type] = (x[type] ?? 0) + 1;
+    pending -= color === pov ? -VALUE[type] : VALUE[type];
+  }
   for (const t of ORDER) {
     const m = Math.min(won[t] ?? 0, lost[t] ?? 0);
     if (m) {
@@ -785,7 +856,7 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
   const promoted = list(mine.kept);
   const theirPromoted = list(theirs.kept);
   const promoGain = (xs: PieceSymbol[]) => xs.reduce((n, t) => n + VALUE[t] - 1, 0);
-  const net = worth(won) - worth(lost) + promoGain(promoted) - promoGain(theirPromoted) + (pick.quiet ? 0 : pick.adj);
+  const net = worth(won) - worth(lost) + promoGain(promoted) - promoGain(theirPromoted) + pending;
   return {
     net,
     won,

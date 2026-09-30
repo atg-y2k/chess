@@ -10,6 +10,7 @@ import {
   mateInOne,
   moveMotifs,
   nullMoveFen,
+  passTurn,
   principles,
   promotionPushes,
   stoppedThreat,
@@ -57,6 +58,24 @@ describe('forks, pins, skewers, trapped pieces', () => {
   it('finds a knight trapped in the corner', () => {
     const trapped = trappedPieces('N1bk1bnr/p1p1pppp/1p6/3q4/8/8/PPPPPPPP/R1BQKBNR w KQ - 0 1');
     expect(trapped.map((p) => p.type + p.square)).toEqual(['na8']);
+  });
+
+  it('a piece another move saves (a block) is not trapped', () => {
+    // Légal pattern, 5.Nxe5? Nxe5: every queen move loses it, but f3 or Be2 blocks the bishop.
+    const fen = fenOf('Nxe5 Nxe5', 'r2qkbnr/ppp2p1p/2np2p1/4p3/2B1P1b1/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 0 5');
+    expect(trappedPieces(fen)).toEqual([]);
+  });
+
+  it('keeps the "before" baselines when the mover escapes check', () => {
+    // The knight on a1 is already trapped when Black gives check; Kf2 does not trap it.
+    const fen = '6k1/4r3/8/5B2/3Q4/1P6/P7/n3K3 w - - 0 1';
+    expect(trappedPieces(passTurn(fen)).map((p) => p.square)).toEqual(['a1']);
+    expect(kinds(fen, 'e1f2')).not.toContain('trapped');
+    // Qxg7# (and the double attack) were threatened before ...Qe1+: Rxe1 does not create them.
+    const qe1 = kinds('4r1k1/ppp2pb1/8/3n1N1P/6Q1/2P5/PP4P1/R1K1qR2 w - - 3 34', 'f1e1');
+    expect(qe1).not.toContain('trapped');
+    expect(qe1).not.toContain('mateThreat');
+    expect(qe1).not.toContain('doubleThreat');
   });
 });
 

@@ -25,7 +25,9 @@ export interface NewGameSheetProps {
   inProgress?: { rated: boolean } | null;
   /**
    * A brand-new player (no games yet): with `levels` and `onSetLevel`, a compact "Your level"
-   * picker at the top sets the starting rating (and so "Match my rating") before the first game.
+   * picker at the top sets the starting rating before the first game, and switches the opponent
+   * to "Match my rating" (unless an opponent was already picked in this sheet), so the first game
+   * is against a bot of that level.
    */
   newPlayer?: boolean;
   /** Starting levels for the picker (rating/rating.ts STARTING_LEVELS). */
@@ -146,6 +148,8 @@ export function NewGameSheet({
   onSetLevel,
 }: NewGameSheetProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial, bots));
+  /** The player chose an opponent (card, slider or "Match my rating") since the sheet opened. */
+  const opponentPicked = useRef(false);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const colorLabelId = useId();
   const levelLabelId = useId();
@@ -153,7 +157,9 @@ export function NewGameSheet({
 
   // Start from `initial` every time the sheet opens.
   useEffect(() => {
-    if (open) setDraft(draftFrom(initial, bots));
+    if (!open) return;
+    setDraft(draftFrom(initial, bots));
+    opponentPicked.current = false;
   }, [open]);
 
   // Bring the selected card into view when the sheet opens (no animation).
@@ -174,7 +180,16 @@ export function NewGameSheet({
   const isCustom = !draft.adaptive && !persona;
   const cardIds = [...bots.map((b) => b.id), CUSTOM_BOT_ID];
 
-  const selectCard = (id: string) => set({ selectedId: id, adaptive: false });
+  const pickOpponent = (patch: Partial<Draft>) => {
+    opponentPicked.current = true;
+    set(patch);
+  };
+  const selectCard = (id: string) => pickOpponent({ selectedId: id, adaptive: false });
+  // A new player's level also picks a bot of that level ("Match my rating" follows the new rating).
+  const pickLevel = (r: number) => {
+    onSetLevel?.(r);
+    if (!opponentPicked.current) set({ adaptive: true });
+  };
 
   const onCardsKeyDown = (e: KeyboardEvent) => {
     const step =
@@ -233,7 +248,7 @@ export function NewGameSheet({
             </h3>
             <span class="ngs-level-hint">Sets your starting rating</span>
           </div>
-          <LevelPicker levels={levels} value={rating} onChange={onSetLevel} labelledBy={levelLabelId} id="level" />
+          <LevelPicker levels={levels} value={rating} onChange={pickLevel} labelledBy={levelLabelId} id="level" />
         </section>
       ) : null}
 
@@ -259,7 +274,7 @@ export function NewGameSheet({
             </div>
           </div>
           <p class="ngs-hero-tagline">{hero.tagline}</p>
-          {isCustom && <EloSlider value={draft.customElo} onChange={(v) => set({ customElo: v })} />}
+          {isCustom && <EloSlider value={draft.customElo} onChange={(v) => pickOpponent({ customElo: v })} />}
         </div>
 
         <div class="ngs-bots" ref={scrollerRef} role="radiogroup" aria-label="Opponent" onKeyDown={onCardsKeyDown}>
@@ -294,7 +309,7 @@ export function NewGameSheet({
             label={`Match my rating (${rating})`}
             description="Opponent strength follows your rating"
             checked={draft.adaptive}
-            onChange={(on) => set({ adaptive: on })}
+            onChange={(on) => pickOpponent({ adaptive: on })}
             icon={<span class="ngs-emoji-icon">🎯</span>}
             iconColor="var(--accent-strong)"
           />

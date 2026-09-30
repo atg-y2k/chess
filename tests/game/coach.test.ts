@@ -50,6 +50,17 @@ describe('answerFreeLines', () => {
     expect(answerFreeLines(e, cl({ bestMoveSan: 'Qh7#', cls: 'miss' }))).toEqual(['You missed a checkmate.']);
   });
 
+  it('an underpromotion does not say what to promote to', () => {
+    const e: Explanation = {
+      headline: 'e8=N+ promotes to a knight instead of a queen.',
+      details: ['Best was e8=Q, which promotes to a queen.'],
+      motifs: ['underpromotion'],
+    };
+    const lines = answerFreeLines(e, cl({ bestMoveSan: 'e8=Q', bestMoveUci: 'e7e8q', playedMoveSan: 'e8=N+' }));
+    expect(lines).toEqual(['There was a much better move here.']);
+    expect(lines.join(' ')).not.toMatch(/queen/);
+  });
+
   it('never returns nothing', () => {
     expect(answerFreeLines(undefined, cl({ cls: 'mistake' }))).toEqual(['There was a clearly better move here.']);
   });

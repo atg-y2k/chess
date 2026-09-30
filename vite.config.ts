@@ -164,7 +164,11 @@ export default defineConfig({
       // add duplicate precache entries.
       includeManifestIcons: false,
       manifest: {
-        id: '.',
+        // The app's identity: the absolute base path, e.g. /chess/. Unlike start_url and scope, id
+        // is resolved against the origin, not the manifest URL, so '.' or './' would mean the
+        // origin root and clash with any other app there (e.g. a user site on atg-y2k.github.io).
+        // Changing it later makes a different app for existing installs.
+        id: base,
         name: 'Chess Coach',
         short_name: 'Chess Coach',
         description:

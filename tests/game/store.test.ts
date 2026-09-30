@@ -3,7 +3,7 @@ import { Chess } from 'chess.js';
 import type { Classification, Explanation } from '../../src/analysis/types';
 import { customPersona } from '../../src/bot/personas';
 import { offersShowBest } from '../../src/game/coach';
-import { createState, createStore, explanationLines, type GameInfo } from '../../src/game/store';
+import { createState, createStore, explanationLines, pieceColorAt, type GameInfo } from '../../src/game/store';
 import { DEFAULT_SETTINGS, type Ply } from '../../src/game/types';
 import { defaultProfile } from '../../src/rating/rating';
 
@@ -111,5 +111,23 @@ describe('coach view: Brilliant that is not the top move', () => {
     const store = reviewStore(cl({ cls: 'brilliant', bestMoveUci: 'e2e4', bestMoveSan: 'e4', playedMoveSan: 'e4' }));
     expect(store.coach.value.actions).toEqual([]);
     expect(store.board.value.arrows).toEqual([]);
+  });
+});
+
+describe('pieceColorAt', () => {
+  it('reads the colour of the piece on a square, null when empty', () => {
+    const start = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    expect(pieceColorAt(start, 'e1')).toBe('w');
+    expect(pieceColorAt(start, 'h8')).toBe('b');
+    expect(pieceColorAt(start, 'a2')).toBe('w');
+    expect(pieceColorAt(start, 'e4')).toBeNull();
+    const fen = '4k3/8/8/8/8/3p4/8/4K3 w - - 0 1'; // after ...exd3 e.p.
+    expect(pieceColorAt(fen, 'd3')).toBe('b');
+    expect(pieceColorAt(fen, 'd4')).toBeNull();
+    expect(pieceColorAt(fen, 'e8')).toBe('b');
+    expect(pieceColorAt(fen, 'h1')).toBeNull();
+    for (const sq of ['a1', 'c7', 'f5', 'h8']) {
+      expect(pieceColorAt(fen, sq)).toBe(new Chess(fen).get(sq as 'a1')?.color ?? null);
+    }
   });
 });

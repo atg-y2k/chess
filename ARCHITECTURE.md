@@ -19,7 +19,7 @@ src/
   App.tsx / App.css        screen layout + wiring of store/controller to components (see "App shell")
   theme.ts                 color theme preference (dark default / light / system) -> <html data-theme>
   clipboard.ts             copyText() with a legacy fallback (PGN export, self-test log)
-  pwa.ts / ios.ts          service-worker registration with a deferred reload; iOS zoom guards + first-tap hook
+  pwa.ts / ios.ts          service-worker registration (kept alive) with a deferred reload; iOS zoom guards + first-tap hook
   styles/app.css           global design tokens (colors, radii, safe areas) + .btn styles
   chess/utils.ts           small shared helpers (fenKey, sideToMove, toWhitePov, uciToSan, pvToSan, material, capturedPieces)
   engine/
@@ -305,7 +305,10 @@ export function explanationLines(e: Explanation | undefined | null, bestSan?: st
 export type SoundKind = 'move' | 'capture' | 'check' | 'castle' | 'promote' | 'gameStart' | 'gameEnd' | 'illegal' | 'notify';
 export function unlockAudio(): void; export function setSoundEnabled(on: boolean): void; export function playSound(kind: SoundKind): void;
 // pwa.ts / ios.ts
+/** onOfflineReady: once per page load, when the app is known to be cached for offline use. */
 export function registerServiceWorker(opts: { canReloadNow: () => boolean; onOfflineReady?: () => void }): void;
+/** Registers again when the registration is missing (a failed first install deletes it), else looks for updates; retries a failed first install with a backoff. */
+export function createRegistrationKeeper(opts: { scope: string; getRegistration: () => Promise<KeeperRegistration | undefined>; register: () => Promise<KeeperRegistration | undefined>; onReady?: () => void; online?: () => boolean }): { start(): Promise<void>; check(force?: boolean): Promise<void> };
 /** Reloads onto a new build only when canReloadNow() and the page is hidden or untouched since it was loaded or shown. */
 export function createReloadGate(canReloadNow: () => boolean, reload: () => void, opts?: { pollMs?: number; page?: ReloadGatePage }): ReloadGate;
 /** gesturestart/double-tap zoom guards; onFirstGesture runs inside the first tap (unlockAudio). Returns an uninstaller. */
@@ -611,6 +614,12 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   1.6 MB gzipped). Hashed `assets/` and the engine files (versioned by name; `ENGINE_FILES` pins
   their SHA-256 and fails the build if they change) are precached without a revision, so the first
   visit can reuse the engine download from the HTTP cache instead of fetching it twice.
+- The first install is all or nothing: if one download fails, the browser deletes the registration.
+  `pwa.ts` then registers again (when the app comes back online or to the front, hourly, and on its
+  own after 30 s, doubling up to an hour), so a dropped connection on the first visit does not
+  leave the app without offline support until the next launch.
+- The manifest `id` is the absolute base path (`/chess/`): unlike `start_url` and `scope` it is
+  resolved against the origin, so `.` would make the app's identity the whole origin.
 - Only the app's own URL (`<base>`, `<base>index.html`, any query) falls back to the cached
   `index.html`; other paths (`engine/COPYING-stockfish.txt`, `THIRD-PARTY-LICENSES.txt`, typos) get
   the real file or a 404.

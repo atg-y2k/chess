@@ -64,4 +64,11 @@ export interface Explanation {
   title?: string;
   /** Machine-readable tags for what the text talks about, e.g. ["fork"], ["hanging"], ["allowsMate", "backRank"]. */
   motifs?: string[];
+  /**
+   * Set when the class praises the move (Good or Excellent: in a decided position the expected
+   * score barely moves) but the text says what it gives away: 'material' (it hangs a piece, or
+   * loses at least a minor piece in a lost position: "This hangs your queen on b4.") or 'mate'
+   * ("This lets White mate faster."). The UI should not show a praising title or badge for it.
+   */
+  concedes?: 'material' | 'mate';
 }

@@ -26,6 +26,8 @@ export interface CapturedGroup {
   count: number;
 }
 
+const UNRATED_TITLE = 'Takebacks, hints or best-move arrows were used: this game won’t change your rating';
+
 /** Display order of captured pieces: cheapest first, as on most chess sites. */
 const CAPTURE_ORDER = ['p', 'n', 'b', 'r', 'q'];
 
@@ -85,12 +87,18 @@ export function PlayerStrip({
           <span class="pstrip-name">{name}</span>
           {rating != null && <span class="pstrip-rating">({Math.round(rating)})</span>}
           {unrated && (
-            <span class="pstrip-unrated" title="Takebacks, hints or best-move arrows were used: this game won’t change your rating">
+            <span class="pstrip-unrated" title={UNRATED_TITLE}>
               Unrated
             </span>
           )}
         </div>
         <div class="pstrip-caps" aria-label={capLabel || undefined} role={capLabel ? 'img' : undefined}>
+          {/* The same pill for a narrow strip whose right end is covered (see .pstrip-caps-unrated). */}
+          {unrated && (
+            <span class="pstrip-caps-unrated" title={UNRATED_TITLE} aria-hidden="true">
+              Unrated
+            </span>
+          )}
           {groups.map(({ piece, count }) => (
             <span key={piece} class="pstrip-group" data-piece={piece} title={PIECE_NAMES[piece]}>
               {Array.from({ length: count }, (_, i) => (

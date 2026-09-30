@@ -42,7 +42,10 @@ tab before installing does not carry over.
 
 The first visit downloads about 3.3 MB (less if the site compresses it). Most of that is the chess
 engine (1.8 MB) and the opening book (0.9 MB). On a slow connection, the start screen shows
-"Downloading engine NN%…". After that the app works **offline**, in airplane mode too.
+"Downloading engine NN%…". Once a launch has finished that download while online, the app works
+**offline**, in airplane mode too. The Home Screen app keeps its own storage (see above), so open it
+once while online after adding it. If the connection drops during that first download, the app
+finishes it by itself the next time it is online.
 
 **Updates** download in the background. The new version starts the next time the app starts from
 scratch, for example after iOS has closed it in the background or after you swipe it away in the

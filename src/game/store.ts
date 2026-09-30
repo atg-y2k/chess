@@ -116,6 +116,11 @@ export type CoachMode =
       /** View index to return to on "Back" (null = live). */
       returnTo: number | null;
       prev: CoachMode;
+      /**
+       * The engine lines of the position were not at hand: `lines` is what the saved explanation
+       * says, and the best move's explanation is on its way (the panel shows busy).
+       */
+      pending?: boolean;
     }
   /** The human took back a bad move via "Retry". */
   | { kind: 'retry'; san: string; cls: MoveClass; headline: string | null };
@@ -339,6 +344,20 @@ export function positionInfo(fen: string): PositionInfo {
   }
 }
 
+/** Colour of the piece on `square` (e.g. "e4") in a FEN, or null when the square is empty. */
+export function pieceColorAt(fen: string, square: string): Color | null {
+  const file = square.charCodeAt(0) - 97;
+  const row = fen.split(' ')[0].split('/')[8 - Number(square[1])];
+  if (!row || file < 0 || file > 7) return null;
+  let f = 0;
+  for (const ch of row) {
+    if (ch >= '1' && ch <= '8') f += Number(ch);
+    else if (f++ === file) return ch === ch.toUpperCase() ? 'w' : 'b';
+    if (f > file) return null;
+  }
+  return null;
+}
+
 /** A brand-new player: no rated games counted and nothing in the history. */
 export function isNewPlayer(p: PlayerProfile): boolean {
   return p.gamesPlayed === 0 && p.history.length === 0;
@@ -494,12 +513,12 @@ export function createStore(state: AppState): Store {
     if (m.kind === 'showBest') return undefined;
     if (m.kind === 'feedback' && phase.value === 'playing' && isLive.value && settings.value.coach) {
       // The verdict on your last move stays on its square after the bot's reply (unless the reply
-      // landed there), until your next move.
+      // took the piece there, also en passant), until your next move.
       const fb = plies.value[m.index];
       const cls = fb?.classification?.cls;
       if (!fb || !cls) return undefined;
       const square = fb.uci.slice(2, 4);
-      if (plies.value[m.index + 1]?.uci.slice(2, 4) === square) return undefined;
+      if (m.index < plies.value.length - 1 && pieceColorAt(liveFen.value, square) !== fb.color) return undefined;
       return { square, cls };
     }
     const ply = displayedPly.value;
@@ -689,7 +708,7 @@ export function createStore(state: AppState): Store {
       cls: 'best',
       title: m.bestSan ? `Best was ${m.bestSan}` : 'Best move',
       lines: m.lines,
-      busy: false,
+      busy: !!m.pending,
       actions,
     };
   }
@@ -734,35 +753,29 @@ export function createStore(state: AppState): Store {
     }
     const lines = explanationLines(ply.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null);
     const actions: CoachActionView[] = offersShowBest(cl, ply.uci) ? [{ id: 'showBest', label: 'Show best' }] : [];
-    return { kind: 'review', cls: cl.cls, title: classSentence(moveLabel(ply), cl.cls), lines, busy: false, actions };
+    const title = classSentence(moveLabel(ply), cl.cls);
+    return { kind: 'review', cls: cl.cls, title, titleMove: moveLabel(ply), lines, busy: false, actions };
   }
 
   function playingCoach(): Omit<CoachView, 'collapsed'> {
     const m = coachMode.value;
     const g = game.value!;
     const s = settings.value;
-    if (m.kind === 'hint') {
-      return {
-        kind: 'hint',
-        title: 'Hint',
-        lines: m.explanation ? explanationLines(m.explanation) : [],
-        busy: !m.explanation,
-        actions: m.explanation ? [{ id: 'dismissHint', label: 'Got it' }] : [],
-      };
-    }
     if (m.kind === 'showBest') return showBestCoach(m);
     if (!isLive.value) {
-      // Browsing history during the game.
+      // Browsing history during the game (a hint on the live position waits until you are back).
       const ply = displayedPly.value;
       const back: CoachActionView[] = [{ id: 'backToGame', label: 'Back to game', primary: true }];
       if (ply && s.coach && ply.color === g.playerColor && ply.classification) {
         const cl = ply.classification;
         // The move the coach is discussing may still be retried: keep its answer hidden here too.
-        const hide = m.kind === 'feedback' && m.index === ply.index && canRetry(ply);
+        const base = m.kind === 'hint' ? m.prev : m;
+        const hide = base.kind === 'feedback' && base.index === ply.index && canRetry(ply);
         return {
           kind: 'coach',
           cls: cl.cls,
           title: classSentence(moveLabel(ply), cl.cls),
+          titleMove: moveLabel(ply),
           lines: hide ? answerFreeLines(ply.explanation, cl) : explanationLines(ply.explanation),
           busy: false,
           actions: back,
@@ -774,6 +787,15 @@ export function createStore(state: AppState): Store {
         lines: ['The board is paused here. Go back to the game to keep playing.'],
         busy: false,
         actions: back,
+      };
+    }
+    if (m.kind === 'hint') {
+      return {
+        kind: 'hint',
+        title: 'Hint',
+        lines: m.explanation ? explanationLines(m.explanation) : [],
+        busy: !m.explanation,
+        actions: m.explanation ? [{ id: 'dismissHint', label: 'Got it' }] : [],
       };
     }
     if (!s.coach) return minimalCoach();
@@ -812,7 +834,8 @@ export function createStore(state: AppState): Store {
         if (offersShowBest(cl, ply.uci)) actions.push({ id: 'showBest', label: 'Show best', primary: !g.assisted });
         if (retry) actions.push({ id: 'retry', label: 'Retry', primary: g.assisted });
         if (!actions.some((a) => a.primary) && actions.length) actions[0] = { ...actions[0], primary: true };
-        return { kind: 'coach', cls: cl.cls, title: classSentence(moveLabel(ply), cl.cls), lines, busy: false, actions };
+        const title = classSentence(moveLabel(ply), cl.cls);
+        return { kind: 'coach', cls: cl.cls, title, titleMove: moveLabel(ply), lines, busy: false, actions };
       }
     }
     return idleCoach();
@@ -900,7 +923,7 @@ export function createStore(state: AppState): Store {
       undo: { disabled: !(playing && settings.value.allowTakebacks && hasHumanPly) },
       hint: {
         disabled: !(humanToMove.value && isLive.value && m.kind !== 'showBest'),
-        active: m.kind === 'hint',
+        active: m.kind === 'hint' && isLive.value,
       },
       flip: { disabled: p === 'boot' },
       coach: { disabled: p === 'boot', active: settings.value.coach },

@@ -49,6 +49,7 @@
 /* ---------------------------------------------------------------- players */
 
 .app-player {
+  container: player / inline-size;
   position: relative;
   width: calc(var(--app-board) + var(--app-bar));
   max-width: 100%;
@@ -130,6 +131,19 @@
   from {
     opacity: 0;
     transform: translate(8px, -50%) scale(0.92);
+  }
+}
+/*
+ * A strip too narrow for "You (1500) Unrated" and the chip side by side (the landscape side
+ * column, small phones): "Unrated", the only sign on screen that the game no longer counts, moves
+ * to the start of the second row, clear of the chip.
+ */
+@container player (max-width: 360px) {
+  .app-player:has(> .app-chip) .pstrip-top > .pstrip-unrated {
+    display: none;
+  }
+  .app-player:has(> .app-chip) .pstrip-caps-unrated {
+    display: block;
   }
 }
 

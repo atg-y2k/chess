@@ -35,7 +35,10 @@ if (params.has('enginetest')) {
   });
 } else {
   const controller = new GameController();
-  registerServiceWorker({ canReloadNow: () => controller.canReloadNow() });
+  // A finished game may reload onto a new build at once; with a sheet open over it, only in the background.
+  registerServiceWorker({
+    canReloadNow: () => controller.canReloadNow({ hidden: document.visibilityState === 'hidden' }),
+  });
   bindPageLifecycle(controller);
   render(<App controller={controller} />, root);
   void controller.boot();

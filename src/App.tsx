@@ -263,6 +263,7 @@ function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean>
       <CoachPanel
         cls={coach.cls}
         title={coach.title}
+        titleMove={coach.titleMove}
         lines={coach.lines}
         busy={coach.busy}
         collapsed={collapsed}

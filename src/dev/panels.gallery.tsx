@@ -511,6 +511,24 @@ function StatesPage() {
             }}
           />
           <CoachPanel cls="book" title="Book move" lines={["King's Gambit Accepted: Bishop's Gambit."]} collapsed onToggleCollapsed={noop('states:expand-book')} />
+          {/* A move-naming title: two lines in a narrow bubble; in the one-line row the move gives way first. */}
+          <div style={{ width: '300px' }}>
+            <CoachPanel
+              cls="inaccuracy"
+              title="23… Qxf7+ is an inaccuracy"
+              titleMove="23… Qxf7+"
+              lines={['Qxf7+ wins a pawn, but it lets White trade queens.']}
+              onToggleCollapsed={noop('states:toggle-narrow')}
+            />
+            <CoachPanel
+              cls="inaccuracy"
+              title="23… Qxf7+ is an inaccuracy"
+              titleMove="23… Qxf7+"
+              lines={['Qxf7+ wins a pawn, but it lets White trade queens.']}
+              collapsed
+              onToggleCollapsed={noop('states:expand-narrow')}
+            />
+          </div>
         </>,
       )}
       {section(
