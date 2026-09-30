@@ -2,9 +2,10 @@
  * Game flow end-to-end, on the production build with the real Stockfish workers (iPhone 15 Pro
  * emulation, see playwright.config.ts): new-game sheet, moves by tapping squares, bot replies,
  * eval bar, coach feedback, hint arrows, undo, flip, reload restore, resign, game over sheet and
- * game review; a game as Black; the starting-level picker, "Set my level" and the Menu's Engine
- * row (and compatibility mode); "Available offline"; engine download progress and a failed
- * download; and the `?enginetest` diagnostics page.
+ * Game Review; a game as Black; the move list after rotating the phone; a position where the
+ * engine needs millions of nodes (the coach must not stall); the starting-level picker, "Set my
+ * level" and the Menu's Engine row (and compatibility mode); "Available offline"; engine download
+ * progress and a failed download; and the `?enginetest` diagnostics page.
  *
  * Moves are made by tapping the centres of squares, computed from the board's bounding box and
  * orientation. The legal-move choice for later moves and a few waits read the app's state through
@@ -69,6 +70,12 @@ async function play(page: Page, uci: string): Promise<void> {
   await tapSquare(page, uci.slice(2, 4));
   await expect(moves(page)).toHaveCount(before + 1);
 }
+
+/** 1.d4 Nf6 2.c4 d5 3.cxd5 Nxd5 4.e4 Nd7 5.exd5 c6 6.dxc6 Rg8 7.cxd7+ Kxd7 8.Qa4+ Kd6 9.Qa3+ Kc7 … 17… Bd4. */
+const ROTATE_MOVES = [
+  'd2d4', 'g8f6', 'c2c4', 'd7d5', 'c4d5', 'f6d5', 'e2e4', 'b8d7', 'e4d5', 'c7c6', 'd5c6', 'h8g8', 'c6d7', 'e8d7', 'd1a4', 'd7d6', 'a4a3',
+  'd6c7', 'd4d5', 'd8d5', 'a3a4', 'd5c5', 'a4a5', 'c5a5', 'b1c3', 'g7g6', 'g1f3', 'c8f5', 'c1d2', 'f8g7', 'c3b5', 'a5b5', 'f1b5', 'g7d4',
+];
 
 /** Quiet developing moves for White, tried in order (none of them can walk into a quick mate). */
 const QUIET_MOVES = ['g1f3', 'b1c3', 'd2d3', 'f1e2', 'c2c3', 'a2a3', 'h2h3', 'b2b3', 'e1g1'];
@@ -187,8 +194,12 @@ test.describe('Game', () => {
     const over = page.getByRole('dialog', { name: 'You lost You resigned' });
     await expect(over).toBeVisible();
     await expect(over.locator('.gos-headline')).toHaveText('You lost');
+    // The result as chess players write it (White first), with who won: not "You 0 – 1 Biscuit".
+    await expect(over.locator('.gos-result')).toHaveText('0–1');
+    await expect(over.locator('.gos-result-note')).toHaveText('Black won');
+    await expect(over.locator('.gos-player .gos-name')).toHaveText(['You', 'Biscuit']);
     await over.getByRole('button', { name: 'Game Review' }).tap();
-    const review = page.getByRole('region', { name: 'Game review' });
+    const review = page.getByRole('region', { name: 'Game Review' });
     await expect(review).toBeVisible();
     await expect(review.locator('.review-acc').first()).toHaveText(/^\d+\.\d$/, { timeout: 90_000 });
     await expect(review.locator('.review-acc').nth(1)).toHaveText(/^\d+\.\d$/);
@@ -222,6 +233,15 @@ test.describe('Game', () => {
     await play(page, 'e7e6');
     await expect(moves(page)).toHaveCount(3, { timeout: 30_000 });
     await expect(page.locator('.app-panel .coach .coach-head .class-icon')).toBeVisible({ timeout: 30_000 });
+    // Resigning as Black: White won, 1–0, with White (the bot) on the left.
+    await waitForMyTurn(page);
+    await page.evaluate(() => (window.__chessCoach!.controller as unknown as { resign(): void }).resign());
+    const over = page.getByRole('dialog', { name: 'You lost You resigned' });
+    await expect(over).toBeVisible();
+    await expect(over.locator('.gos-result')).toHaveText('1–0');
+    await expect(over.locator('.gos-result-note')).toHaveText('White won');
+    await expect(over.locator('.gos-player .gos-name')).toHaveText(['Pip', 'You']);
+    await expect(over.locator('.gos-player .gos-sub')).toHaveText(['White · 100', 'Black']);
   });
 
   test('a promotion that mates by tapping opens the game-over sheet (and it stays open)', async ({ page }) => {
@@ -264,7 +284,7 @@ test.describe('Game', () => {
       c.resign();
       void c.startReview();
     });
-    const review = page.getByRole('region', { name: 'Game review' });
+    const review = page.getByRole('region', { name: 'Game Review' });
     await expect(review.locator('.review-acc').first()).toHaveText(/^\d+\.\d$/, { timeout: 120_000 });
     await expect
       .poll(async () => {
@@ -292,6 +312,67 @@ test.describe('Game', () => {
       });
       expect(m.tight || m.body >= 38, `${width}x${height}: ${JSON.stringify(m)}`).toBe(true);
     }
+  });
+
+  test('the move list centers the current move again after the phone is rotated', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width: 852, height: 393 }); // landscape
+    await page.goto('./');
+    await expect(page.getByRole('dialog', { name: 'New game' })).toBeVisible({ timeout: 30_000 });
+    // A saved 34-ply game (White to move, the player's turn), restored on reload.
+    await page.evaluate((moves) => {
+      const game = {
+        version: 1,
+        id: 'rotate',
+        startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+        moves,
+        playerColor: 'w',
+        botId: 'pip',
+        botElo: 100,
+        botName: 'Pip',
+        assisted: false,
+        startedAt: new Date().toISOString(),
+        annotations: {},
+      };
+      localStorage.setItem('chesscoach.game', JSON.stringify(game));
+    }, ROTATE_MOVES);
+    await page.reload();
+    await expect(moves(page)).toHaveCount(ROTATE_MOVES.length, { timeout: 30_000 });
+    await page.evaluate(() => (window.__chessCoach!.controller as unknown as { goTo(i: number | null): void }).goTo(15));
+    const list = page.locator('.mlist');
+    // How far the row is from centering the current move (as far as the row can scroll).
+    const offCenter = () =>
+      list.evaluate((box) => {
+        const cur = box.querySelector<HTMLElement>('[aria-current="true"]')!;
+        const max = box.scrollWidth - box.clientWidth;
+        const target = Math.max(0, Math.min(max, cur.offsetLeft + cur.offsetWidth / 2 - box.clientWidth / 2));
+        return Math.abs(box.scrollLeft - target);
+      });
+    await expect.poll(offCenter).toBeLessThanOrEqual(2);
+    for (const [width, height] of [[393, 852], [852, 393], [393, 852]]) {
+      await page.setViewportSize({ width, height });
+      await expect.poll(offCenter, { message: `${width}x${height}` }).toBeLessThanOrEqual(2);
+    }
+    expect(await list.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true); // it does scroll in portrait
+  });
+
+  test('a position where the engine needs millions of nodes does not stall the coach', async ({ page }) => {
+    // 1.d4 Nf6 2.c4 d5 3.cxd5 Nxd5 4.e4 Nd7 5.exd5 c6 6.dxc6 Rg8 7.cxd7+ Kxd7 8.Qa4+ Kd6: after
+    // 9.Qa3+ an unlimited depth-14 check took a minute here, and the coach said "Checking Qa3+…"
+    // for minutes. The node budget bounds it to a few seconds on an iPhone.
+    test.setTimeout(120_000);
+    await page.goto('./');
+    await expect(page.getByRole('dialog', { name: 'New game' })).toBeVisible({ timeout: 30_000 });
+    await page.evaluate((startFen) => {
+      const c = window.__chessCoach!.controller;
+      c.newGame({ ...c.store.settings.value, playerColor: 'w', botId: 'pip', botElo: 100, adaptive: false }, { startFen });
+    }, 'r1bq1br1/pp2pppp/3k4/8/Q2P4/8/PP3PPP/RNB1KBNR w KQ - 2 9');
+    await waitForMyTurn(page);
+    await play(page, 'a4a3');
+    const title = page.locator('.app-panel .coach .coach-title');
+    // About 5 s here with the budget (1.2M nodes); 40 s and more without it.
+    await expect(title).toHaveText(/^9\. Qa3\+ /, { timeout: 30_000 });
+    await expect(moves(page)).toHaveCount(2, { timeout: 30_000 }); // and the bot replied
   });
 
   test.describe('landscape', () => {
@@ -349,7 +430,7 @@ test.describe('Game', () => {
         c.resign();
         void c.startReview();
       });
-      const review = page.getByRole('region', { name: 'Game review' });
+      const review = page.getByRole('region', { name: 'Game Review' });
       await expect(review.locator('.review-acc').first()).toHaveText(/^\d+\.\d$/, { timeout: 90_000 });
       for (const sel of ['.review-head', '.review-close']) {
         const box = await review.locator(sel).first().boundingBox();

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { Chess } from 'chess.js';
 import type { Classification, Explanation } from '../../src/analysis/types';
-import { answerFreeLines, concession, mentionsMove, repetitionExplanation, verdictTitle } from '../../src/game/coach';
+import { answerFreeLines, concession, mentionsMove, recaptureTip, repetitionExplanation, verdictTitle } from '../../src/game/coach';
 
 const cl = (over: Partial<Classification> = {}): Classification => ({
   cls: 'blunder',
@@ -123,5 +124,43 @@ describe('verdictTitle / concession', () => {
     }
     expect(concession(ply({}, 'queen'))).toBeNull();
     expect(concession({ explanation: { headline: 'x', details: [], concedes: 'material' } })).toBeNull();
+  });
+});
+
+describe('recaptureTip', () => {
+  /** The position after `sans` and the last move as a ply. */
+  function after(sans: string[], fen?: string) {
+    const c = new Chess(fen);
+    let last = null;
+    for (const san of sans) {
+      const m = c.move(san);
+      last = { uci: m.lan, color: m.color, ...(m.captured ? { captured: m.captured } : {}) };
+    }
+    return { fen: c.fen(), last };
+  }
+
+  it('asks for the recapture after the opponent takes a piece that can be taken back', () => {
+    // Game C of the acceptance test: the Slav, 8… Bxc1 (White can take back with the queen or the rook).
+    const { fen, last } = after('d4 d5 c4 c6 e3 Nd7 Nf3 Ngf6 Bd3 g6 Nc3 dxc4 Bxc4 Bh6 e4 Bxc1'.split(' '));
+    expect(recaptureTip(fen, last, 'Robot')).toBe('Robot just took your bishop on c1. Can you recapture?');
+    // Nothing attacks the capturing queen on d5: no prompt.
+    const t = after('e4 d5 exd5 Qxd5'.split(' '));
+    expect(t.last).toMatchObject({ captured: 'p' });
+    expect(recaptureTip(t.fen, t.last, 'Pip')).toBeNull();
+    // Taking back a pawn with the knight holds its own.
+    const p = after('e4 d5 Nc3 dxe4'.split(' '));
+    expect(recaptureTip(p.fen, p.last, 'Pip')).toBe('Pip just took your pawn on e4. Can you recapture?');
+  });
+
+  it('says nothing when every recapture loses material, or when the last move was no capture', () => {
+    // 5… exd5 took the knight on d5, but c6 guards it and only the queen can take back.
+    const fen = 'rnbqkbnr/pp1p1ppp/2p5/3p4/8/8/PPP2PPP/RNBQKB1R w KQkq - 0 5';
+    expect(recaptureTip(fen, { uci: 'e6d5', color: 'b', captured: 'n' }, 'Pip')).toBeNull();
+    const quiet = after(['e4', 'e5']);
+    expect(recaptureTip(quiet.fen, quiet.last, 'Pip')).toBeNull();
+    expect(recaptureTip(quiet.fen, undefined, 'Pip')).toBeNull();
+    // The move must be the other side's: after 3.exd5, White (not to move) has nothing to take back.
+    const own = after('e4 d5 exd5'.split(' '));
+    expect(recaptureTip(own.fen, { ...own.last!, color: 'b' }, 'Pip')).toBeNull();
   });
 });

@@ -661,7 +661,10 @@ export interface MaterialOutcome {
   captureSquares: Square[];
   /** Position at the end of the counted window. */
   fen: string;
-  /** The window ends on a quiet ply (false: the line stops in the middle of an exchange). */
+  /**
+   * The window ends on a quiet ply (false: the line stops in the middle of an exchange, or just
+   * before the side to move takes material back).
+   */
   settled: boolean;
 }
 
@@ -716,8 +719,10 @@ const EXCHANGE_EXTENSION = 6;
  * none inside `maxPlies` it plays on (at most `EXCHANGE_EXTENSION` plies) to the first quiet one,
  * and if the line still ends mid-exchange the last capture square is settled with SEE (the
  * capturer taken back is counted in `won` / `lost` too; when SEE says more than that piece,
- * `net` and the piece lists differ). Like-for-like trades are cancelled (identical types, then
- * bishop for knight).
+ * `net` and the piece lists differ). A line that stops on a quiet ply that is not calm (a PV cut
+ * short) also counts the side to move winning back, by SEE, a piece that captured inside the
+ * window, when that side is behind in the window. Like-for-like trades are cancelled (identical
+ * types, then bishop for knight).
  */
 export function materialOutcome(fen: string, pv: readonly string[], pov: Color, maxPlies = 10): MaterialOutcome {
   const empty: MaterialOutcome = {
@@ -748,6 +753,8 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
   }[] = [];
   const sans: string[] = [];
   const caps: Square[] = [];
+  /** Every capture in the line (either side): where it happened and who made it. */
+  const captured: { ply: number; color: Color; to: Square }[] = [];
   // The first minor piece each side captured: a single net minor is named after it.
   const firstMinor: Partial<Record<Color, PieceSymbol>> = {};
   const promos: Promos = { w: {}, b: {} };
@@ -760,6 +767,7 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
     }
     sans.push(m.san);
     if (m.color === pov && m.captured) caps.push(m.to);
+    if (m.captured) captured.push({ ply: i + 1, color: m.color, to: m.to });
     if ((m.captured === 'n' || m.captured === 'b') && !firstMinor[m.color]) firstMinor[m.color] = m.captured;
     if (m.promotion) promos[m.color][m.promotion] = (promos[m.color][m.promotion] ?? 0) + 1;
     const next = pv[i + 1];
@@ -818,6 +826,10 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
   const theirs = removed(them);
   const won: Partial<Counts> = theirs.lost;
   const lost: Partial<Counts> = mine.lost;
+  const list = (x: Partial<Counts>) => ORDER.flatMap((t) => Array<PieceSymbol>(x[t] ?? 0).fill(t));
+  const promoted = list(mine.kept);
+  const theirPromoted = list(theirs.kept);
+  const promoGain = (xs: PieceSymbol[]) => xs.reduce((n, t) => n + VALUE[t] - 1, 0);
   // Ending mid-exchange: the capturer that SEE says is taken back is named too (the queen taken on
   // the last ply comes back: "wins a pawn", not "wins a pawn for the queen").
   let pending = pick.quiet ? 0 : pick.adj;
@@ -826,6 +838,27 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
     const x = color === pov ? lost : won;
     x[type] = (x[type] ?? 0) + 1;
     pending -= color === pov ? -VALUE[type] : VALUE[type];
+  }
+  // The line itself ends on a quiet ply that is not calm (a PV cut short: g7 Rxg7 Rxg7 Nf5+ Kg4,
+  // while ...Nxg7 is coming): the side to move takes back a piece that made a capture inside the
+  // window. Settle that capture by SEE, so a gain or a loss is never counted from a line that stops
+  // just before the material comes back. (When the line goes on, a quiet ply's next move is not a
+  // capture: the engine does not take back at once.)
+  let regained = false;
+  if (pick.quiet && !pick.calm && pick.plies >= pv.length) {
+    const net0 = worth(won) - worth(lost) + promoGain(promoted) - promoGain(theirPromoted) + pending;
+    const stm: Color = pick.fen.split(' ')[1] === 'b' ? 'b' : 'w';
+    // Only in the direction that shrinks the claim: the side behind in the window takes back.
+    const capturers = new Set(captured.filter((x) => x.ply <= pick.plies && x.color !== stm).map((x) => x.to));
+    const take =
+      (stm === pov ? net0 < 0 : net0 > 0) ? winningCaptures(pick.fen).find((w) => capturers.has(w.to)) : undefined;
+    if (take) {
+      const t = take.target.type;
+      const x = stm === pov ? won : lost;
+      x[t] = (x[t] ?? 0) + 1;
+      pending += (stm === pov ? 1 : -1) * (take.gain - VALUE[t]);
+      regained = true;
+    }
   }
   for (const t of ORDER) {
     const m = Math.min(won[t] ?? 0, lost[t] ?? 0);
@@ -852,10 +885,6 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
       w[first] = 1;
     }
   }
-  const list = (x: Partial<Counts>) => ORDER.flatMap((t) => Array<PieceSymbol>(x[t] ?? 0).fill(t));
-  const promoted = list(mine.kept);
-  const theirPromoted = list(theirs.kept);
-  const promoGain = (xs: PieceSymbol[]) => xs.reduce((n, t) => n + VALUE[t] - 1, 0);
   const net = worth(won) - worth(lost) + promoGain(promoted) - promoGain(theirPromoted) + pending;
   return {
     net,
@@ -867,7 +896,7 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
     sans: sans.slice(0, pick.plies),
     captureSquares: caps,
     fen: pick.fen,
-    settled: pick.quiet,
+    settled: pick.quiet && !regained,
   };
 }
 

@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Chess } from 'chess.js';
-import { AnalysisService } from '../../src/engine/AnalysisService';
+import { AnalysisService, LIVE_NODES, defaultEnsureNodes } from '../../src/engine/AnalysisService';
 import { StockfishEngine } from '../../src/engine/StockfishEngine';
 import type { AnalysisResult, ChessEngine, PvLine, SearchOptions } from '../../src/engine/types';
 import { createNodeTransport, type NodeTransport } from '../helpers/nodeTransport';
@@ -160,7 +160,8 @@ describe('AnalysisService (real engine)', () => {
     svc.watch(fen);
     await until(() => updates.length > 0); // live search is running
     const n = gos();
-    const r = await svc.ensure(fen, { minDepth: 9, multiPv: 2 });
+    // A node budget as large as the live search's (a smaller one pre-empts it, see below).
+    const r = await svc.ensure(fen, { minDepth: 9, multiPv: 2, maxNodes: LIVE_NODES });
     expect(r.depth).toBeGreaterThanOrEqual(9);
     expect(r.lines.length).toBeGreaterThanOrEqual(2);
     expect(gos()).toBe(n);
@@ -288,9 +289,9 @@ describe('AnalysisService after an engine restart', () => {
 
   it('retries a live search that an ensure() joined at the ensure depth, then resumes live analysis', async () => {
     const eng = new ManualEngine();
-    const svc = new AnalysisService(eng, { liveDepth: 18, liveMultiPv: 3 });
+    const svc = new AnalysisService(eng, { liveDepth: 18, liveMultiPv: 3, liveNodes: defaultEnsureNodes(3) });
     svc.watch(FENS.start);
-    expect(eng.calls[0].opts).toMatchObject({ depth: 18, multiPv: 3 });
+    expect(eng.calls[0].opts).toMatchObject({ depth: 18, multiPv: 3, nodes: 1_200_000 });
     let got: AnalysisResult | null = null;
     void svc.ensure(FENS.start, { minDepth: 14, multiPv: 3 }).then((r) => (got = r));
     expect(eng.calls).toHaveLength(1); // joined the live search
@@ -382,5 +383,176 @@ describe('AnalysisService after an engine restart', () => {
     } finally {
       engine.terminate();
     }
+  });
+});
+
+/**
+ * After 1.d4 Nf6 2.c4 d5 3.cxd5 Nxd5 4.e4 Nd7 5.exd5 c6 6.dxc6 Rg8 7.cxd7+ Kxd7 8.Qa4+ Kd6 9.Qa3+:
+ * Stockfish (MultiPV 3) can reach depth 11 after about 6k nodes and depth 12 only after about 4M,
+ * so an unbudgeted depth-14 search took a minute in the browser (see the real-engine test in
+ * nodeBudget.test.ts). The scripted searches below use node counts from such a run.
+ */
+const STALL = 'r1bq1br1/pp2pppp/3k4/8/3P4/Q7/PP3PPP/RNB1KBNR b KQ - 3 9';
+const stallLines = (depth: number, nodes: number): PvLine[] =>
+  ['d6e6', 'd6c6', 'd6c7'].map((m, i) => ({ multipv: i + 1, depth, score: { kind: 'cp', value: -1400 - i }, nodes, pv: [m] }));
+const stallPartial = (depth: number, nodes: number): AnalysisResult => ({
+  fen: STALL,
+  depth,
+  lines: stallLines(depth, nodes),
+  bestMove: null,
+  done: false,
+});
+/** The final result of a search that ran out of nodes after finishing `depth`. */
+const outOfNodes = (depth: number, nodes: number): Partial<AnalysisResult> => ({
+  depth,
+  lines: stallLines(depth, nodes),
+  bestMove: 'd6e6',
+  done: true,
+});
+
+describe('AnalysisService node budgets', () => {
+  it('gives every search a node budget: 1.2M for MultiPV 3, 600k for one line, the one asked for, or none', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    expect(defaultEnsureNodes(3)).toBe(1_200_000);
+    expect(defaultEnsureNodes(1)).toBe(600_000);
+    void svc.ensure(FENS.start, { minDepth: 14, multiPv: 3 });
+    expect(eng.calls[0].opts).toMatchObject({ depth: 14, multiPv: 3, nodes: 1_200_000 });
+    eng.calls[0].end({ depth: 14, lines: lines(14), bestMove: 'e2e4', done: true });
+    await tickle();
+    void svc.ensure(FENS.afterE4, { minDepth: 12 });
+    expect(eng.calls[1].opts).toMatchObject({ depth: 12, multiPv: 1, nodes: 600_000 });
+    eng.calls[1].end({ depth: 12, lines: lines(12, 1), bestMove: 'e2e4', done: true });
+    await tickle();
+    void svc.ensure(FENS.italian, { minDepth: 10, multiPv: 2, maxNodes: 50_000 });
+    expect(eng.calls[2].opts).toMatchObject({ depth: 10, multiPv: 2, nodes: 50_000 });
+    eng.calls[2].end({ depth: 10, lines: lines(10, 2), bestMove: 'e2e4', done: true });
+    await tickle();
+    void svc.ensure(FENS.qgd, { minDepth: 10, maxNodes: Number.POSITIVE_INFINITY });
+    expect(eng.calls[3].opts.depth).toBe(10);
+    expect(eng.calls[3].opts.nodes).toBeUndefined();
+    eng.calls[3].end({ depth: 10, lines: lines(10, 1), bestMove: 'e2e4', done: true });
+    await tickle();
+    svc.watch(FENS.middle); // live analysis: depth 18, MultiPV 3, LIVE_NODES
+    expect(eng.calls[4].opts).toMatchObject({ depth: 18, multiPv: 3, nodes: LIVE_NODES });
+    svc.watch(null);
+    // The service's own defaults.
+    const tuned = new AnalysisService(eng, { liveNodes: 2_000_000, ensureNodes: (n) => n * 1000 });
+    tuned.watch(FENS.sicilian);
+    expect(eng.calls[5].opts).toMatchObject({ nodes: 2_000_000 });
+    void tuned.ensure(FENS.endgame, { minDepth: 14, multiPv: 3 });
+    expect(eng.calls[6].opts).toMatchObject({ depth: 14, nodes: 3000 });
+    tuned.watch(null);
+    tuned.cancelAll();
+  });
+
+  it('a search that runs out of nodes below minDepth answers the request (done, not aborted), and is remembered', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    const p = svc.ensure(STALL, { minDepth: 14, multiPv: 3 });
+    eng.calls[0].opts.onInfo?.(stallPartial(11, 5_518));
+    eng.calls[0].end(outOfNodes(11, 5_518)); // stopped at 1.2M nodes, halfway through depth 12
+    const r = await p;
+    expect(r).toMatchObject({ fen: STALL, depth: 11, done: true, bestMove: 'd6e6' });
+    expect(r.aborted).toBeUndefined();
+    expect(r.lines).toHaveLength(3);
+    // Asked again (the next move's "before" analysis, other move counters): from the cache.
+    const again = await svc.ensure(STALL.replace(/ 3 9$/, ' 0 12'), { minDepth: 14, multiPv: 3 });
+    expect(again).toMatchObject({ depth: 11, done: true });
+    // Also for a deeper request with the same budget, and for a smaller budget.
+    expect((await svc.ensure(STALL, { minDepth: 18, multiPv: 3 })).depth).toBe(11);
+    expect((await svc.ensure(STALL, { minDepth: 14, multiPv: 2 })).depth).toBe(11);
+    expect(eng.calls).toHaveLength(1);
+    expect(svc.get(STALL)).toMatchObject({ depth: 11, done: true });
+    // A larger budget does search again.
+    void svc.ensure(STALL, { minDepth: 14, multiPv: 3, maxNodes: 5_000_000 });
+    expect(eng.calls).toHaveLength(2);
+    expect(eng.calls[1].opts).toMatchObject({ depth: 14, multiPv: 3, nodes: 5_000_000 });
+    svc.cancelAll();
+  });
+
+  it('a result that took at least the budget answers at once, even a partial one of a long live search', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    svc.watch(STALL);
+    const live = eng.calls[0];
+    live.opts.onInfo?.(stallPartial(11, 5_518));
+    live.opts.onInfo?.(stallPartial(12, 4_023_437));
+    const r = await svc.ensure(STALL, { minDepth: 14, multiPv: 3 });
+    expect(r.depth).toBe(12); // 4M nodes >= 1.2M: as good as the request gets
+    expect(eng.calls).toHaveLength(1);
+    expect(live.ended).toBe(false); // the live search goes on
+    svc.watch(null);
+  });
+
+  it('an ensure() with a smaller budget pre-empts the live search, which streams its partials and resumes after', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng, { throttleMs: 0 });
+    const updates: AnalysisResult[] = [];
+    svc.subscribe((u) => updates.push(u));
+    svc.watch(STALL);
+    expect(eng.calls[0].opts).toMatchObject({ depth: 18, multiPv: 3, nodes: LIVE_NODES });
+    eng.calls[0].opts.onInfo?.(stallPartial(9, 3_423));
+    let got: AnalysisResult | null = null;
+    void svc.ensure(STALL, { minDepth: 14, multiPv: 3 }).then((r) => (got = r));
+    // Joining the live search (up to 5M nodes) would wait past the 1.2M budget: it runs its own.
+    expect(eng.calls).toHaveLength(2);
+    expect(eng.calls[0].ended).toBe(true);
+    expect(eng.calls[1].opts).toMatchObject({ depth: 14, multiPv: 3, nodes: 1_200_000 });
+    eng.calls[1].opts.onInfo?.(stallPartial(11, 5_518));
+    expect(updates.at(-1)).toMatchObject({ depth: 11, done: false }); // the eval bar follows it
+    eng.calls[1].end(outOfNodes(11, 5_518));
+    await tickle();
+    expect(got).toMatchObject({ depth: 11, done: true });
+    // Live analysis resumes with its own budget and streams again.
+    expect(eng.calls).toHaveLength(3);
+    expect(eng.calls[2].opts).toMatchObject({ depth: 18, multiPv: 3, nodes: LIVE_NODES });
+    eng.calls[2].opts.onInfo?.(stallPartial(12, 4_023_437));
+    expect(updates.at(-1)).toMatchObject({ depth: 12, done: false });
+    // It runs out of nodes at depth 13: finished, not restarted.
+    eng.calls[2].end(outOfNodes(13, 4_066_737));
+    await tickle();
+    expect(updates.at(-1)).toMatchObject({ depth: 13, done: true });
+    expect(eng.calls).toHaveLength(3);
+    // Coming back to the position shows that result without searching it again.
+    svc.watch(FENS.start);
+    svc.watch(STALL);
+    expect(updates.at(-1)).toMatchObject({ fen: STALL, depth: 13 });
+    expect(eng.calls.filter((c) => c.fen === STALL)).toHaveLength(3);
+    svc.watch(null);
+  });
+
+  it('a request that joined a search with a smaller budget is searched again with its own when that one runs out', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng, { liveNodes: 500_000 });
+    svc.watch(STALL);
+    let got: AnalysisResult | null = null;
+    void svc.ensure(STALL, { minDepth: 14, multiPv: 3 }).then((r) => (got = r));
+    expect(eng.calls).toHaveLength(1); // joined: the live search never runs past 1.2M nodes
+    eng.calls[0].end(outOfNodes(10, 4_386)); // ... but it ran out at 500k, below depth 14
+    await tickle();
+    expect(got).toBeNull();
+    expect(eng.calls).toHaveLength(2);
+    expect(eng.calls[1].opts).toMatchObject({ depth: 14, multiPv: 3, nodes: 1_200_000 });
+    eng.calls[1].end(outOfNodes(11, 5_518));
+    await tickle();
+    expect(got).toMatchObject({ depth: 11, done: true });
+    expect(eng.calls).toHaveLength(2); // and that also covers the live analysis (500k nodes)
+    svc.watch(null);
+  });
+
+  it('answers from the deepest result once one is good enough (a later search on a warm hash may need fewer nodes)', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    void svc.ensure(STALL, { minDepth: 14, multiPv: 3 });
+    eng.calls[0].end(outOfNodes(11, 5_518)); // spent 1.2M
+    await tickle();
+    void svc.ensure(STALL, { minDepth: 13, multiPv: 3, maxNodes: 2_000_000 });
+    expect(eng.calls).toHaveLength(2);
+    eng.calls[1].end({ ...outOfNodes(13, 900_000) }); // depth 13 reached after 900k nodes
+    await tickle();
+    const r = await svc.ensure(STALL, { minDepth: 14, multiPv: 3 });
+    expect(r.depth).toBe(13);
+    expect(eng.calls).toHaveLength(2);
   });
 });

@@ -1,14 +1,26 @@
 /**
- * Cached, prioritised analysis on top of one ChessEngine (full strength).
+ * Cached, prioritized analysis on top of one ChessEngine (full strength).
  *
  *  - `ensure()` requests run FIFO and take priority over live analysis (they pre-empt it; it
  *    resumes afterwards). Identical/overlapping requests are deduplicated, and a request is
- *    answered straight from the cache when a deep enough result is already known.
- *  - `watch()` live-analyses one position (depth `liveDepth`, `liveMultiPv` lines) and streams
- *    throttled updates to subscribers. Updates for a position never get shallower.
+ *    answered straight from the cache when a good enough result is already known.
+ *  - Every search has a node budget as well as a depth: `ensure()` stops at `minDepth` or after
+ *    `maxNodes` nodes (default `defaultEnsureNodes(multiPv)`, about 2-3 s on an iPhone), whichever
+ *    comes first. Depth 14 usually takes a few hundred thousand nodes, but in some positions one
+ *    iteration takes millions (after 1.d4 Nf6 2.c4 d5 3.cxd5 Nxd5 4.e4 Nd7 5.exd5 c6 6.dxc6 Rg8
+ *    7.cxd7+ Kxd7 8.Qa4+ Kd6 9.Qa3+, MultiPV 3 reaches depth 11 within a few thousand nodes and
+ *    often needs millions for depth 12): without a budget one annotation held the queue, the
+ *    coach and the eval bar for minutes.
+ *    A result that spent the budget is as good as the request gets, so it answers any request
+ *    with the same or a smaller budget (the cache remembers the nodes behind each result), and a
+ *    request never joins a search with a larger budget (it would wait past its own).
+ *  - `watch()` live-analyses one position (depth `liveDepth`, `liveMultiPv` lines, at most
+ *    `liveNodes` nodes) and streams throttled updates to subscribers. Updates for a position never
+ *    get shallower.
  *  - Every complete result (final or partial) of either kind feeds the cache, keyed by `fenKey`.
- *    Per position the cache keeps the non-dominated results by (depth, MultiPV width).
- *  - Searches are depth-limited (never `movetime`, which misbehaves across iOS suspension).
+ *    Per position the cache keeps the non-dominated results by (depth, MultiPV width, nodes).
+ *  - Searches are limited by depth and nodes, never by `movetime` (which misbehaves across iOS
+ *    suspension): a request asks for the same work on a fast or a slow phone.
  *  - A search cut short by an engine restart (crash, hang) is retried on the fresh engine a few
  *    times before its waiters get the best result so far, so a crash never leaves a shallow
  *    result where a deep one was asked for.
@@ -24,27 +36,75 @@ import { fenKey } from '../chess/utils';
 import { inspectPosition } from './StockfishEngine';
 import type { AnalysisResult, ChessEngine } from './types';
 
+/** Nodes per MultiPV line (plus one) of an `ensure()` budget, see `defaultEnsureNodes`. */
+const ENSURE_NODES_UNIT = 300_000;
+
+/**
+ * Default node budget of an `ensure()` search with `multiPv` lines: 600k nodes for one line, 1.2M
+ * for three (the annotations', hints' and review's MultiPV 3). An iPhone searches about 0.5M
+ * nodes per second, so that is 1-3 s. With a warm hash, MultiPV 3 reaches depth 14 within 1.2M
+ * nodes in about 93% of game positions; the rest stop at depth 10-13.
+ */
+export function defaultEnsureNodes(multiPv: number): number {
+  return ENSURE_NODES_UNIT * (Math.max(1, Math.round(multiPv)) + 1);
+}
+
+/**
+ * Default node budget of the live analysis of one position, about 10 s on an iPhone. Depth 18 with
+ * MultiPV 3 takes about 1M nodes in a typical game position and under 4M in 96% of them; in the
+ * rest the eval bar settles at depth 12-13 instead of searching on for minutes.
+ */
+export const LIVE_NODES = 5_000_000;
+
 export interface AnalysisServiceOptions {
   /** Depth at which live analysis stops. Default 18. */
   liveDepth?: number;
   /** MultiPV of live analysis. Default 3. */
   liveMultiPv?: number;
+  /**
+   * Node budget of the live analysis of one position: it stops there even below `liveDepth`
+   * (and streams updates until then). Default `LIVE_NODES`; `Infinity` for none.
+   */
+  liveNodes?: number;
+  /** Node budget of an `ensure()` that does not name one, by MultiPV. Default `defaultEnsureNodes`. */
+  ensureNodes?: (multiPv: number) => number;
   /** Minimum interval between subscriber updates (ms). Default 120. */
   throttleMs?: number;
   /** Max number of cached positions (LRU). Default 3000. */
   cacheSize?: number;
 }
 
+/** What `ensure()` asks for. */
+export interface EnsureOptions {
+  /** Depth to search to. */
+  minDepth: number;
+  /** Lines wanted (UCI MultiPV; fewer when the position has fewer legal moves). Default 1. */
+  multiPv?: number;
+  /**
+   * Node budget: the search stops at `minDepth` or after this many nodes, whichever comes first,
+   * and a result that spent it is good enough (it may then be shallower than `minDepth`; it is
+   * not `aborted`). Default `defaultEnsureNodes(multiPv)` (or the service's `ensureNodes`);
+   * `Infinity` for none.
+   */
+  maxNodes?: number;
+}
+
 interface CacheEntry {
   result: AnalysisResult;
   /** MultiPV requested for the search that produced it (lines = min(width, legal moves)). */
   width: number;
+  /**
+   * Search effort behind the result: the nodes searched when it was reported, or the whole budget
+   * of a search that stopped at its node budget (Infinity for a terminal position).
+   */
+  nodes: number;
 }
 
 interface Waiter {
   fen: string;
   minDepth: number;
   multiPv: number;
+  maxNodes: number;
   resolve: (r: AnalysisResult) => void;
 }
 
@@ -53,6 +113,8 @@ interface Job {
   fen: string;
   depth: number;
   multiPv: number;
+  /** Node budget (Infinity = none). */
+  maxNodes: number;
   /** 'ensure' jobs have waiters and block the queue; 'live' jobs serve the watched position. */
   kind: 'ensure' | 'live';
   waiters: Waiter[];
@@ -73,6 +135,8 @@ const RESTART_RETRIES = 2;
 export class AnalysisService {
   private readonly liveDepth: number;
   private readonly liveMultiPv: number;
+  private readonly liveNodes: number;
+  private readonly ensureNodes: (multiPv: number) => number;
   private readonly throttleMs: number;
   private readonly cacheSize: number;
 
@@ -96,23 +160,29 @@ export class AnalysisService {
   ) {
     this.liveDepth = opts.liveDepth ?? 18;
     this.liveMultiPv = opts.liveMultiPv ?? 3;
+    this.liveNodes = nodeBudget(opts.liveNodes ?? LIVE_NODES);
+    this.ensureNodes = opts.ensureNodes ?? defaultEnsureNodes;
     this.throttleMs = opts.throttleMs ?? 120;
     this.cacheSize = opts.cacheSize ?? 3000;
   }
 
   /**
-   * High-priority analysis to at least `minDepth` with at least `multiPv` lines (or all legal
-   * moves), cached by fenKey. Pre-empts live analysis, which resumes afterwards. Resolves from
-   * the cache immediately when possible. `done` may be false when the depth was reached by a
-   * search that was later pre-empted. A search cut short by an engine restart is retried (up to
-   * twice). Resolves `aborted: true` (best so far) after cancelAll(), if the engine breaks, or
-   * if it keeps crashing on this position. Rejects only for an invalid FEN.
+   * High-priority analysis to `minDepth` with at least `multiPv` lines (or all legal moves), within
+   * a node budget (`maxNodes`, see `EnsureOptions`), cached by fenKey. Pre-empts live analysis,
+   * which resumes afterwards. Resolves from the cache immediately when a result is already deep
+   * enough, or spent at least the budget. The result is shallower than `minDepth` only when its
+   * search ran out of nodes or was cut short (`aborted: true`). `done` may be false when the
+   * result was reported by a search still running (or later pre-empted). A search cut short by an
+   * engine restart is retried (up to twice). Resolves `aborted: true` (best so far) after
+   * cancelAll(), if the engine breaks, or if it keeps crashing on this position. Rejects only for
+   * an invalid FEN.
    */
-  ensure(fen: string, opts: { minDepth: number; multiPv?: number }): Promise<AnalysisResult> {
+  ensure(fen: string, opts: EnsureOptions): Promise<AnalysisResult> {
     const key = fenKey(fen);
     const minDepth = Math.max(1, Math.round(opts.minDepth));
     const multiPv = Math.max(1, Math.round(opts.multiPv ?? 1));
-    const hit = this.lookup(key, minDepth, multiPv);
+    const maxNodes = nodeBudget(opts.maxNodes ?? this.ensureNodes(multiPv));
+    const hit = this.lookup(key, minDepth, multiPv, maxNodes);
     if (hit) {
       this.touch(key);
       return Promise.resolve(this.view(hit.result, fen));
@@ -124,9 +194,9 @@ export class AnalysisService {
     }
     if (this.broken) return Promise.resolve(this.bestSoFar(key, fen));
     return new Promise<AnalysisResult>((resolve) => {
-      const waiter: Waiter = { fen, minDepth, multiPv, resolve };
+      const waiter: Waiter = { fen, minDepth, multiPv, maxNodes, resolve };
       const r = this.running;
-      if (r && !r.superseded && !r.ended && r.key === key && r.depth >= minDepth && r.multiPv >= multiPv) {
+      if (r && !r.superseded && !r.ended && r.key === key && covers(r, minDepth, multiPv, maxNodes)) {
         // Already searching this position deeply enough (typically the live search): join it.
         r.waiters.push(waiter);
         r.kind = 'ensure';
@@ -136,10 +206,11 @@ export class AnalysisService {
       if (queued) {
         queued.depth = Math.max(queued.depth, minDepth);
         queued.multiPv = Math.max(queued.multiPv, multiPv);
+        queued.maxNodes = Math.max(queued.maxNodes, maxNodes);
         queued.waiters.push(waiter);
         return;
       }
-      this.queue.push(this.newJob(key, fen, minDepth, multiPv, 'ensure', [waiter]));
+      this.queue.push(this.newJob(key, fen, minDepth, multiPv, maxNodes, 'ensure', [waiter]));
       this.pump();
     });
   }
@@ -220,12 +291,21 @@ export class AnalysisService {
   // ---------------------------------------------------------------------------------------------
   // Scheduling
 
-  private newJob(key: string, fen: string, depth: number, multiPv: number, kind: Job['kind'], waiters: Waiter[]): Job {
+  private newJob(
+    key: string,
+    fen: string,
+    depth: number,
+    multiPv: number,
+    maxNodes: number,
+    kind: Job['kind'],
+    waiters: Waiter[],
+  ): Job {
     return {
       key,
       fen,
       depth,
       multiPv,
+      maxNodes,
       kind,
       waiters,
       ctl: new AbortController(),
@@ -245,7 +325,7 @@ export class AnalysisService {
       const job = this.queue.shift()!;
       this.resolveFromCache(job);
       if (job.waiters.length === 0) continue;
-      if (r && !r.superseded && r.key === job.key && r.depth >= job.depth && r.multiPv >= job.multiPv) {
+      if (r && !r.superseded && r.key === job.key && covers(r, job.depth, job.multiPv, job.maxNodes)) {
         // The live search already covers it: promote instead of restarting.
         r.waiters.push(...job.waiters);
         r.kind = 'ensure';
@@ -265,11 +345,11 @@ export class AnalysisService {
       return;
     }
     if (r && (r.kind === 'ensure' || r.key === t.key)) return;
-    if (this.lookup(t.key, this.liveDepth, this.liveMultiPv)) {
+    if (this.lookup(t.key, this.liveDepth, this.liveMultiPv, this.liveNodes)) {
       if (r) this.supersede(r);
       return;
     }
-    this.start(this.newJob(t.key, t.fen, this.liveDepth, this.liveMultiPv, 'live', []));
+    this.start(this.newJob(t.key, t.fen, this.liveDepth, this.liveMultiPv, this.liveNodes, 'live', []));
   }
 
   private start(job: Job): void {
@@ -280,6 +360,7 @@ export class AnalysisService {
     this.engine
       .search(job.fen, {
         depth: job.depth,
+        ...(Number.isFinite(job.maxNodes) ? { nodes: job.maxNodes } : {}),
         multiPv: job.multiPv,
         signal: job.ctl.signal,
         onInfo: (p) => this.onPartial(job, p),
@@ -297,9 +378,10 @@ export class AnalysisService {
 
   private onPartial(job: Job, p: AnalysisResult): void {
     if (job.ended) return;
-    this.store(job.key, p, job.multiPv);
+    const nodes = p.lines[0]?.nodes ?? 0;
+    this.store(job.key, p, job.multiPv, nodes);
     // Serve shallower requests early; at the job's own depth wait for the final result (done: true).
-    if (p.depth < job.depth) this.resolveWaiters(job, p, false);
+    if (p.depth < job.depth) this.resolveWaiters(job, p, nodes, false);
     this.accept(p, false, job.key);
     if (job.kind === 'ensure' && job.waiters.length === 0 && !job.superseded) {
       // Everyone who asked is served: keep going only as live analysis of the watched position.
@@ -315,14 +397,22 @@ export class AnalysisService {
   private onEnd(job: Job, res: AnalysisResult): void {
     job.ended = true;
     if (this.running === job) this.running = null;
-    this.store(job.key, res, job.multiPv);
+    const reported = res.lines[0]?.nodes ?? 0;
+    // A finished search that stopped short of its depth ran out of nodes: it spent its budget.
+    const spent = !res.aborted && res.depth < job.depth && Number.isFinite(job.maxNodes);
+    const nodes = spent ? Math.max(reported, job.maxNodes) : reported;
+    this.store(job.key, res, job.multiPv, nodes);
     if (!res.aborted) {
-      this.resolveWaiters(job, res, true);
+      this.resolveWaiters(job, res, nodes, true);
+      // Left: requests that joined a search with a smaller budget, which ran out below their depth.
+      if (job.waiters.length) this.queue.unshift(this.jobFor(job));
       this.accept(res, true, job.key);
     } else if (job.requeue) {
       job.requeue = false;
       this.resolveFromCache(job);
-      if (job.waiters.length) this.queue.unshift(this.newJob(job.key, job.fen, job.depth, job.multiPv, 'ensure', job.waiters));
+      if (job.waiters.length) {
+        this.queue.unshift(this.newJob(job.key, job.fen, job.depth, job.multiPv, job.maxNodes, 'ensure', job.waiters));
+      }
     } else if (!job.superseded) {
       // Unexpected abort: the engine restarted after a crash or hang. It is usable again, so
       // search once more rather than hand out a shallow partial result. A live search needs
@@ -331,14 +421,7 @@ export class AnalysisService {
       if (job.waiters.length && job.retries < RESTART_RETRIES) {
         // Sized for the waiters, not the old job: a deep live search that an ensure() joined
         // comes back as that ensure() only.
-        const retry = this.newJob(
-          job.key,
-          job.fen,
-          Math.max(...job.waiters.map((w) => w.minDepth)),
-          Math.max(...job.waiters.map((w) => w.multiPv)),
-          'ensure',
-          job.waiters,
-        );
+        const retry = this.jobFor(job);
         retry.retries = job.retries + 1;
         this.queue.unshift(retry);
       } else {
@@ -346,6 +429,20 @@ export class AnalysisService {
       }
     }
     this.pump();
+  }
+
+  /** A new `ensure` job for the waiters of `job`, sized for them (not for `job`). */
+  private jobFor(job: Job): Job {
+    const ws = job.waiters;
+    return this.newJob(
+      job.key,
+      job.fen,
+      Math.max(...ws.map((w) => w.minDepth)),
+      Math.max(...ws.map((w) => w.multiPv)),
+      Math.max(...ws.map((w) => w.maxNodes)),
+      'ensure',
+      ws,
+    );
   }
 
   private onFailure(job: Job, err: unknown): void {
@@ -360,11 +457,19 @@ export class AnalysisService {
   // ---------------------------------------------------------------------------------------------
   // Waiters
 
-  private resolveWaiters(job: Job, r: AnalysisResult, final: boolean): void {
+  /**
+   * Resolves the waiters that `r` (a result of `job` after `nodes` nodes) satisfies. The final
+   * result of a search that asked for at least as much as a waiter (depth, lines and nodes)
+   * resolves it whatever it holds. Other waiters stay: they joined a search with a smaller node
+   * budget that ran out below their depth (see onEnd).
+   */
+  private resolveWaiters(job: Job, r: AnalysisResult, nodes: number, final: boolean): void {
     if (!job.waiters.length) return;
+    const found: CacheEntry = { result: r, width: job.multiPv, nodes };
     const keep: Waiter[] = [];
     for (const w of job.waiters) {
-      const ok = final || r.terminal || (r.depth >= w.minDepth && job.multiPv >= w.multiPv && r.lines.length > 0);
+      const asked = job.depth >= w.minDepth && job.multiPv >= w.multiPv && job.maxNodes >= w.maxNodes;
+      const ok = satisfies(found, w.minDepth, w.multiPv, w.maxNodes) || (final && asked);
       if (ok) w.resolve(this.view(r, w.fen));
       else keep.push(w);
     }
@@ -373,7 +478,7 @@ export class AnalysisService {
 
   private resolveFromCache(job: Job): void {
     job.waiters = job.waiters.filter((w) => {
-      const hit = this.lookup(job.key, w.minDepth, w.multiPv);
+      const hit = this.lookup(job.key, w.minDepth, w.multiPv, w.maxNodes);
       if (hit) w.resolve(this.view(hit.result, w.fen));
       return !hit;
     });
@@ -392,7 +497,7 @@ export class AnalysisService {
   // ---------------------------------------------------------------------------------------------
   // Cache
 
-  private store(key: string, r: AnalysisResult, width: number): void {
+  private store(key: string, r: AnalysisResult, width: number, nodes: number): void {
     if (!r.terminal && r.lines.length === 0) return;
     const entry: CacheEntry = {
       result: {
@@ -404,6 +509,7 @@ export class AnalysisService {
         ...(r.terminal ? { terminal: r.terminal } : {}),
       },
       width: r.terminal ? Number.POSITIVE_INFINITY : width,
+      nodes: r.terminal ? Number.POSITIVE_INFINITY : nodes,
     };
     const front = this.cache.get(key) ?? [];
     if (front.some((e) => dominates(e, entry))) {
@@ -420,10 +526,20 @@ export class AnalysisService {
     }
   }
 
-  private lookup(key: string, minDepth: number, multiPv: number): CacheEntry | undefined {
+  /**
+   * The answer to a request from the cache, if a cached result is good enough (`satisfies`): then
+   * the deepest (then widest) result with enough lines, which may have taken fewer nodes than a
+   * shallower one that ran out of nodes (a later search on a warm hash).
+   */
+  private lookup(key: string, minDepth: number, multiPv: number, maxNodes: number): CacheEntry | undefined {
     const front = this.cache.get(key);
-    if (!front) return undefined;
-    return front.find((e) => e.result.terminal || (e.result.depth >= minDepth && e.width >= multiPv));
+    if (!front?.some((e) => satisfies(e, minDepth, multiPv, maxNodes))) return undefined;
+    let hit: CacheEntry | undefined;
+    for (const e of front) {
+      if (!satisfies(e, 1, multiPv, maxNodes)) continue; // enough lines (any depth)
+      if (!hit || e.result.depth > hit.result.depth || (e.result.depth === hit.result.depth && e.width > hit.width)) hit = e;
+    }
+    return hit;
   }
 
   /** Deepest entry, preferring those at least `minWidth` wide; ties go to the wider one. */
@@ -499,5 +615,29 @@ export class AnalysisService {
 }
 
 function dominates(a: CacheEntry, b: CacheEntry): boolean {
-  return a.result.depth >= b.result.depth && a.width >= b.width;
+  return a.result.depth >= b.result.depth && a.width >= b.width && a.nodes >= b.nodes;
+}
+
+/**
+ * Whether a result answers a request: a terminal position, or enough lines that are either deep
+ * enough or took at least the request's node budget (a search with that budget would not have
+ * got further).
+ */
+function satisfies(e: CacheEntry, minDepth: number, multiPv: number, maxNodes: number): boolean {
+  if (e.result.terminal) return true;
+  return e.width >= multiPv && e.result.lines.length > 0 && (e.result.depth >= minDepth || e.nodes >= maxNodes);
+}
+
+/**
+ * Whether a search's own limits cover a request: at least as deep and as wide, and a node budget
+ * no larger than the request's, so it never runs past what the request is willing to wait for. A
+ * smaller budget may stop it short: the request is then searched again with its own (onEnd).
+ */
+function covers(job: Pick<Job, 'depth' | 'multiPv' | 'maxNodes'>, minDepth: number, multiPv: number, maxNodes: number): boolean {
+  return job.depth >= minDepth && job.multiPv >= multiPv && job.maxNodes <= maxNodes;
+}
+
+/** A node budget: a positive whole number, or Infinity for none (also for 0, negative or NaN). */
+function nodeBudget(n: number): number {
+  return n > 0 && Number.isFinite(n) ? Math.max(1, Math.round(n)) : Number.POSITIVE_INFINITY;
 }

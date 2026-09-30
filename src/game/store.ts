@@ -41,6 +41,7 @@ import {
   mentionsMove,
   moveLabel,
   offersShowBest,
+  recaptureTip,
   verdictTitle,
 } from './coach';
 import type { ReviewSummary } from './review';
@@ -559,10 +560,14 @@ export function createStore(state: AppState): Store {
     const pos = position.value;
     let score: Score | null = null;
     let depth = 0;
+    // The search finished (at its depth, or at its node budget in a position where the next
+    // iteration takes millions of nodes): nothing deeper is coming, so the bar stops pulsing.
+    let finished = false;
     const r = liveForDisplayed.value;
     if (r) {
       score = whiteScore(r);
       depth = r.depth;
+      finished = !!score && r.done;
     }
     const k = current.value;
     // A drawn game's final position is 0.0, whatever the engine (which does not see repetitions) says.
@@ -602,7 +607,7 @@ export function createStore(state: AppState): Store {
       whiteWinProb: whiteBarFraction(score, pos.turn),
       label: formatScore(score, pos.turn),
       orientation: orientation.value,
-      thinking: !final && depth < SHALLOW_DEPTH,
+      thinking: !final && !finished && depth < SHALLOW_DEPTH,
       depth: final ? 0 : depth,
     };
   });
@@ -695,7 +700,7 @@ export function createStore(state: AppState): Store {
       lines,
       busy: false,
       actions: [
-        { id: 'review', label: 'Game review', primary: true },
+        { id: 'review', label: 'Game Review', primary: true },
         { id: 'rematch', label: 'Rematch' },
         { id: 'newGame', label: 'New game' },
       ],
@@ -855,9 +860,14 @@ export function createStore(state: AppState): Store {
     }
     const lines: string[] = [];
     if (ps.length === 0) lines.push(`${g.bot.name}: “${g.bot.greeting}”`);
-    const o = ps.at(-1)?.opening;
+    const last = ps.at(-1);
+    const o = last?.opening;
     if (o) lines.push(`Opening: ${o.name}`);
-    lines.push(coachTip(liveFen.value, ps.length, position.value.check));
+    const check = position.value.check;
+    // A capture that can be answered in kind comes before any general advice (not in check,
+    // where the check tip already says to capture the checking piece).
+    const recapture = check ? null : recaptureTip(liveFen.value, last, g.bot.name);
+    lines.push(recapture ?? coachTip(liveFen.value, ps.length, check));
     return { kind: 'coach', title: 'Your move', lines, busy: false, actions: [] };
   }
 

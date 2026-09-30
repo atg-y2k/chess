@@ -17,14 +17,16 @@ import { Chess } from 'chess.js';
 import { classifyMove } from '../../src/analysis/classify';
 import { explainBestMove } from '../../src/analysis/explain';
 import { loadOpenings } from '../../src/bot/book';
-import { START_FEN } from '../../src/chess/utils';
-import { AnalysisService } from '../../src/engine/AnalysisService';
+import { START_FEN, fenKey } from '../../src/chess/utils';
+import { AnalysisService, LIVE_NODES } from '../../src/engine/AnalysisService';
 import { RETRY_CLASSES, mentionsMove } from '../../src/game/coach';
 import { buildPgn, pgnEval } from '../../src/game/pgn';
 import { summarizeGame } from '../../src/game/review';
 import type { EngineSet } from '../../src/engine/createEngines';
 import { EngineLoadError } from '../../src/engine/errors';
 import {
+  ANNOTATE_DEPTH,
+  ANNOTATE_NODES,
   ENGINE_ADVICE,
   ENGINE_DOWNLOAD_ADVICE,
   ENGINE_RETRY_ADVICE,
@@ -1540,6 +1542,38 @@ describe('engine failure', () => {
     await controller.idle();
     expect(store.plies.value[0].classification).toBeDefined();
     expect(store.plies.value[0].evalDepth).toBeGreaterThanOrEqual(14);
+  });
+
+  it('a search that stops at its node budget below the annotation depth is the verdict, not a failure', async () => {
+    const { controller, store, engines } = setup({ bot: new ScriptedBot(['e7e5', 'b8c6']) });
+    engines.analysis.nodeCapDepth = 11; // every budgeted search runs out of nodes at depth 11
+    await controller.boot();
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4', 'g1f3']);
+    await controller.idle();
+    const ps = store.plies.value;
+    expect(ps).toHaveLength(4);
+    expect(ps.every(annotated)).toBe(true);
+    expect(ps.every((p) => p.evalDepth === 11)).toBe(true);
+    expect(store.failedAnnotations.value.size).toBe(0);
+    expect(store.coach.value.title).toMatch(/^2\. Nf3 is /);
+    // Every search has a node budget: the coach's (annotations, hints, Show best, review) and live analysis.
+    const searches = engines.analysis.searches.filter((x) => !new Chess(x.fen).isGameOver());
+    expect(searches.length).toBeGreaterThan(0);
+    for (const x of searches) {
+      expect(x.opts.nodes).toBe(x.opts.depth === ANNOTATE_DEPTH ? ANNOTATE_NODES : LIVE_NODES);
+    }
+    // A position is not searched again once a search spent the budget on it (the "after" of a
+    // move is the "before" of the next one).
+    const coach = searches.filter((x) => x.opts.depth === ANNOTATE_DEPTH).map((x) => fenKey(x.fen));
+    expect(new Set(coach).size).toBe(coach.length);
+    // The hint accepts such a result too.
+    const before = engines.analysis.searches.length;
+    await controller.hint();
+    const m = store.coachMode.value;
+    expect(m.kind === 'hint' && m.explanation?.headline).toMatch(/\S/);
+    expect(m.kind === 'hint' && m.explanation?.headline).not.toBe('No hint is available for this position.');
+    expect(engines.analysis.searches.slice(before).every((x) => x.opts.depth !== ANNOTATE_DEPTH)).toBe(true); // from the cache
   });
 
   it('an aborted result that already reached the annotation depth is used', async () => {

@@ -18,7 +18,7 @@ import { customPersona, personaById } from '../bot/personas';
 import { hashSeed, mulberry32 } from '../bot/strength';
 import type { BotMove } from '../bot/types';
 import { START_FEN, fenKey, formatLine, otherColor, parseUci, pvToSan, toWhitePov, uciToSan } from '../chess/utils';
-import { AnalysisService, type AnalysisServiceOptions } from '../engine/AnalysisService';
+import { AnalysisService, defaultEnsureNodes, type AnalysisServiceOptions, type EnsureOptions } from '../engine/AnalysisService';
 import { createEngines, type EngineLoadProgress, type EngineSet } from '../engine/createEngines';
 import { EngineLoadError, engineFailureKind } from '../engine/errors';
 import { inspectPosition } from '../engine/StockfishEngine';
@@ -67,10 +67,19 @@ import {
 } from './store';
 import type { Color, GameOutcome, GameSettings, Ply, PromotionPiece } from './types';
 
-/** Minimum depth of the per-ply annotations (and hints / review). */
+/** Depth of the per-ply annotations (and hints, Show best and the review), within ANNOTATE_NODES. */
 export const ANNOTATE_DEPTH = 14;
 /** MultiPV of the per-ply annotations. */
 export const ANNOTATE_MULTIPV = 3;
+/**
+ * Node budget of those searches (1.2M: about 2.5 s on an iPhone). Most positions reach
+ * ANNOTATE_DEPTH well within it; in the few where one iteration takes millions of nodes, the
+ * search stops at the budget and its (shallower, finished) result is the verdict, so the coach
+ * never waits minutes for one move.
+ */
+export const ANNOTATE_NODES = defaultEnsureNodes(ANNOTATE_MULTIPV);
+/** The `ensure()` request of every annotation, hint, Show best and review search. */
+const ANNOTATE: EnsureOptions = { minDepth: ANNOTATE_DEPTH, multiPv: ANNOTATE_MULTIPV, maxNodes: ANNOTATE_NODES };
 /** Shown when the engine cannot start. */
 export const ENGINE_START_FAILED = 'The chess engine could not start.';
 /** Advice when the browser lacks Web Workers or WebAssembly SIMD. */
@@ -942,10 +951,10 @@ export class GameController {
   // Coach, hints, settings
 
   /**
-   * Hint on the human's turn: analyses the position (depth 14, MultiPV 3) and shows why the best
-   * move is good, with its arrow. Marks the game assisted once the hint is shown (not when none
-   * could be found). Calling it while a hint is shown dismisses the hint. (The toolbar calls
-   * `requestHint()`.)
+   * Hint on the human's turn: analyses the position (depth 14, MultiPV 3, within ANNOTATE_NODES)
+   * and shows why the best move is good, with its arrow. Marks the game assisted once the hint is
+   * shown (not when none could be found). Calling it while a hint is shown dismisses the hint.
+   * (The toolbar calls `requestHint()`.)
    */
   async hint(): Promise<void> {
     const s = this.s;
@@ -963,7 +972,7 @@ export class GameController {
     this.updateWatch();
     let r: AnalysisResult;
     try {
-      r = await svc.ensure(fen, { minDepth: ANNOTATE_DEPTH, multiPv: ANNOTATE_MULTIPV });
+      r = await svc.ensure(fen, ANNOTATE);
     } catch {
       r = { fen, depth: 0, lines: [], bestMove: null, done: false, aborted: true };
     }
@@ -1126,7 +1135,7 @@ export class GameController {
     const s = this.s;
     let r: AnalysisResult | undefined;
     try {
-      r = await svc.ensure(ply.fenBefore, { minDepth: ANNOTATE_DEPTH, multiPv: ANNOTATE_MULTIPV });
+      r = await svc.ensure(ply.fenBefore, ANNOTATE);
     } catch (e) {
       console.warn('[game] show best: analysis failed', e);
     }
@@ -1326,10 +1335,10 @@ export class GameController {
   // Review
 
   /**
-   * Game review (after the game): analyses every position (depth 14, MultiPV 3, reusing the
-   * cache), classifies and explains any ply still missing, then fills `store.review` with
-   * accuracy, counts and key moments and stores the player's accuracy in the game record.
-   * Resolves when the review is complete (or abandoned).
+   * Game Review (after the game): analyses every position (depth 14, MultiPV 3, within
+   * ANNOTATE_NODES, reusing the cache), classifies and explains any ply still missing, then fills
+   * `store.review` with accuracy, counts and key moments and stores the player's accuracy in the
+   * game record. Resolves when the review is complete (or abandoned).
    */
   startReview(): Promise<void> {
     const s = this.s;
@@ -1373,7 +1382,7 @@ export class GameController {
     const g = s.game.value!;
     if (svc && !s.startEval.value) {
       try {
-        const r = await svc.ensure(g.startFen, { minDepth: ANNOTATE_DEPTH, multiPv: ANNOTATE_MULTIPV });
+        const r = await svc.ensure(g.startFen, ANNOTATE);
         if (!alive()) return;
         const sc = whiteScore(r);
         if (sc) s.startEval.value = sc;
@@ -1450,8 +1459,9 @@ export class GameController {
   }
 
   /**
-   * Analyses the positions before and after `ply` (depth 14, MultiPV 3), then classifies and
-   * explains it. The previous ply is annotated first (queue order), so its winLoss is known.
+   * Analyses the positions before and after `ply` (depth 14, MultiPV 3, within ANNOTATE_NODES),
+   * then classifies and explains it. The previous ply is annotated first (queue order), so its
+   * winLoss is known.
    */
   private async annotate(gameId: string, ply: Ply): Promise<AnnotateResult> {
     const s = this.s;
@@ -1467,20 +1477,20 @@ export class GameController {
         p.uci === ply.uci
       );
     };
-    const opts = { minDepth: ANNOTATE_DEPTH, multiPv: ANNOTATE_MULTIPV };
     let before: AnalysisResult;
     let after: AnalysisResult;
     try {
-      before = await svc.ensure(ply.fenBefore, opts);
+      before = await svc.ensure(ply.fenBefore, ANNOTATE);
       if (!current()) return 'stale';
-      after = await svc.ensure(ply.fenAfter, opts);
+      after = await svc.ensure(ply.fenAfter, ANNOTATE);
     } catch (e) {
       console.warn('[game] analysis failed', e);
       return current() ? 'failed' : 'stale';
     }
     if (!current()) return 'stale';
     // A search cut short (pre-empted, cancelled, or the engine restarted) below the annotation
-    // depth is not a verdict: retry later. A terminal position legitimately has depth 0.
+    // depth is not a verdict: retry later. A terminal position legitimately has depth 0, and a
+    // search that finished at its node budget (done, not aborted) is one, however deep it got.
     const shallow = (r: AnalysisResult) => r.aborted === true && !r.terminal && r.depth < ANNOTATE_DEPTH;
     if (shallow(before) || shallow(after)) return 'failed';
     const afterScore = resultScore(after);

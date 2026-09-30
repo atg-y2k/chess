@@ -59,8 +59,8 @@ src/
     store.ts               app state as signals + computed view models (one per component)
     controller.ts          GameController: player move -> coach -> bot move; analysis orchestration, review
     coach.ts               coach wording and rules that need no engine (class sentences, move labels, tips,
-                           which actions a classification offers, answer-free text while Retry is offered,
-                           neutral verdicts for praised moves that give something away)
+                           the recapture tip, which actions a classification offers, answer-free text while
+                           Retry is offered, neutral verdicts for praised moves that give something away)
     review.ts              game summary (accuracy, counts, key moments)
     pgn.ts                 PGN export with [%eval] comments and NAGs
     persistence.ts         save/restore the current (or just finished) game + settings
@@ -111,10 +111,26 @@ src/
   (history included). A bot search that follows analysis first sends `ucinewgame`, so the bot never
   profits from the analysis hash table (its calibration assumes an engine of its own).
 - `AnalysisService`:
-  - `ensure(fen, {minDepth, multiPv})`: high priority, cached by `fenKey`. It pre-empts live analysis,
-    then live analysis resumes. A search cut short by an engine restart is retried (up to twice)
-    before its waiters get the best result so far.
-  - `watch(fen)`: live, depth-capped analysis of the current position, with streaming updates to subscribers.
+  - `ensure(fen, {minDepth, multiPv, maxNodes})`: high priority, cached by `fenKey`. It pre-empts
+    live analysis, then live analysis resumes. A search cut short by an engine restart is retried
+    (up to twice) before its waiters get the best result so far.
+  - `watch(fen)`: live analysis of the current position (depth 18, MultiPV 3, at most `LIVE_NODES`
+    = 5M nodes, about 10 s on an iPhone), with streaming updates to subscribers.
+  - **Node budgets.** Every search is limited by depth and by nodes (`go depth D nodes N`), never
+    by `movetime`. An `ensure()` without `maxNodes` gets `defaultEnsureNodes(multiPv)` = 300k ×
+    (multiPv + 1): 1.2M for MultiPV 3, about 2.5 s on an iPhone (~0.5M nodes/s). With a warm hash,
+    MultiPV 3 reaches depth 14 within 1.2M nodes in ~93% of game positions (median ~200k), and
+    depth 18 within 5M in ~96% (median ~1M). The rest are positions where one iteration takes
+    millions of nodes (e.g. after 9.Qa3+ in 1.d4 Nf6 2.c4 d5 3.cxd5 Nxd5 4.e4 Nd7 5.exd5 c6 6.dxc6
+    Rg8 7.cxd7+ Kxd7 8.Qa4+ Kd6 9.Qa3+, where an unbudgeted depth-14 request took a minute in the
+    browser and froze the coach and the eval bar): there the search stops at the budget with a
+    finished, shallower result. The cache records the nodes behind each result, so a result that
+    spent a budget answers every request with the same or a smaller one (the next move's "before"
+    analysis is not searched again), and the deepest result of enough lines is returned once one is
+    good enough. A request joins a running search only when that search's budget is not larger
+    than its own (so it never waits past its budget); the live search has the larger budget, so a
+    coach request for the watched position pre-empts it, streams its own partial results to the eval
+    bar, and the live search resumes afterwards with a warm hash.
   - Analysis pauses when the page is hidden: the controller calls `setPaused()` from
     `onVisibilityChange` (AnalysisService does not listen to visibility itself).
 - The controller wraps both engines (`monitorEngine`) to notice when one breaks for good: it saves
@@ -179,10 +195,15 @@ export function resetEngineMode(): void;
 
 // engine/AnalysisService.ts — position-only: never sends SearchOptions.history
 export class AnalysisService {
-  constructor(engine: ChessEngine, opts?: { liveDepth?: number /*18*/; liveMultiPv?: number /*3*/; throttleMs?: number /*120*/; cacheSize?: number /*3000*/ });
-  /** High-priority analysis to at least minDepth, cached by fenKey; pre-empts live analysis, which resumes afterwards. */
-  ensure(fen: string, opts: { minDepth: number; multiPv?: number }): Promise<AnalysisResult>;
-  /** Live analysis target (null = none). Streams updates to subscribers; stops at liveDepth. */
+  constructor(engine: ChessEngine, opts?: {
+    liveDepth?: number /*18*/; liveMultiPv?: number /*3*/; liveNodes?: number /*LIVE_NODES = 5M*/;
+    ensureNodes?: (multiPv: number) => number /*defaultEnsureNodes*/; throttleMs?: number /*120*/; cacheSize?: number /*3000*/;
+  });
+  /** High-priority analysis to minDepth within maxNodes (default defaultEnsureNodes(multiPv): 1.2M for MultiPV 3),
+   *  cached by fenKey; pre-empts live analysis, which resumes afterwards. A result that ran out of nodes below
+   *  minDepth is final (not aborted) and answers later requests with the same or a smaller budget. */
+  ensure(fen: string, opts: { minDepth: number; multiPv?: number; maxNodes?: number /*Infinity = none*/ }): Promise<AnalysisResult>;
+  /** Live analysis target (null = none). Streams updates to subscribers; stops at liveDepth or liveNodes. */
   watch(fen: string | null): void;
   subscribe(cb: (r: AnalysisResult) => void): () => void;
   /** Best cached result for this position (any depth), if any. */
@@ -337,6 +358,9 @@ export function concession(ply: Pick<Ply, 'classification' | 'explanation'>): 'm
 /** The coach title and icon: "12. Nf3 is a mistake" + cls; for a concession a neutral title and no icon:
  *  "10… Kd8 doesn’t change the result" (already lost, or 'mate'), "… still wins, but gives up material", "… gives up material". */
 export function verdictTitle(ply: Pick<Ply, 'fenBefore' | 'san' | 'color' | 'index' | 'classification' | 'explanation'>): { title: string; cls?: MoveClass };
+/** The idle tip after the opponent's capture when a legal recapture on that square holds its own (analysis/see.ts
+ *  `see` >= 0): "Rocco just took your bishop on c1. Can you recapture?"; else null (then `coachTip`; the in-check tip first). */
+export function recaptureTip(fen: string, last: Pick<Ply, 'uci' | 'color' | 'captured'> | null | undefined, opponent: string): string | null;
 // game/store.ts
 export function explanationLines(e: Explanation | undefined | null, bestSan?: string | null): string[]; // adds "Best was X." unless a line already names X
 // game/sound.ts
@@ -409,7 +433,7 @@ interface EvalBarProps {
   whiteWinProb: number;        // 0..1
   label: string;               // e.g. "+1.3", "M3", "-M2", "0.0"
   orientation: 'white' | 'black'; // white at the bottom when 'white'
-  thinking?: boolean;          // subtle pulse while analysis is shallow
+  thinking?: boolean;          // subtle pulse while the live analysis is shallow (depth < 12) and still running
 }
 ```
 It is a vertical bar, 18 px wide, with the same height as the board, and animates smoothly on
@@ -443,8 +467,9 @@ interface MoveListProps {
 }
 ```
 A horizontally scrolling list of move numbers and SAN, with small class icons. It keeps the current move in view,
-also when the set of moves with an icon changes (a review starting); a mere re-annotation does not move a row the
-user has swiped. The store strips the class from the plies it passes where it must not show: the bot's moves
+also when the set of moves with an icon changes (a review starting), and when the row's own width changes (a
+`ResizeObserver`: rotating the phone, a resized window); a mere re-annotation does not move a row the user has
+swiped. The store strips the class from the plies it passes where it must not show: the bot's moves
 during play, and concessions (which get no badge on the board either).
 
 ### CoachPanel.tsx
@@ -503,6 +528,9 @@ interface PlayerStripProps {
     note; with `offlineReady` an "Available offline" row; always a "Run engine self-test" link (`selfTestHref`, default
     `?enginetest`).
 - `GameOverSheet({ open, outcome: GameOutcome, playerColor, botName, ratingChange?: { before: number; after: number; rated: boolean }, onReview, onRematch, onNewGame, onClose, botEmoji?, botColor?, botElo? })`.
+  White is on the left and Black on the right (each labeled with its color), with the result between them as chess
+  players write it, from White's side: `gameOverScore(outcome)` gives "1–0" / "0–1" / "½–½" and "White won" /
+  "Black won" / "Draw" (a per-player "You 0 – 1 Robot" read as a Black win after a win as Black).
 - `ConfirmSheet({ open, title, message, confirmLabel, cancelLabel?, onConfirm, onClose })`: a small confirmation sheet.
   `assistPrompt(kind: 'hint' | 'undo' | 'retry')` gives its wording for "this makes the game unrated".
 - `About()` (in the Menu): the GPL notice with the no-warranty line, the Source code link (`SOURCE_URL` =
@@ -593,10 +621,12 @@ loss by "Abandoned" (rated unless already unrated); with Match my rating the new
 before that loss is recorded, so it is the Elo the sheet showed. Before the first move the old game is
 discarded. Resigning is a rated loss (unless already unrated), except before the first move.
 
-**Coach flow.** Every ply is annotated in the background (`ensure` depth 14, MultiPV 3, before and
-after the move; `classifyMove` gets `prevFenBefore` from the previous ply). A result that was
+**Coach flow.** Every ply is annotated in the background (`ensure` depth 14, MultiPV 3, within
+`ANNOTATE_NODES` = 1.2M nodes, before and after the move; `classifyMove` gets `prevFenBefore` from
+the previous ply). Hints, *Show best* and the review use the same request. A result that was
 aborted, is not terminal and is shallower than depth 14 counts as failed, so the coach offers *Try
-again* instead of a shallow verdict. The feedback title names the move ("3. Qxf7+ is a blunder") and
+again* instead of a shallow verdict; a finished search that ran out of nodes below depth 14 is the
+verdict (it only happens in positions where one more iteration would take millions of nodes). The feedback title names the move ("3. Qxf7+ is a blunder") and
 the badge stays on it after the bot replies, as long as the player's piece is still on that square
 (not after the reply took it, en passant included). *Show best* is offered when `offersShowBest` says so
 (any move but a top one, including a Brilliant that isn't the engine's top move); in a rated game

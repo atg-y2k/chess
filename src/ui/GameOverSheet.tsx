@@ -60,14 +60,27 @@ export function gameOverReason(outcome: GameOutcome, playerColor: Color, botName
   return /^(by|on)\s/i.test(raw) ? raw : `by ${key}`;
 }
 
-/** Player-centric score line: "1 – 0", "0 – 1" or "½ – ½". */
-function scoreLine(kind: GameOverKind): string {
-  return kind === 'win' ? '1 – 0' : kind === 'loss' ? '0 – 1' : '½ – ½';
+/**
+ * The result as chess players write it, from White's side ("1–0", "0–1", "½–½"), with who won in
+ * words. (A score from the player's side, "You 0 – 1 Robot" after a win as Black, reads as a
+ * Black win to anyone who knows the notation.)
+ */
+export function gameOverScore(outcome: GameOutcome): { text: string; note: string } {
+  if (outcome.winner === null || outcome.result === '1/2-1/2') return { text: '½–½', note: 'Draw' };
+  return outcome.winner === 'w' ? { text: '1–0', note: 'White won' } : { text: '0–1', note: 'Black won' };
+}
+
+/** One player on the sheet. */
+interface Side {
+  human: boolean;
+  color: Color;
+  label: string;
 }
 
 /**
- * Game-over sheet: headline + reason, both players with the score, the rating change (or
- * "Unrated game") and the next steps: Game Review (primary), Rematch, New game.
+ * Game-over sheet: headline + reason, both players (White on the left, Black on the right) with
+ * the result between them, the rating change (or "Unrated game") and the next steps: Game Review
+ * (primary), Rematch, New game.
  */
 export function GameOverSheet({
   open,
@@ -80,13 +93,43 @@ export function GameOverSheet({
   onNewGame,
   onClose,
   botEmoji = '🤖',
-  botColor,
+  botColor: botAvatarColor,
   botElo,
 }: GameOverSheetProps) {
   const { kind, headline } = gameOverHeadline(outcome, playerColor);
   const reason = gameOverReason(outcome, playerColor, botName);
+  const score = gameOverScore(outcome);
   const rated = ratingChange?.rated === true;
   const delta = ratingChange ? ratingChange.after - ratingChange.before : 0;
+  const botColor = playerColor === 'w' ? 'b' : 'w';
+  const colorName = (c: Color) => (c === 'w' ? 'White' : 'Black');
+  const winner = outcome.result === '1/2-1/2' ? null : outcome.winner;
+  const you: Side = { human: true, color: playerColor, label: 'You' };
+  const bot: Side = { human: false, color: botColor, label: botName };
+  const sides = playerColor === 'w' ? { w: you, b: bot } : { w: bot, b: you };
+
+  const player = (p: Side) => (
+    <div
+      class="gos-player"
+      data-color={p.color}
+      data-winner={winner === p.color ? '' : undefined}
+      data-loser={winner !== null && winner !== p.color ? '' : undefined}
+    >
+      {p.human ? (
+        <span class="gos-avatar gos-avatar--you" data-c={p.color}>
+          <KingGlyph color={p.color} size={40} />
+          {winner === p.color && <span class="gos-crown">👑</span>}
+        </span>
+      ) : (
+        <span class="gos-avatar" style={botAvatarColor ? { background: botAvatarColor } : undefined}>
+          <span class="gos-emoji">{botEmoji}</span>
+          {winner === p.color && <span class="gos-crown">👑</span>}
+        </span>
+      )}
+      <span class="gos-name">{p.label}</span>
+      <span class="gos-sub">{p.human || botElo == null ? colorName(p.color) : `${colorName(p.color)} · ${botElo}`}</span>
+    </div>
+  );
 
   return (
     <Sheet
@@ -107,32 +150,17 @@ export function GameOverSheet({
             </p>
           )}
 
-          <div class="gos-players" role="img" aria-label={`You ${scoreLine(kind).replace('–', 'to')} ${botName}`}>
-            <div
-              class="gos-player"
-              data-winner={kind === 'win' ? '' : undefined}
-              data-loser={kind === 'loss' ? '' : undefined}
-            >
-              <span class="gos-avatar gos-avatar--you" data-c={playerColor}>
-                <KingGlyph color={playerColor} size={40} />
-                {kind === 'win' && <span class="gos-crown">👑</span>}
-              </span>
-              <span class="gos-name">You</span>
-              <span class="gos-sub">{playerColor === 'w' ? 'White' : 'Black'}</span>
+          <div
+            class="gos-players"
+            role="img"
+            aria-label={`${sides.w.label} (White) ${score.text.replace('–', ' to ')} ${sides.b.label} (Black): ${score.note}`}
+          >
+            {player(sides.w)}
+            <div class="gos-score">
+              <span class="gos-result">{score.text}</span>
+              <span class="gos-result-note">{score.note}</span>
             </div>
-            <div class="gos-score">{scoreLine(kind)}</div>
-            <div
-              class="gos-player"
-              data-winner={kind === 'loss' ? '' : undefined}
-              data-loser={kind === 'win' ? '' : undefined}
-            >
-              <span class="gos-avatar" style={botColor ? { background: botColor } : undefined}>
-                <span class="gos-emoji">{botEmoji}</span>
-                {kind === 'loss' && <span class="gos-crown">👑</span>}
-              </span>
-              <span class="gos-name">{botName}</span>
-              <span class="gos-sub">{botElo != null ? botElo : playerColor === 'w' ? 'Black' : 'White'}</span>
-            </div>
+            {player(sides.b)}
           </div>
         </div>
 

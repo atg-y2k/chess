@@ -125,6 +125,11 @@ export class FakeEngine implements ChessEngine {
   script: string[] = [];
   /** Makes every search reject (engine broken). */
   failWith: Error | null = null;
+  /**
+   * When > 0, a search with a node budget (`opts.nodes`) ends at this depth when asked for a
+   * deeper one, finished (not aborted), as Stockfish does when it runs out of nodes first.
+   */
+  nodeCapDepth = 0;
   private pending: Pending | null = null;
 
   constructor(readonly name = 'fake') {}
@@ -194,7 +199,8 @@ export class FakeEngine implements ChessEngine {
       const top = scored.find((s) => s.uci === next)!;
       scored = [{ ...top, score: { kind: 'cp', value: Math.max(scored[0].key, 0) + 50 } }, ...scored.filter((s) => s !== top)];
     }
-    const depth = opts.depth ?? 10;
+    const asked = opts.depth ?? 10;
+    const depth = this.nodeCapDepth > 0 && opts.nodes ? Math.min(asked, this.nodeCapDepth) : asked;
     const lines: PvLine[] = scored
       .slice(0, Math.max(1, opts.multiPv ?? 1))
       .map((s, i) => ({ multipv: i + 1, depth, score: s.score, pv: s.pv }));

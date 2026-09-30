@@ -19,11 +19,16 @@ import {
   between,
   effectiveAttackers,
   exchangeCounts,
+  fileOf,
   hangingPieces,
+  kingSquare,
   other,
   pieces,
+  rankOf,
+  rayHits,
   scratch,
   see,
+  slideDirs,
   winningCaptures,
   type Hanging,
   type PieceOn,
@@ -436,6 +441,11 @@ interface LineOptions {
   nested?: boolean;
   /** The MultiPV lines of `fen`, when known: can a follow-up move be played at once just as well? */
   lines?: readonly PvLine[];
+  /**
+   * The MultiPV lines of the position after the line's first move (the opponent's replies, their
+   * point of view), when known: does the opponent have to give up the material the line wins?
+   */
+  replies?: readonly PvLine[];
 }
 
 /**
@@ -585,6 +595,19 @@ function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove, opts: L
         l.score.value >= cpScore - SAME_CP &&
         materialOutcome(fen, l.pv, me).net <= out.net - 1,
     );
+  // Nor when the opponent need not give the material up: another reply that the engine scores
+  // about as well concedes nothing, or clearly less (15.Qh6 Qxe2 16.Nxe2 "wins the queen", but
+  // 15...Nxd5 and 15...O-O-O score the same). The principal reply was a tie-break between equal
+  // moves (typically in a decided position), not a loss the move forces.
+  const unforced =
+    gained.net >= 1 &&
+    !!line.score &&
+    line.pv.length > 1 &&
+    !!opts.replies?.some((r) => {
+      if (!r.pv.length || r.pv[0] === line.pv[1] || !replyAsGood(r.score, toChild(line.score!))) return false;
+      const drop = out.net - materialOutcome(fen, [uci, ...r.pv], me).net;
+      return drop >= 2 || gained.net - drop < 1;
+    });
   // Nor does it "let the pawn promote" when the pawn could safely promote right now.
   let promotesNow = false;
   if (!move.promotion && gained.promoted?.length && worth(gained.won) === 0) {
@@ -592,9 +615,11 @@ function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove, opts: L
     const now = pm ? playAt(fen, pm) : null;
     promotesNow = !!now && see(now.after, now.to, other(me)) <= 0;
   }
-  if (gained.net >= 1 && mat && !compensated && !gambit && !evenInLines && !promotesNow) {
+  if (gained.net >= 1 && mat && !compensated && !gambit && !evenInLines && !unforced && !promotesNow) {
     if (tactic) arrows.push(...motifArrows(tactic, move.to));
-    const back = balance < 0 && gained.net <= -balance + 0.5 && worth(gained.lost) === 0;
+    // Behind in material, and the gain only brings the mover back to about level (at most a pawn
+    // up): the material lost earlier (a knight taken on a6 a few moves ago) comes back.
+    const back = balance < 0 && gained.net <= -balance + 1.5 && worth(gained.lost) === 0;
     let reason = back ? mat.replace(/^wins /, 'wins back ') : mat;
     if (!move.promotion && gained.promoted?.length) {
       // The promotion comes later in the line, not with this move.
@@ -677,7 +702,7 @@ function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove, opts: L
 
   // Nothing about the move itself: say what it prepares (the mover's next move in the line).
   const checks = motifs.some((m) => m.kind === 'check');
-  if (!opts.nested && out.net > -1) {
+  if (!opts.nested && out.net > -1 && !unforced) {
     const next = followUp(fen, line, v, checks, opts.lines);
     if (next) {
       const reason = checks
@@ -697,7 +722,8 @@ function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove, opts: L
     }
   }
   if (givenUp) return res(givenUp.title, givenUp.reason, keyLine, { motifs: givenUp.motifs, targets: took });
-  const main = playLine(fen, line.pv, 5).sans;
+  // Not a line whose reply was a tie-break that gives material away for nothing (see `unforced`).
+  const main = unforced ? [] : playLine(fen, line.pv, 5).sans;
   const mainLine = main.length > 1 ? [`Main line: ${main.join(' ')}.`] : [];
   if (checks) return res('Check', 'gives check', mainLine, { fallback: true, motifs: ['check'] });
   return res('Positional', 'improves the position', mainLine, { fallback: true });
@@ -821,6 +847,15 @@ function asGood(alt: Score, main: Score): boolean {
   const a = scoreToWin(alt);
   const m = scoreToWin(main);
   return a >= m || (m - a < SAME_GAP && cpGap(alt, main) <= SAME_CP);
+}
+
+/**
+ * An alternative reply (`alt`, the replier's point of view) is about as good for the replier as the
+ * principal one: at most `SAME_CP` worse, or the same mate.
+ */
+function replyAsGood(alt: Score, principal: Score): boolean {
+  if (alt.kind === 'cp' && principal.kind === 'cp') return alt.value >= principal.value - SAME_CP;
+  return asGood(alt, principal);
 }
 
 /** Principles worth preparing ("Be2 prepares O-O, which castles the king to safety …"). */
@@ -1128,10 +1163,27 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
   /** `direct`: the reply simply takes a piece the move left hanging. */
   type Verdict = { headline: string; details: string[]; title: string; motifs: string[]; direct?: boolean };
 
+  // A piece the reply takes that the best line loses as well (12...Kd6 Bxd8, where 12...Kxd7 Bxd8
+  // loses the queen too): the move is not to blame for it, whatever else it does.
+  let doomedMemo: Doomed | null | undefined;
+  const doomed = () => (doomedMemo ??= lostAnyway(fenBefore, fenAfter, move.to, bestLine?.pv, isBest, replyMove, me));
+  /** "Black's queen on d8 is lost to the skewer whichever way the king moves." */
+  const doomedNote = () => {
+    const d = doomed();
+    if (!d) return null;
+    const piece = `${v.own[0].toUpperCase()}${v.own.slice(1)} ${on(d.piece)}`;
+    if (!d.skewer) return `${piece} could not be saved.`;
+    return d.onlyKingMoves
+      ? `${piece} is lost to the skewer whichever way the king moves.`
+      : `${piece} is lost to the skewer anyway.`;
+  };
+
   /** The move loses material to the reply that the best move would not have lost. */
   function materialLost(): Verdict | null {
     const { played, best } = lineOutcomes();
     if (!reply || !replyMove || played.net > -1 || played.net >= (best?.net ?? 0) - 0.5) return null;
+    // Most of the loss is a piece that was lost anyway: that is not what the move gives away.
+    if (doomed() && played.net > (best?.net ?? 0) - 3) return null;
     const oppOut = materialOutcome(fenAfter, reply.pv, opp);
     // After "Nxe5 grabs a pawn, but it …" name only what is lost, not the trade balance.
     const noun = (grab ? (worth(oppOut.won) > 0 ? nounList(oppOut.won) : null) : materialNoun(oppOut)) ?? 'material';
@@ -1214,13 +1266,18 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
   const bestRecap = !isBest && bestLine && prevPiece ? recaptureIn(fenBefore, bestLine.pv, p.prevMove) : null;
   const bestGain = bestOut ? (bestRecap ? countFromBeforeCapture(bestOut, prevPiece!).net : bestOut.net) : 0;
   const captor = bestRecap ? scratch(fenBefore).get(p.prevMove!.to as Square) : undefined;
+  const missedGain =
+    !!bestOut && !!bestSan && !!bestLine && !isBest && bestGain >= 1 && bestOut.net - playedOut.net >= 1;
+  // The best move wins much more than this move loses (13...b6 loses a pawn, 13...bxa6 won a
+  // bishop): the missed win is the story, the smaller loss comes second.
+  const missFirst = !!lost && missedGain && bestGain >= 3 * Math.max(1, -playedOut.net);
 
   if (under) {
     // 4u. Underpromotion where a queen was best.
     headline = `${move.san} promotes to a ${NAME[move.promotion!]} instead of a queen.`;
     title = 'Promotion';
     motifs = ['underpromotion'];
-  } else if (lost) {
+  } else if (lost && !(missFirst && bestReason() && !bestReason()!.fallback)) {
     // 4a. Material lost to the reply.
     arrows.push(...arrow(reply?.pv[0], 'threat'));
     ({ headline, title, motifs } = lost);
@@ -1230,14 +1287,21 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     headline = `${v.subject} didn't recapture the ${NAME[captor.type]} on ${p.prevMove!.to}.`;
     title = 'Missed recapture';
     motifs = ['missedRecapture'];
-  } else if (bestOut && bestSan && bestLine && !isBest && bestGain >= 1 && bestOut.net - playedOut.net >= 1) {
+  } else if (missedGain) {
     // 4b. Missed a tactic or free material.
     const br = bestReason();
     if (br && !br.fallback) {
       arrows.push(...arrow(bestUci, 'best'), ...br.arrows);
+      // What the move loses on top, when it loses something ("b6 also loses a pawn to a fork.").
+      const also = !lost
+        ? null
+        : lost.headline.startsWith('This ')
+          ? `${move.san} also ${lost.headline.slice('This '.length)}`
+          : lost.headline;
+      if (lost) arrows.push(...arrow(reply?.pv[0], 'threat'));
       return done(
         `${withWhich(`${v.subject} missed ${bestSan}`, br.reason)}.`,
-        [br.details[0]],
+        [br.details[0], also, also && lost?.details[0]],
         cl.cls === 'miss' ? 'Missed win' : 'Missed tactic',
         ['missedTactic', ...br.motifs],
       );
@@ -1254,9 +1318,15 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     if (neg) headline = `${move.san} ${principleText(neg)}.`;
     else if (cl.cls === 'miss') headline = `${v.subject} missed a chance to punish ${Opp}'s mistake.`;
     else headline = evalHeadline(cl.winBefore, cl.winAfter, v, Opp);
-    // Only mention the reply when it does something concrete (a tactic, a threat, winning material).
+    // Only mention the reply when it does something concrete (a tactic, a threat, winning material),
+    // and not when it takes a piece that was lost anyway (that is said instead).
+    const note = doomedNote();
+    details.push(note);
     const useReply =
-      !!rr && !rr.fallback && !['Recapture', 'Positional', 'Opening principle', 'Check'].includes(rr.title);
+      !!rr &&
+      !rr.fallback &&
+      !note &&
+      !['Recapture', 'Positional', 'Opening principle', 'Check'].includes(rr.title);
     if (useReply) {
       details.push(`${withWhich(`${Opp} can answer ${rr.san}`, rr.reason)}.`);
       arrows.push(...arrow(reply?.pv[0], 'threat'));
@@ -1296,7 +1366,10 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     }
     // The best move is explained with the same engine line (and lines) as the hint, so the two agree.
     const own = isBest && beforeLines[0]?.pv[0] === moveUci ? asLine(beforeLines[0]) : null;
-    const r = explainLine(fenBefore, own ?? playedLine, v, p.prevMove, { lines: beforeLines });
+    const r = explainLine(fenBefore, own ?? playedLine, v, p.prevMove, {
+      lines: beforeLines,
+      ...(own ? {} : { replies: p.after?.lines }),
+    });
     const cmp = own && r?.fallback ? compareLines(fenBefore, own, beforeLines, v) : null;
     const neg = isBest ? undefined : principles(fenBefore, moveUci).find((x) => !x.good);
     let headline = r ? `${r.san} ${r.reason}.` : `${move.san} is a reasonable move.`;
@@ -1314,6 +1387,8 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     }
     if (r) arrows.push(...r.arrows);
     if (sac && r?.title === 'Sacrifice') details.length = 0; // the sacrifice sentence shows the line
+    const note = doomedNote();
+    if (note) details.push(note);
     if (iHadMate && iStillMate > iHadMate && bestSan) {
       details.push(`${bestSan} was even quicker: mate in ${iHadMate}.`);
       arrows.push(...arrow(bestUci, 'best'));
@@ -1358,6 +1433,56 @@ function onlyMoveReason(best: Score): string {
   return 'is the only move that keeps the game going';
 }
 
+/** A piece of the mover that is lost whatever it plays (see `lostAnyway`). */
+interface Doomed {
+  piece: PieceOn;
+  /** The checking slider that skewers the king and this piece, when that is how it falls. */
+  skewer: PieceOn | null;
+  /** Every legal move was a king move (nothing could block the check or take the checker). */
+  onlyKingMoves: boolean;
+}
+
+/**
+ * The mover's piece (not a pawn, not the piece just moved) that the reply (`replyMove`) wins at
+ * once, when the best line (`bestPv`, from `fenBefore`) loses it too: the opponent wins it with a
+ * capture on the same square within their first two replies. Null otherwise, and for the best move.
+ */
+function lostAnyway(
+  fenBefore: string,
+  fenAfter: string,
+  movedTo: Square,
+  bestPv: readonly string[] | undefined,
+  isBest: boolean,
+  replyMove: Move | undefined,
+  me: Color,
+): Doomed | null {
+  if (isBest || !bestPv?.length || !replyMove?.captured || replyMove.to === movedTo) return null;
+  const sq = replyMove.to;
+  const victim = scratch(fenAfter).get(sq);
+  if (!victim || victim.color !== me || victim.type === 'k' || victim.type === 'p') return null;
+  if (see(fenAfter, sq, other(me), replyMove.from) <= 0) return null;
+  const pl = playLine(fenBefore, bestPv, 4);
+  const inBest = pl.moves.some(
+    (m, i) => i % 2 === 1 && m.to === sq && m.captured === victim.type && see(pl.fens[i], sq, m.color, m.from) > 0,
+  );
+  if (!inBest) return null;
+  // A skewer: the move gets out of a check by a slider whose line runs on through the king to the
+  // piece, and the reply takes it with that slider (12.Bg5+ Kd6 13.Bxd8).
+  const b = scratch(fenBefore);
+  const king = kingSquare(b, me);
+  const checker = b.get(replyMove.from);
+  let skewer: PieceOn | null = null;
+  if (king && checker && slideDirs(checker.type).length && b.attackers(king, other(me)).includes(replyMove.from)) {
+    const df = Math.sign(fileOf(king) - fileOf(replyMove.from));
+    const dr = Math.sign(rankOf(king) - rankOf(replyMove.from));
+    if (rayHits(b, king, df, dr, 1)[0]?.square === sq) {
+      skewer = { square: replyMove.from, type: checker.type, color: checker.color };
+    }
+  }
+  const onlyKingMoves = new Chess(fenBefore).moves({ verbose: true }).every((m) => m.piece === 'k');
+  return { piece: { square: sq, type: victim.type, color: me }, skewer, onlyKingMoves };
+}
+
 /**
  * Why a piece of the mover is lost (verb phrase after "This"): it moved into the attack, lost its
  * defender, was exposed by the moved piece stepping off a line, was already lost before the move,
@@ -1371,14 +1496,14 @@ function hangingVerb(h: Hanging, fenBefore: string, fenAfter: string, from: stri
   const opp = other(me);
   const after = scratch(fenAfter);
   // The moved piece defended it before, and no longer does from its new square (a queen sliding
-  // along the same file still does).
+  // along the same file still does). "Without a defender" only when no other defender is left.
   const defended = scratch(fenBefore).attackers(sq, me).includes(from as Square);
-  if (defended && !effectiveAttackers(after, sq, me).includes(to as Square)) {
-    return `leaves ${piece} without a defender`;
-  }
+  const lostDefender = defended && !effectiveAttackers(after, sq, me).includes(to as Square);
+  if (lostDefender && h.defenders === 0) return `leaves ${piece} without a defender`;
   const exposer = after.attackers(sq, opp).find((a) => between(a, sq, from as Square));
   const exposerPiece = exposer ? after.get(exposer) : undefined;
   if (exposer && exposerPiece) return `exposes ${piece} to the ${NAME[exposerPiece.type]} on ${exposer}`;
+  if (lostDefender) return `takes a defender away from ${piece}`;
   if (see(fenBefore, sq, opp) > 0) return `does nothing about the threat to ${piece}`;
   if (h.defenders === 0) return `leaves ${piece} undefended`;
   if (h.lowerAttacker) return `leaves ${piece} where ${withArticle(h.lowerAttacker.type)} can take it`;

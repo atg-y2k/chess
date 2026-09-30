@@ -21,7 +21,7 @@ after the first visit.
   wins or loses, the tactic or recapture you missed, the threat you allowed, and what the best move
   was.
 - **Hints, Show best and Retry** to learn from your mistakes during the game.
-- **Game review** after the game: accuracy for both sides, key moments, and coaching for every move
+- **Game Review** after the game: accuracy for both sides, key moments, and coaching for every move
   of both players.
 - **Takebacks, board flip and PGN export** (with evaluations and move marks) through the iOS share
   sheet or the clipboard.
@@ -76,8 +76,10 @@ The first time you open the app, and whenever you tap **New**, the **New game** 
 
 Then tap **Play**. Move by dragging a piece or by tapping it and then its destination square. The
 bar at the bottom has **New** (a new game), **Undo** (take back your last move), **Hint**, **Flip**
-(turn the board around), **Coach** (coach on or off) and **Menu**. After the game it has **Review**
-and ‹ › to step through the moves. Tap any move in the move list, or anywhere on the graph, to look
+(turn the board around), **Coach** (coach on or off) and **Menu**. When the game ends, a sheet
+shows the result the way chess players write it, from White's side (1–0 when White won, 0–1 when
+Black won, ½–½ for a draw), with White on the left, and your rating change. After the game the bar
+has **Review** and ‹ › to step through the moves. Tap any move in the move list, or anywhere on the graph, to look
 at that position; **Back to game** returns to the current one.
 
 If iOS closes the app (it often does in the background), your game is still there when you open it
@@ -107,10 +109,15 @@ didn't recapture the bishop on c6."
 your winning chances, so it can count as Good or Excellent even if it gives up material. The coach
 does not praise such a move: it says, for example, "10… Kd8 doesn't change the result" (the game
 was already lost) or "25. Rd1 still wins, but gives up material", explains what the move gives away,
-and shows no move icon for it. Game review lists it among the key moments.
+and shows no move icon for it. Game Review lists it among the key moments.
 
-The coach needs a moment to check each move. If that fails (rarely), it says "Couldn't check …"
-with a **Try again** button.
+The coach needs a moment to check each move, a few seconds at most: in the rare, very sharp
+position where a deeper look would take the engine minutes, it settles for a slightly shallower
+one. If the check fails (rarely), it says "Couldn't check …" with a **Try again** button.
+
+When it is your move right after your opponent took one of your pieces and you can take back
+without losing material, the coach's tip says so, for example "Rocco just took your bishop on c1.
+Can you recapture?"
 
 ## The evaluation bar
 
@@ -118,14 +125,15 @@ The bar next to the board shows who is better. The white part is White's share o
 chances and the dark part is Black's, so a bar that is half white means the game is even. The
 number sits at the end of the side that is ahead. It is in pawns: **1.3** means that side is about
 a pawn and a third better. **M3** means that side can force checkmate in 3 moves. While a new
-position is being analyzed, the last number stays and pulses.
+position is being analyzed, the last number stays and pulses. The engine looks at each position
+for a fixed amount of work (about 10 seconds on an iPhone at most), then stops to save battery.
 
 The graph under the coach shows the same thing for the whole game, with colored dots at the big
 moments. The Evaluation bar option hides both.
 
-## Game review
+## Game Review
 
-After the game, tap **Review** (or **Game review** in the coach panel). The engine goes through
+After the game, tap **Review** (or **Game Review** in the coach panel). The engine goes through
 every move of both players. You then see each side's **accuracy**, a count of each kind of move,
 and the **key moments**: brilliant and great moves, mistakes, misses and blunders, and good moves
 that gave something away (inaccuracies too when there are few). Tap a moment or step through the

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Chess } from 'chess.js';
 import type { Classification, Explanation } from '../../src/analysis/types';
 import { customPersona } from '../../src/bot/personas';
+import { fenKey } from '../../src/chess/utils';
 import { offersShowBest } from '../../src/game/coach';
 import { createState, createStore, explanationLines, pieceColorAt, type GameInfo } from '../../src/game/store';
 import { DEFAULT_SETTINGS, type Ply } from '../../src/game/types';
@@ -212,5 +213,91 @@ describe('pieceColorAt', () => {
     for (const sq of ['a1', 'c7', 'f5', 'h8']) {
       expect(pieceColorAt(fen, sq)).toBe(new Chess(fen).get(sq as 'a1')?.color ?? null);
     }
+  });
+});
+
+describe('eval bar', () => {
+  // After 9.Qa3+ (see tests/engine/nodeBudget.test.ts): one iteration can take millions of nodes.
+  const FEN = 'r1bq1br1/pp2pppp/3k4/8/3P4/Q7/PP3PPP/RNB1KBNR b KQ - 3 9';
+
+  function liveStore(depth: number, done: boolean) {
+    const bot = customPersona(1200);
+    const state = createState({ settings: DEFAULT_SETTINGS, profile: defaultProfile() });
+    state.game.value = {
+      id: 'g1',
+      startFen: FEN,
+      playerColor: 'w',
+      bot,
+      botElo: bot.elo,
+      startedAt: new Date(0).toISOString(),
+      assisted: false,
+      settings: { ...DEFAULT_SETTINGS, playerColor: 'w' },
+    };
+    state.phase.value = 'playing';
+    state.live.value = {
+      key: fenKey(FEN),
+      result: {
+        fen: FEN,
+        depth,
+        lines: [{ multipv: 1, depth, score: { kind: 'cp', value: -1300 }, pv: ['d6e6'] }],
+        bestMove: done ? 'd6e6' : null,
+        done,
+      },
+    };
+    return createStore(state);
+  }
+
+  it('pulses while the live search is shallow, and stops once it finished (e.g. at its node budget)', () => {
+    const searching = liveStore(11, false).evalBar.value;
+    expect(searching).toMatchObject({ label: '+13.0', thinking: true, depth: 11 });
+    expect(liveStore(11, true).evalBar.value).toMatchObject({ label: '+13.0', thinking: false, depth: 11 });
+    expect(liveStore(12, false).evalBar.value.thinking).toBe(false);
+  });
+});
+
+describe('idle coach tip', () => {
+  function playingStore(sans: string[]) {
+    const chess = new Chess();
+    const plies: Ply[] = sans.map((san, index) => {
+      const fenBefore = chess.fen();
+      const m = chess.move(san);
+      return {
+        index,
+        color: m.color,
+        san: m.san,
+        uci: m.lan,
+        fenBefore,
+        fenAfter: chess.fen(),
+        ...(m.captured ? { captured: m.captured } : {}),
+      };
+    });
+    const bot = customPersona(1800);
+    const state = createState({ settings: DEFAULT_SETTINGS, profile: defaultProfile() });
+    state.game.value = {
+      id: 'g1',
+      startFen: new Chess().fen(),
+      playerColor: 'w',
+      bot,
+      botElo: bot.elo,
+      startedAt: new Date(0).toISOString(),
+      assisted: false,
+      settings: { ...DEFAULT_SETTINGS, playerColor: 'w' },
+    };
+    state.plies.value = plies;
+    state.phase.value = 'playing';
+    return { store: createStore(state), bot };
+  }
+
+  it('after the opponent takes a piece you can take back, asks for the recapture instead of a general tip', () => {
+    // Game C of the acceptance test: the tip was "Improve your worst-placed piece." after 8… Bxc1.
+    const { store, bot } = playingStore('d4 d5 c4 c6 e3 Nd7 Nf3 Ngf6 Bd3 g6 Nc3 dxc4 Bxc4 Bh6 e4 Bxc1'.split(' '));
+    expect(store.coach.value.title).toBe('Your move');
+    expect(store.coach.value.lines.at(-1)).toBe(`${bot.name} just took your bishop on c1. Can you recapture?`);
+  });
+
+  it('otherwise gives a general tip', () => {
+    const { store } = playingStore('d4 d5 c4 c6 e3 Nd7 Nf3 Ngf6 Bd3 g6 Nc3 dxc4 Bxc4 Bh6 e4 O-O'.split(' '));
+    expect(store.coach.value.title).toBe('Your move');
+    expect(store.coach.value.lines.at(-1)).not.toMatch(/recapture/);
   });
 });

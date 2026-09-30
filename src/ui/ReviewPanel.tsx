@@ -102,7 +102,7 @@ export function ReviewPanel({
   const rows = visibleReviewClasses(counts);
 
   return (
-    <section class="review" aria-label="Game review" data-analysing={analysing ? '' : undefined}>
+    <section class="review" aria-label="Game Review" data-analysing={analysing ? '' : undefined}>
       <header class="review-head">
         {SIDES.map((c) => (
           <div key={c} class="review-side" data-color={c} data-you={c === playerColor ? '' : undefined}>

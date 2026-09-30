@@ -61,13 +61,28 @@ export function pairMoves(plies: Ply[]): MovePair[] {
 }
 
 /**
- * Horizontally scrolling row of numbered moves; keeps the current move centred in view (also when
+ * Scrolls `box` so that its current move (`aria-current`) is centered; without one, to the start
+ * (before the first move) or the end. Short hops animate when `smooth`; long jumps snap.
+ */
+function centerCurrent(box: HTMLElement, current: number, smooth: boolean): void {
+  const el = box.querySelector<HTMLElement>('[aria-current="true"]');
+  const max = box.scrollWidth - box.clientWidth;
+  const target = el ? el.offsetLeft + el.offsetWidth / 2 - box.clientWidth / 2 : current === 0 ? 0 : max;
+  const left = Math.max(0, Math.min(max, target));
+  const delta = Math.abs(box.scrollLeft - left);
+  if (delta > 1) box.scrollTo({ left, behavior: smooth && delta < box.clientWidth * 1.5 ? 'smooth' : 'auto' });
+}
+
+/**
+ * Horizontally scrolling row of numbered moves; keeps the current move centered in view (also when
  * the row changes width under it: icons appear as moves are classified, or for every move when a
- * review starts).
+ * review starts; and when the row itself gets wider or narrower, e.g. the phone is rotated).
  */
 export function MoveList({ plies, current, onSelect, showClassIcons, iconSet = 'notable' }: MoveListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const mounted = useRef(false);
+  const currentRef = useRef(current);
+  currentRef.current = current;
 
   const iconFor = (ply: Ply): MoveClass | null => {
     const cls = ply.classification?.cls;
@@ -80,17 +95,25 @@ export function MoveList({ plies, current, onSelect, showClassIcons, iconSet = '
   useEffect(() => {
     const box = scrollRef.current;
     if (!box) return;
-    const el = box.querySelector<HTMLElement>('[aria-current="true"]');
-    const max = box.scrollWidth - box.clientWidth;
-    const target = el ? el.offsetLeft + el.offsetWidth / 2 - box.clientWidth / 2 : current === 0 ? 0 : max;
-    const left = Math.max(0, Math.min(max, target));
-    const delta = Math.abs(box.scrollLeft - left);
-    if (delta > 1) {
-      // Animate short hops only; long jumps (e.g. back to the start) snap.
-      box.scrollTo({ left, behavior: mounted.current && delta < box.clientWidth * 1.5 ? 'smooth' : 'auto' });
-    }
+    // Animate short hops only (not on the first render); long jumps (e.g. back to the start) snap.
+    centerCurrent(box, current, mounted.current);
     mounted.current = true;
   }, [current, plies.length, iconKey]);
+
+  // A new width (rotation to portrait or landscape, a resized window) leaves the current move
+  // off-center, or out of view: center it again, at once.
+  useEffect(() => {
+    const box = scrollRef.current;
+    if (!box || typeof ResizeObserver === 'undefined') return;
+    let width = box.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (box.clientWidth === width) return;
+      width = box.clientWidth;
+      centerCurrent(box, currentRef.current, false);
+    });
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, []);
 
   // Desktop: let a vertical mouse wheel scroll the row sideways.
   const onWheel = (e: WheelEvent) => {

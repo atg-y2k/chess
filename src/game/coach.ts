@@ -2,6 +2,8 @@
  * Coach wording that does not need the engine: class labels and sentences, move labels
  * ("12. Nf3", "12… Nf6") and short, phase-aware playing tips.
  */
+import { Chess, type Square } from 'chess.js';
+import { see } from '../analysis/see';
 import type { Classification, Explanation, MoveClass } from '../analysis/types';
 import { PIECE_VALUES } from '../chess/utils';
 import { CLASS_META } from '../ui/ClassIcon';
@@ -138,6 +140,36 @@ export function coachTip(fen: string, plyCount: number, inCheck = false): string
   const endgame = pieceMaterial(fen) <= 26;
   const tips = endgame ? ENDGAME_TIPS : plyCount < 16 ? OPENING_TIPS : MIDDLEGAME_TIPS;
   return tips[Math.floor(plyCount / 2) % tips.length];
+}
+
+const PIECE_NAMES: Record<string, string> = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen' };
+
+/**
+ * The tip right after the opponent took one of your pieces, when you can take back on that square
+ * without losing material (static exchange, `see` >= 0, with some legal capture there): "Rocco just
+ * took your bishop on c1. Can you recapture?". Null when `last` was no capture by the opponent, or
+ * no recapture holds its own.
+ */
+export function recaptureTip(
+  fen: string,
+  last: Pick<Ply, 'uci' | 'color' | 'captured'> | null | undefined,
+  opponent: string,
+): string | null {
+  const piece = last?.captured ? PIECE_NAMES[last.captured] : undefined;
+  if (!last || !piece) return null;
+  let chess: Chess;
+  try {
+    chess = new Chess(fen);
+  } catch {
+    return null;
+  }
+  const me = chess.turn();
+  if (me === last.color) return null;
+  const to = last.uci.slice(2, 4) as Square;
+  const holds = chess
+    .moves({ verbose: true })
+    .some((m) => m.to === to && !!m.captured && see(fen, to, me, m.from) >= 0);
+  return holds ? `${opponent} just took your ${piece} on ${to}. Can you recapture?` : null;
 }
 
 /** Whether `text` names the move `san` as a whole word (check / mate signs ignored). */

@@ -11,7 +11,7 @@ import {
 import { engineModeLabel, formatGameDate, formatRatingDelta, recordOutcome, setLevelNote } from '../../src/ui/MenuSheet';
 import { LEVEL_BLURB, levelFor } from '../../src/ui/LevelPicker';
 import { STARTING_LEVELS } from '../../src/rating/rating';
-import { gameOverHeadline, gameOverReason } from '../../src/ui/GameOverSheet';
+import { gameOverHeadline, gameOverReason, gameOverScore } from '../../src/ui/GameOverSheet';
 
 const bot = (id: string, elo: number): BotPersona => ({ id, name: id, elo, emoji: 'x', color: '#000', tagline: '', greeting: '' });
 const BOTS = [bot('a', 100), bot('b', 700), bot('c', 3200)];
@@ -152,6 +152,11 @@ describe('GameOverSheet helpers', () => {
     expect(gameOverReason(o('1/2-1/2', null, 'Threefold repetition'), 'w', 'Bao')).toBe('by threefold repetition');
     expect(gameOverReason(o('1-0', 'w', 'Something odd'), 'w', 'Bao')).toBe('by something odd');
     expect(gameOverReason(o('1-0', 'w', ''), 'w', 'Bao')).toBe('');
+  });
+  it('the score is the result from White’s side, with who won (not "You 0 – 1 Bao" after a win as Black)', () => {
+    expect(gameOverScore(o('1-0', 'w', 'Checkmate'))).toEqual({ text: '1–0', note: 'White won' });
+    expect(gameOverScore(o('0-1', 'b', 'Resignation'))).toEqual({ text: '0–1', note: 'Black won' });
+    expect(gameOverScore(o('1/2-1/2', null, 'Stalemate'))).toEqual({ text: '½–½', note: 'Draw' });
   });
 });
 
