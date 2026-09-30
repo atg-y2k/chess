@@ -111,17 +111,39 @@ body {
   overflow: hidden;
   position: fixed;
   inset: 0;
+  /* No double-tap zoom, and taps fire without the 300 ms delay (see also src/ios.ts). */
+  touch-action: manipulation;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
 
+/*
+ * App shell: a fixed, full-screen flex column inside the safe areas (notch / Dynamic Island,
+ * home indicator, landscape side insets). It deliberately avoids 100vh/100dvh: in iOS 26
+ * standalone mode (viewport-fit=cover + black-translucent status bar) those come out short by the
+ * top inset, while `position: fixed; inset: 0` always covers the whole screen. Children size
+ * themselves with flex (e.g. `flex: 1; min-height: 0` plus their own scrolling).
+ */
 #app {
-  height: 100%;
-  height: 100dvh;
+  position: fixed;
+  inset: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
   padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+}
+
+/*
+ * The black-translucent status bar always draws white text. In the light theme of the installed
+ * app, keep a band in the dark theme colour (#1d1c1a, the manifest theme_color) behind it so the
+ * clock and battery stay readable.
+ */
+@media (display-mode: standalone) and (prefers-color-scheme: light) {
+  #app {
+    box-shadow: inset 0 var(--safe-top) 0 0 #1d1c1a;
+  }
 }
 
 button {

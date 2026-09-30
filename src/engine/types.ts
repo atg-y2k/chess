@@ -46,6 +46,11 @@ export interface AnalysisResult {
   done: boolean;
   /** True when the search was pre-empted by another search, stopped via AbortSignal, or the engine was terminated. */
   aborted?: boolean;
+  /**
+   * Set when the searched position has no legal moves (answered without the engine):
+   * `lines` is then empty, `bestMove` null, `depth` 0 and `done` true.
+   */
+  terminal?: 'checkmate' | 'stalemate';
 }
 
 export interface SearchOptions {
@@ -68,6 +73,8 @@ export interface SearchOptions {
 export interface EngineTransport {
   post(command: string): void;
   onLine(callback: (line: string) => void): void;
+  /** Optional: reports a crashed/unloadable engine (worker `error` event, child process exit). */
+  onError?(callback: (error: Error) => void): void;
   terminate(): void;
 }
 

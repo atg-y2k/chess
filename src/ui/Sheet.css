@@ -1,0 +1,262 @@
+/* Sheet: bottom sheet (backdrop + sliding panel) and shared content helpers for sheets. */
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay);
+  opacity: 0;
+  transition: opacity 0.32s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.sheet[data-state='open'] .sheet-backdrop {
+  opacity: 1;
+}
+.sheet[data-state='closing'] .sheet-backdrop {
+  transition-duration: 0.26s;
+}
+/* While sliding away, let taps reach the app underneath. */
+.sheet[data-state='closing'] {
+  pointer-events: none;
+}
+
+.sheet-panel {
+  /* Local surfaces: an inset grouped list sits one step off the sheet background. */
+  --sheet-bg: var(--surface);
+  --sheet-group: var(--surface-2);
+  --sheet-sep: color-mix(in srgb, var(--border) 75%, transparent);
+  --sheet-pad: 16px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 560px;
+  max-height: min(90dvh, calc(100dvh - var(--safe-top) - 8px));
+  background: var(--sheet-bg);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow:
+    0 -1px 0 color-mix(in srgb, var(--text) 8%, transparent),
+    0 -10px 40px rgba(0, 0, 0, 0.35);
+  outline: none;
+  transform: translate3d(0, 100%, 0);
+  transition: transform 0.44s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+.sheet[data-state='open'] .sheet-panel {
+  transform: translate3d(0, 0, 0);
+}
+.sheet[data-state='closing'] .sheet-panel {
+  transition-duration: 0.26s;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.9, 0.6);
+}
+.sheet[data-dragging] .sheet-panel,
+.sheet[data-dragging] .sheet-backdrop {
+  transition: none;
+}
+
+/* Header: handle + title + close. The whole strip is the drag area. */
+.sheet-head {
+  position: relative;
+  flex: none;
+  padding-top: 6px;
+  touch-action: none;
+  cursor: grab;
+}
+.sheet[data-dragging] .sheet-head {
+  cursor: grabbing;
+}
+.sheet-panel[data-scrolled] .sheet-head:not([data-hide-title]) {
+  box-shadow: 0 1px 0 var(--sheet-sep);
+}
+
+.sheet-handle {
+  width: 36px;
+  height: 5px;
+  margin: 0 auto;
+  border-radius: 3px;
+  background: var(--text-faint);
+  opacity: 0.55;
+}
+
+.sheet-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 6px 0 max(var(--sheet-pad), var(--safe-left));
+}
+/* Title hidden: only the handle takes space; the close button floats top-right. */
+.sheet-head[data-hide-title] {
+  padding-bottom: 14px;
+}
+.sheet-head[data-hide-title] .sheet-titlebar {
+  position: absolute;
+  top: 4px;
+  right: max(0px, var(--safe-right));
+  padding: 0 6px 0 0;
+}
+
+.sheet-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.sheet-close {
+  appearance: none;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.sheet-close-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  transition: transform 0.12s ease;
+}
+.sheet-close:active .sheet-close-icon {
+  transform: scale(0.9);
+}
+.sheet-close:focus-visible {
+  outline: none;
+}
+.sheet-close:focus-visible .sheet-close-icon {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.sheet-close svg {
+  stroke-width: 2.6;
+}
+
+.sheet-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px max(var(--sheet-pad), var(--safe-right)) calc(20px + var(--safe-bottom))
+    max(var(--sheet-pad), var(--safe-left));
+}
+.sheet-panel[data-has-foot] .sheet-body {
+  padding-bottom: 20px;
+}
+
+.sheet-foot {
+  position: relative;
+  flex: none;
+  padding: 10px max(var(--sheet-pad), var(--safe-right)) calc(12px + var(--safe-bottom))
+    max(var(--sheet-pad), var(--safe-left));
+  background: var(--sheet-bg);
+}
+/* Soft fade where the scrolling content passes under the footer. */
+.sheet-foot::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 20px;
+  background: linear-gradient(to top, var(--sheet-bg), color-mix(in srgb, var(--sheet-bg) 0%, transparent));
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- shared content helpers */
+
+.sheet-section + .sheet-section {
+  margin-top: 22px;
+}
+
+.sheet-label {
+  margin: 0 4px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* Inset grouped list (iOS Settings style). Rows are separated by a hairline. */
+.sheet-group {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--sheet-group);
+}
+
+.sheet-note {
+  display: flex;
+  gap: 7px;
+  margin: 8px 4px 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+.sheet-note svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin-top: 1px;
+}
+
+@media (prefers-color-scheme: light) {
+  .sheet-panel {
+    --sheet-bg: var(--bg);
+    --sheet-group: var(--surface);
+    --sheet-sep: var(--border);
+    box-shadow:
+      0 -1px 0 color-mix(in srgb, var(--text) 6%, transparent),
+      0 -10px 40px rgba(0, 0, 0, 0.18);
+  }
+  .sheet-close-icon {
+    background: var(--surface-3);
+  }
+}
+
+/* Wide screens (desktop / tablet): a floating card lifted off the bottom edge. */
+@media (min-width: 640px) and (min-height: 640px) {
+  .sheet {
+    padding-bottom: 24px;
+  }
+  .sheet-panel {
+    max-height: min(86dvh, 820px);
+    border-radius: var(--radius-lg);
+    transform: translate3d(0, calc(100% + 32px), 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet-panel,
+  .sheet[data-state='closing'] .sheet-panel {
+    transition-duration: 0.01s;
+  }
+}

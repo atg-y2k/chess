@@ -12,7 +12,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "build:openings": "node scripts/build-openings.mjs",
+    "build:openings:eval": "node scripts/build-openings.mjs --eval",
+    "calibrate": "CALIBRATE=1 vitest run tests/bot/calibration.slow.test.ts --reporter=verbose"
   },
   "dependencies": {
     "@lichess-org/chessground": "^10.4.1",

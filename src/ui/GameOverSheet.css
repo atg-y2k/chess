@@ -1,0 +1,366 @@
+/* GameOverSheet: result headline, players + score, rating change, next-step buttons. */
+
+/* A soft glow in the result colour across the top of the panel (behind header and body). */
+.gos {
+  --gos-tone: var(--text-faint);
+}
+.gos--win {
+  --gos-tone: var(--accent);
+}
+.gos--loss {
+  --gos-tone: var(--danger);
+}
+.gos::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 280px;
+  border-radius: inherit;
+  background: radial-gradient(70% 100% at 50% 0%, color-mix(in srgb, var(--gos-tone) 24%, transparent), transparent);
+  pointer-events: none;
+}
+.gos--loss::before {
+  opacity: 0.55;
+}
+.gos--draw::before {
+  opacity: 0.7;
+}
+
+.gos-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 2px;
+  text-align: center;
+}
+
+.gos-headline {
+  position: relative;
+  margin: 0;
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  animation: gos-rise 0.5s 0.08s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.gos-wrap[data-kind='win'] .gos-headline {
+  color: var(--accent);
+}
+
+.gos-reason {
+  position: relative;
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-dim);
+  animation: gos-rise 0.5s 0.14s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* ---------------------------------------------------------------- players + score */
+
+.gos-players {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  width: 100%;
+  max-width: 340px;
+  margin-top: 20px;
+}
+
+.gos-player {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.gos-player[data-loser] .gos-avatar {
+  opacity: 0.6;
+  filter: saturate(0.6);
+}
+
+.gos-avatar {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 6px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  box-shadow:
+    inset 0 -3px 0 rgba(0, 0, 0, 0.14),
+    0 0 0 3px var(--sheet-bg),
+    0 0 0 3px var(--sheet-bg);
+}
+.gos-player[data-winner] .gos-avatar {
+  box-shadow:
+    inset 0 -3px 0 rgba(0, 0, 0, 0.14),
+    0 0 0 3px var(--sheet-bg),
+    0 0 0 6px var(--accent);
+}
+.gos-avatar--you[data-c='w'] {
+  background: color-mix(in srgb, var(--eval-white) 88%, var(--accent));
+}
+.gos-avatar--you[data-c='b'] {
+  background: var(--eval-black);
+}
+.gos-emoji {
+  font-size: 36px;
+  line-height: 1;
+  transform: translateY(1px);
+}
+.gos-crown {
+  position: absolute;
+  top: -13px;
+  right: -6px;
+  font-size: 22px;
+  line-height: 1;
+  transform: rotate(18deg);
+  animation: gos-crown 0.5s 0.35s cubic-bezier(0.3, 1.5, 0.5, 1) both;
+}
+
+.gos-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 650;
+}
+.gos-sub {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.gos-score {
+  align-self: center;
+  margin-top: -28px;
+  padding: 0 4px;
+  font-size: 24px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- rating */
+
+.gos-rating {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 20px;
+  padding: 12px 14px 12px 16px;
+  border-radius: var(--radius);
+  background: var(--sheet-group);
+  text-align: left;
+}
+.gos-rating-label {
+  flex: 1 1 auto;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.gos-rating-change {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 17px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.gos-rating-before {
+  color: var(--text-faint);
+}
+.gos-rating-arrow {
+  color: var(--text-faint);
+}
+.gos-delta {
+  min-width: 52px;
+  padding: 4px 9px;
+  border-radius: 14px;
+  background: var(--surface-3);
+  font-size: 15px;
+  font-weight: 800;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  animation: gos-pop 0.45s 0.3s cubic-bezier(0.3, 1.5, 0.5, 1) both;
+}
+.gos-rating[data-sign='1'] .gos-delta {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+}
+.gos-rating[data-sign='-1'] .gos-delta {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.gos-rating--unrated {
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+}
+.gos-rating--unrated .gos-rating-label {
+  flex: none;
+  color: var(--text);
+}
+.gos-rating-note {
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+/* ---------------------------------------------------------------- actions */
+
+.gos-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 16px;
+}
+.gos-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding-left: 10px;
+  padding-right: 10px;
+  white-space: nowrap;
+  transition: transform 0.12s ease;
+}
+.gos-actions .btn:active {
+  transform: scale(0.98);
+}
+.gos-review {
+  min-height: 54px;
+  border-radius: var(--radius-lg);
+  font-size: 18px;
+  font-weight: 700;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.gos-actions-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.gos-secondary {
+  min-height: 50px;
+  border-radius: var(--radius-lg);
+  background: var(--sheet-group);
+  font-size: 16px;
+}
+.gos-actions .btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.gos-summary,
+.gos-next {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+/* Short landscape screens: result on the left, rating + actions on the right. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .gos-wrap {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: center;
+    gap: 20px;
+    /* Clear the floating close button (top-right). */
+    padding-top: 30px;
+  }
+  .gos-headline {
+    font-size: 26px;
+  }
+  .gos-reason {
+    font-size: 14px;
+  }
+  .gos-players {
+    margin-top: 12px;
+  }
+  .gos-avatar {
+    width: 52px;
+    height: 52px;
+  }
+  .gos-emoji {
+    font-size: 30px;
+  }
+  .gos-score {
+    margin-top: -24px;
+    font-size: 20px;
+  }
+  .gos-rating {
+    margin-top: 0;
+  }
+  .gos-actions {
+    margin-top: 10px;
+  }
+  .gos-review {
+    min-height: 50px;
+  }
+  .gos-secondary {
+    min-height: 46px;
+  }
+}
+
+@keyframes gos-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes gos-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+@keyframes gos-crown {
+  from {
+    opacity: 0;
+    transform: translateY(6px) rotate(0deg) scale(0.4);
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .gos-secondary {
+    background: var(--surface);
+    box-shadow: 0 0 0 1px var(--border);
+  }
+  .gos-avatar--you[data-c='w'] {
+    background: var(--surface);
+    box-shadow:
+      inset 0 0 0 1px var(--border),
+      0 0 0 3px var(--sheet-bg);
+  }
+  .gos-player[data-winner] .gos-avatar--you[data-c='w'] {
+    box-shadow:
+      inset 0 0 0 1px var(--border),
+      0 0 0 3px var(--sheet-bg),
+      0 0 0 6px var(--accent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gos-headline,
+  .gos-reason,
+  .gos-delta,
+  .gos-crown {
+    animation: none;
+  }
+}

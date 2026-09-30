@@ -4,6 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
     <title>Chess Coach</title>
+    <meta
+      name="description"
+      content="Play chess against Stockfish at any level, with a live evaluation bar and a coach that explains every move. Works offline."
+    />
+    <!-- Paint the right background before the CSS loads (no white flash in dark mode). -->
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#1d1c1a" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f4f1ec" media="(prefers-color-scheme: light)" />
+
+    <!-- Home Screen web app (iOS). The manifest link is added by vite-plugin-pwa at build time. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- Content runs under the status bar; src/styles/app.css pads #app with the safe-area insets. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Chess Coach" />
+    <meta name="format-detection" content="telephone=no" />
+
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png" />
   </head>
   <body>
     <div id="app"></div>

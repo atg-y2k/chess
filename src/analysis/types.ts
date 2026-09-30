@@ -60,4 +60,8 @@ export interface Explanation {
   bestLineSan?: string[];
   /** Arrows worth drawing on the board to illustrate the explanation. */
   arrows?: Arrow[];
+  /** Short topic of the explanation, e.g. "Fork", "Hanging piece", "Missed mate", "Opening principle". */
+  title?: string;
+  /** Machine-readable tags for what the text talks about, e.g. ["fork"], ["hanging"], ["allowsMate", "backRank"]. */
+  motifs?: string[];
 }
