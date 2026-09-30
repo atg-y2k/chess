@@ -1,0 +1,171 @@
+/*
+ * Global design tokens + base styles. Component styles live next to each component
+ * (e.g. src/ui/Board.css) and must only use these tokens for colours, radii and spacing.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg: #1d1c1a;
+  --surface: #282623;
+  --surface-2: #33302c;
+  --surface-3: #403c37;
+  --border: #45403a;
+  --overlay: rgba(0, 0, 0, 0.55);
+
+  /* Text */
+  --text: #f3f0ea;
+  --text-dim: #b7afa4;
+  --text-faint: #857d73;
+
+  /* Accent + semantic */
+  --accent: #5fae6e;
+  --accent-strong: #4b9a5b;
+  --accent-text: #0e1f12;
+  --danger: #d9534f;
+  --warning: #f0b43c;
+
+  /* Board */
+  --board-light: #eeeed2;
+  --board-dark: #769656;
+  --arrow-best: #3fa45b;
+  --arrow-alt: #3f86c4;
+  --arrow-threat: #d9534f;
+  --arrow-played: #f0b43c;
+
+  /* Eval bar */
+  --eval-white: #f3f1ec;
+  --eval-black: #3b3834;
+
+  /* Move classification colours */
+  --cls-brilliant: #1fbfa2;
+  --cls-great: #5a8fc4;
+  --cls-best: #6fb04b;
+  --cls-excellent: #8fbf4a;
+  --cls-good: #93ad8b;
+  --cls-book: #a98763;
+  --cls-forced: #95a1a6;
+  --cls-inaccuracy: #efc04e;
+  --cls-mistake: #e88a2a;
+  --cls-miss: #ee6b55;
+  --cls-blunder: #d23a33;
+
+  /* Shape */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --gap: 8px;
+  --pad: 12px;
+
+  /* Safe areas (iPhone notch / Dynamic Island / home indicator) */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f4f1ec;
+    --surface: #ffffff;
+    --surface-2: #efebe5;
+    --surface-3: #e2ddd5;
+    --border: #d8d1c7;
+    --overlay: rgba(0, 0, 0, 0.35);
+    --text: #22201d;
+    --text-dim: #5d574f;
+    --text-faint: #8d867c;
+    --accent-text: #ffffff;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+body {
+  /* Stop iOS rubber-banding the whole app while dragging pieces. */
+  overflow: hidden;
+  position: fixed;
+  inset: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#app {
+  height: 100%;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  touch-action: manipulation;
+}
+
+/* Shared button styles */
+.btn {
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  min-height: 44px;
+  background: var(--surface-3);
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn:active {
+  filter: brightness(0.9);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+}
+.btn-ghost {
+  background: transparent;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

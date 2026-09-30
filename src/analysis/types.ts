@@ -1,0 +1,63 @@
+/** Shared analysis / coaching contracts. */
+
+export type MoveClass =
+  | 'brilliant'
+  | 'great'
+  | 'best'
+  | 'excellent'
+  | 'good'
+  | 'book'
+  | 'forced'
+  | 'inaccuracy'
+  | 'mistake'
+  | 'miss'
+  | 'blunder';
+
+/** Ordered for display in review summaries (best to worst). */
+export const MOVE_CLASS_ORDER: MoveClass[] = [
+  'brilliant',
+  'great',
+  'best',
+  'excellent',
+  'good',
+  'book',
+  'forced',
+  'inaccuracy',
+  'mistake',
+  'miss',
+  'blunder',
+];
+
+export interface Classification {
+  cls: MoveClass;
+  /** Expected score (0..1) for the mover before the move, assuming best play. */
+  winBefore: number;
+  /** Expected score (0..1) for the mover after the played move. */
+  winAfter: number;
+  /** max(0, winBefore - winAfter). */
+  winLoss: number;
+  /** Per-move accuracy 0..100. */
+  accuracy: number;
+  bestMoveUci: string | null;
+  bestMoveSan: string | null;
+  playedMoveSan: string;
+}
+
+export type ArrowBrush = 'best' | 'alt' | 'threat' | 'played';
+
+export interface Arrow {
+  from: string; // e.g. "e2"
+  to: string; // e.g. "e4"
+  brush: ArrowBrush;
+}
+
+export interface Explanation {
+  /** One short sentence, e.g. "This hangs your knight on f3." */
+  headline: string;
+  /** 0-3 further short sentences. */
+  details: string[];
+  /** Best continuation in SAN, if relevant (up to ~6 plies). */
+  bestLineSan?: string[];
+  /** Arrows worth drawing on the board to illustrate the explanation. */
+  arrows?: Arrow[];
+}
