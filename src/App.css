@@ -1,0 +1,473 @@
+/*
+ * Game screen layout (src/App.tsx). The components style themselves; this file only places them.
+ *
+ * `.app` is a size container, so the board can be sized from the space actually available:
+ * portrait = as wide as the screen unless the height runs out; landscape / desktop = as tall as
+ * the screen, with the panels in a column on the right.
+ */
+
+.app {
+  /* Fixed heights of the rows around the board (the coach panel absorbs whatever is left). */
+  --app-edge: 4px;
+  --app-bar: 0px;
+  --app-strip-h: 44px;
+  --app-graph-h: 0px;
+  --app-moves-h: 44px;
+  --app-tools-h: 57px;
+  /* Smallest coach slot we reserve: a collapsed one-line coach. */
+  --app-coach-min: 52px;
+  --app-fixed-h: calc(
+    2 * var(--app-strip-h) + var(--app-graph-h) + var(--app-moves-h) + var(--app-tools-h) + var(--app-coach-min)
+  );
+  /* Board edge length (substituted where used, so cq units resolve against .app). */
+  --app-board: min(100cqw - 2 * var(--app-edge) - var(--app-bar), 100cqh - var(--app-fixed-h), 820px);
+
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  container: app / size;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto auto;
+  grid-template-areas:
+    'top'
+    'board'
+    'bottom'
+    'panel'
+    'graph'
+    'moves'
+    'tools';
+}
+.app[data-evalbar] {
+  /* Eval bar (16px) + gap. */
+  --app-bar: 20px;
+}
+.app[data-graph] {
+  --app-graph-h: 38px;
+}
+
+/* ---------------------------------------------------------------- players */
+
+.app-player {
+  position: relative;
+  width: calc(var(--app-board) + var(--app-bar));
+  max-width: 100%;
+  justify-self: center;
+  min-width: 0;
+}
+.app-player--top {
+  grid-area: top;
+}
+.app-player--bottom {
+  grid-area: bottom;
+}
+.app-player .pstrip {
+  padding-left: 2px;
+  padding-right: 2px;
+}
+
+/* ---------------------------------------------------------------- board */
+
+.app-board {
+  grid-area: board;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 var(--app-edge);
+  min-width: 0;
+}
+.app-board-cell {
+  position: relative;
+  flex: none;
+  width: var(--app-board);
+}
+/* The board snaps to whole device pixels per square (up to ~3px narrower than its cell): centre it. */
+.app-board-cell > .board-host > .board {
+  margin-inline: auto;
+}
+
+/* "Back to game" while browsing earlier moves: on the right of the bottom player strip. */
+.app-chip {
+  appearance: none;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  padding: 0 12px 0 16px;
+  border: 0;
+  border-radius: 18px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.35),
+    0 0 0 1px color-mix(in srgb, #000 12%, transparent);
+  transform: translateY(-50%);
+  cursor: pointer;
+  animation: app-chip-in 0.22s cubic-bezier(0.3, 0.7, 0.2, 1.2) both;
+}
+.app-chip::after {
+  /* 44px tap target. */
+  content: '';
+  position: absolute;
+  inset: -4px -2px;
+}
+.app-chip:active {
+  filter: brightness(0.92);
+}
+.app-chip:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+@keyframes app-chip-in {
+  from {
+    opacity: 0;
+    transform: translate(8px, -50%) scale(0.92);
+  }
+}
+
+/* ---------------------------------------------------------------- coach / review panel */
+
+.app-panel {
+  grid-area: panel;
+  container: panel / inline-size;
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0 2px;
+}
+.app-panel > .coach {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 260px;
+}
+.app-panel > .coach--collapsed {
+  flex: none;
+}
+.app-panel:has(> .coach--collapsed) {
+  justify-content: center;
+}
+.app-panel > .review {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 420px;
+}
+
+/* Short phones: the collapsed coach can float its full bubble over the board. */
+.app-panel[data-peek] {
+  z-index: 20;
+}
+.app-panel[data-peek] > .coach {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  min-height: 132px;
+  max-height: min(300px, 62cqh);
+  padding: 12px var(--gap) 10px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--bg);
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
+  animation: app-peek-in 0.22s cubic-bezier(0.3, 0.7, 0.2, 1) both;
+}
+@keyframes app-peek-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+/* On a short screen the review summary may be shorter than its default minimum. */
+.app-panel[data-tight] {
+  justify-content: center;
+}
+.app-panel[data-float] > .review {
+  /* Not enough room below the board: the summary floats over it (Prev / Next / Report put it away). */
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 2px;
+  z-index: 20;
+  min-height: 0;
+  max-height: min(440px, 72cqh);
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
+  animation: app-peek-in 0.22s cubic-bezier(0.3, 0.7, 0.2, 1) both;
+}
+
+/* Narrow side column (landscape phones): the review header drops its "Accuracy" captions. */
+@container panel (max-width: 360px) {
+  .review-sub {
+    display: none;
+  }
+  .review-acc {
+    min-width: 50px;
+    font-size: 17px;
+  }
+}
+
+/* ---------------------------------------------------------------- graph, moves, toolbar */
+
+.app-graph {
+  grid-area: graph;
+  padding: 3px 10px 3px;
+  min-width: 0;
+}
+.app-moves {
+  grid-area: moves;
+  min-width: 0;
+}
+.app-tools {
+  grid-area: tools;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------- landscape / desktop: two columns */
+
+@media (min-aspect-ratio: 5/4) {
+  .app {
+    --app-side: clamp(280px, 34cqw, 420px);
+    --app-board: min(100cqh - 2 * var(--app-edge), 100cqw - var(--app-side) - var(--app-bar) - 3 * var(--app-edge) - 12px, 900px);
+    grid-template-columns: auto minmax(0, var(--app-side));
+    grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
+    grid-template-areas:
+      'board top'
+      'board panel'
+      'board graph'
+      'board moves'
+      'board bottom'
+      'board tools';
+    justify-content: center;
+    align-content: center;
+    column-gap: 12px;
+    padding: 0 var(--app-edge);
+  }
+  .app-board {
+    grid-row: 1 / -1;
+    align-self: center;
+    padding: var(--app-edge) 0;
+  }
+  .app-player {
+    width: auto;
+    justify-self: stretch;
+  }
+  .app-tools .toolbar {
+    border-top: 0;
+  }
+  .app-panel > .review {
+    max-height: none;
+  }
+}
+
+/* ---------------------------------------------------------------- boot splash */
+
+.app-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+  background: var(--bg);
+  transition: opacity 0.4s ease;
+}
+.app-splash[data-leaving] {
+  opacity: 0;
+  pointer-events: none;
+}
+.app-splash-logo {
+  width: 88px;
+  height: 88px;
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  animation: app-splash-pop 0.5s cubic-bezier(0.3, 0.7, 0.2, 1.2) both;
+}
+.app-splash-name {
+  font-size: 24px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+.app-splash-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+  font-size: 14px;
+  color: var(--text-dim);
+  animation: app-fade-in 0.4s ease 0.35s both;
+}
+@keyframes app-splash-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+@keyframes app-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.app-spinner {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2.5px solid var(--surface-3);
+  border-top-color: var(--accent);
+  animation: app-rot 0.8s linear infinite;
+}
+@keyframes app-rot {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------------------------------------------------------- engine error */
+
+.app-error {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(var(--safe-top) + 16px) calc(var(--safe-right) + 16px) calc(var(--safe-bottom) + 16px)
+    calc(var(--safe-left) + 16px);
+  background: var(--bg);
+  overflow-y: auto;
+}
+.app-error-card {
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 20px 20px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  text-align: center;
+}
+.app-error-icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface-2));
+  color: var(--danger);
+  font-size: 36px;
+  line-height: 1;
+}
+.app-error-title {
+  margin: 4px 0 0;
+  font-size: 19px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+.app-error-text {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 15px;
+}
+.app-error-detail {
+  width: 100%;
+  font-size: 13px;
+  color: var(--text-faint);
+  text-align: left;
+}
+.app-error-detail summary {
+  cursor: pointer;
+  text-align: center;
+  padding: 4px;
+}
+.app-error-detail code {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.app-error-retry {
+  width: 100%;
+  margin-top: 6px;
+  min-height: 50px;
+  font-size: 16px;
+}
+.app-error-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+/* ---------------------------------------------------------------- toast */
+
+.app-toast-host {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--safe-bottom) + 76px);
+  z-index: 120;
+  display: flex;
+  justify-content: center;
+  padding: 0 16px;
+  pointer-events: none;
+}
+.app-toast {
+  max-width: 100%;
+  padding: 10px 16px;
+  border-radius: 20px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  animation: app-toast 2.4s ease both;
+}
+@keyframes app-toast {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+  8%,
+  88% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-chip,
+  .app-panel[data-peek] > .coach,
+  .app-splash-logo,
+  .app-splash-status {
+    animation: none;
+  }
+  .app-spinner {
+    animation-duration: 2s;
+  }
+}

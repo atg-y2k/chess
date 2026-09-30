@@ -329,8 +329,6 @@
 }
 
 /* Light theme: pale class colours need more contrast as text. */
-@media (prefers-color-scheme: light) {
-  .review {
-    --tone-mix: 72%;
-  }
+:root[data-theme='light'] .review {
+  --tone-mix: 72%;
 }

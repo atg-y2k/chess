@@ -186,10 +186,8 @@
   }
 }
 
-@media (prefers-color-scheme: light) {
-  .pstrip {
-    --pstrip-halo: transparent;
-  }
+:root[data-theme='light'] .pstrip {
+  --pstrip-halo: transparent;
 }
 
 /* Captured piece art: cburnett set (GPL, same as chessground's default), kings omitted. */

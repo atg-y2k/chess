@@ -68,20 +68,23 @@
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
-    --bg: #f4f1ec;
-    --surface: #ffffff;
-    --surface-2: #efebe5;
-    --surface-3: #e2ddd5;
-    --border: #d8d1c7;
-    --overlay: rgba(0, 0, 0, 0.35);
-    --text: #22201d;
-    --text-dim: #5d574f;
-    --text-faint: #8d867c;
-    --accent-text: #ffffff;
-  }
+/*
+ * Light theme. The resolved theme is always set on <html data-theme> (src/theme.ts, plus a tiny
+ * inline script in index.html so the first paint is right); the user picks Dark (default), Light
+ * or Automatic (follows iOS) in the menu.
+ */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f1ec;
+  --surface: #ffffff;
+  --surface-2: #efebe5;
+  --surface-3: #e2ddd5;
+  --border: #d8d1c7;
+  --overlay: rgba(0, 0, 0, 0.35);
+  --text: #22201d;
+  --text-dim: #5d574f;
+  --text-faint: #8d867c;
+  --accent-text: #ffffff;
 }
 
 *,
@@ -140,8 +143,8 @@ body {
  * app, keep a band in the dark theme colour (#1d1c1a, the manifest theme_color) behind it so the
  * clock and battery stay readable.
  */
-@media (display-mode: standalone) and (prefers-color-scheme: light) {
-  #app {
+@media (display-mode: standalone) {
+  :root[data-theme='light'] #app {
     box-shadow: inset 0 var(--safe-top) 0 0 #1d1c1a;
   }
 }

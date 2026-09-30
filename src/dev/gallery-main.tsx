@@ -4,6 +4,11 @@
  */
 import { render } from 'preact';
 import '../styles/app.css';
+import { watchSystemTheme } from '../theme';
+
+// Galleries follow the OS colour scheme (emulate it to check both themes); `?theme=dark|light` forces one.
+const forced = new URLSearchParams(location.search).get('theme');
+watchSystemTheme(() => (forced === 'dark' || forced === 'light' ? forced : 'system'));
 
 const galleries = import.meta.glob<{ default: () => preact.JSX.Element }>('./*.gallery.tsx');
 

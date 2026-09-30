@@ -122,10 +122,8 @@
   transform: translateX(16px);
 }
 
-@media (prefers-color-scheme: light) {
-  .toggle-track {
-    --toggle-off: var(--surface-3);
-  }
+:root[data-theme='light'] .toggle-track {
+  --toggle-off: var(--surface-3);
 }
 
 @media (prefers-reduced-motion: reduce) {

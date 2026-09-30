@@ -337,23 +337,21 @@
   }
 }
 
-@media (prefers-color-scheme: light) {
-  .gos-secondary {
-    background: var(--surface);
-    box-shadow: 0 0 0 1px var(--border);
-  }
-  .gos-avatar--you[data-c='w'] {
-    background: var(--surface);
-    box-shadow:
-      inset 0 0 0 1px var(--border),
-      0 0 0 3px var(--sheet-bg);
-  }
-  .gos-player[data-winner] .gos-avatar--you[data-c='w'] {
-    box-shadow:
-      inset 0 0 0 1px var(--border),
-      0 0 0 3px var(--sheet-bg),
-      0 0 0 6px var(--accent);
-  }
+:root[data-theme='light'] .gos-secondary {
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+}
+:root[data-theme='light'] .gos-avatar--you[data-c='w'] {
+  background: var(--surface);
+  box-shadow:
+    inset 0 0 0 1px var(--border),
+    0 0 0 3px var(--sheet-bg);
+}
+:root[data-theme='light'] .gos-player[data-winner] .gos-avatar--you[data-c='w'] {
+  box-shadow:
+    inset 0 0 0 1px var(--border),
+    0 0 0 3px var(--sheet-bg),
+    0 0 0 6px var(--accent);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -56,6 +56,7 @@ export function Sheet({ open, onClose, title, children, footer, hideTitle = fals
   const backdropRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const drag = useRef<DragState | null>(null);
+  const backdropPressed = useRef(false);
   const prevFocus = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -229,11 +230,25 @@ export function Sheet({ open, onClose, title, children, footer, hideTitle = fals
     if (panel && panel.hasAttribute('data-scrolled') !== scrolled) panel.toggleAttribute('data-scrolled', scrolled);
   };
 
+  // Only a tap that also started on the backdrop closes the sheet. A tap that opened the sheet
+  // (e.g. the promotion that mates, handled on pointerdown) ends with a click on the new backdrop.
+  const onBackdropClick = () => {
+    const pressed = backdropPressed.current;
+    backdropPressed.current = false;
+    if (pressed) onCloseRef.current();
+  };
+
   const state = phase === 'open' ? 'open' : phase === 'closing' ? 'closing' : 'closed';
 
   return (
     <div class="sheet" ref={rootRef} data-state={state}>
-      <div class="sheet-backdrop" ref={backdropRef} aria-hidden="true" onClick={() => onCloseRef.current()} />
+      <div
+        class="sheet-backdrop"
+        ref={backdropRef}
+        aria-hidden="true"
+        onPointerDown={() => (backdropPressed.current = true)}
+        onClick={onBackdropClick}
+      />
       <div
         class={cls ? `sheet-panel ${cls}` : 'sheet-panel'}
         ref={panelRef}

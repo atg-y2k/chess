@@ -270,10 +270,8 @@
 }
 
 /* Light theme: pale class colours (inaccuracy yellow, good green) need more contrast as text. */
-@media (prefers-color-scheme: light) {
-  .coach[data-cls] {
-    --coach-tone-text: color-mix(in srgb, var(--coach-tone) 72%, var(--text));
-  }
+:root[data-theme='light'] .coach[data-cls] {
+  --coach-tone-text: color-mix(in srgb, var(--coach-tone) 72%, var(--text));
 }
 
 @media (prefers-reduced-motion: reduce) {

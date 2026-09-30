@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
 import type { GameSettings } from '../game/types';
 import type { GameRecord, PlayerProfile } from '../rating/types';
+import type { ThemePref } from '../theme';
 import { IconChart, IconCoach, IconEye, IconFlag, IconFlip, IconPlus, IconShare, IconSound } from './icons';
 import { Sheet } from './Sheet';
 import { Toggle } from './Toggle';
@@ -24,6 +25,9 @@ export interface MenuSheetProps {
   onClose: () => void;
   /** Optional personas, to show avatars in the recent-games list (matched by `botName`). */
   bots?: BotPersona[];
+  /** Colour theme preference; with `onThemeChange` an "Appearance" picker is shown. */
+  theme?: ThemePref;
+  onThemeChange?: (theme: ThemePref) => void;
 }
 
 /** How many games the "Recent games" list shows. */
@@ -77,9 +81,12 @@ export function MenuSheet({
   onNewGame,
   onClose,
   bots,
+  theme,
+  onThemeChange,
 }: MenuSheetProps) {
   const [confirming, setConfirming] = useState(false);
   const confirmId = useId();
+  const themeLabelId = useId();
 
   // Never reopen in the confirm state; leave it if resigning becomes impossible.
   useEffect(() => {
@@ -172,6 +179,15 @@ export function MenuSheet({
         </div>
       </section>
 
+      {theme && onThemeChange && (
+        <section class="sheet-section">
+          <h3 class="sheet-label" id={themeLabelId}>
+            Appearance
+          </h3>
+          <ThemePicker labelledBy={themeLabelId} value={theme} onChange={onThemeChange} />
+        </section>
+      )}
+
       <section class="sheet-section">
         <h3 class="sheet-label">Your stats</h3>
         <ProfileCard profile={profile} />
@@ -227,6 +243,51 @@ function ActionTile({ id, label, icon, onClick, disabled, danger, pressed }: Act
       </span>
       <span class="menu-tile-label">{label}</span>
     </button>
+  );
+}
+
+const THEMES: { value: ThemePref; label: string }[] = [
+  { value: 'dark', label: 'Dark' },
+  { value: 'light', label: 'Light' },
+  { value: 'system', label: 'Automatic' },
+];
+
+/** Three-way segmented control (radio group) for the colour theme. */
+function ThemePicker({
+  value,
+  onChange,
+  labelledBy,
+}: {
+  value: ThemePref;
+  onChange: (t: ThemePref) => void;
+  labelledBy: string;
+}) {
+  const index = Math.max(0, THEMES.findIndex((t) => t.value === value));
+  const onKeyDown = (e: KeyboardEvent) => {
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    onChange(THEMES[(index + step + THEMES.length) % THEMES.length].value);
+  };
+  return (
+    <div class="menu-theme" role="radiogroup" aria-labelledby={labelledBy} onKeyDown={onKeyDown}>
+      <span class="menu-theme-thumb" style={{ transform: `translateX(${index * 100}%)` }} aria-hidden="true" />
+      {THEMES.map((t) => (
+        <button
+          key={t.value}
+          type="button"
+          role="radio"
+          class="menu-theme-opt"
+          data-theme-opt={t.value}
+          aria-checked={t.value === value ? 'true' : 'false'}
+          tabIndex={t.value === value ? 0 : -1}
+          onClick={() => onChange(t.value)}
+        >
+          <span class="menu-theme-swatch" data-swatch={t.value} aria-hidden="true" />
+          {t.label}
+        </button>
+      ))}
+    </div>
   );
 }
 

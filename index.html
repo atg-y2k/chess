@@ -12,6 +12,18 @@
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#1d1c1a" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#f4f1ec" media="(prefers-color-scheme: light)" />
+    <!-- Resolve the colour theme before the first paint (same logic as src/theme.ts). -->
+    <script>
+      (function () {
+        var t = 'dark';
+        try {
+          var v = localStorage.getItem('chesscoach.theme');
+          if (v === 'light' || v === 'dark') t = v;
+          else if (v === 'system' && matchMedia('(prefers-color-scheme: light)').matches) t = 'light';
+        } catch (e) {}
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
 
     <!-- Home Screen web app (iOS). The manifest link is added by vite-plugin-pwa at build time. -->
     <meta name="mobile-web-app-capable" content="yes" />

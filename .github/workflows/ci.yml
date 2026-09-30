@@ -1,5 +1,6 @@
 # Checks pull requests and work branches: unit tests, typecheck + production build, and the
-# Playwright PWA smoke test (manifest, service worker, offline reload, engine files).
+# Playwright end-to-end tests (PWA shell: manifest, service worker, offline reload, engine files;
+# game: playing through the UI with the real engine, review, and the ?enginetest page).
 # Pushes to main are checked by deploy.yml, which runs the same tests before publishing.
 name: CI
 
@@ -56,8 +57,11 @@ jobs:
       - name: Install Chromium for Playwright
         run: npx playwright install --with-deps chromium
 
-      - name: Playwright PWA tests
+      - name: Playwright e2e tests
         run: npx playwright test # builds with vite and serves it with vite preview (playwright.config.ts)
+        env:
+          # Fail if the app does not register its service worker itself (src/main.tsx).
+          E2E_REQUIRE_APP_SW: '1'
 
       - name: Upload Playwright report
         if: failure()

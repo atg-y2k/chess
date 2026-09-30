@@ -14,8 +14,12 @@ no server and no account, and it works offline once installed.
 
 ```
 src/
-  main.tsx                 bootstrap (render <App/>, register service worker)
-  App.tsx                  screen layout + wiring of store/controller to components
+  main.tsx                 bootstrap: iOS guards, service worker, visibility -> controller; renders <App/>
+                           (or the engine self-test page with ?enginetest) and calls controller.boot()
+  App.tsx / App.css        screen layout + wiring of store/controller to components (see "App shell")
+  theme.ts                 colour theme preference (dark default / light / system) -> <html data-theme>
+  clipboard.ts             copyText() with a legacy fallback (PGN export, self-test log)
+  pwa.ts / ios.ts          service-worker registration with a deferred reload; iOS zoom guards + first-tap hook
   styles/app.css           global design tokens (colours, radii, safe areas) + .btn styles
   chess/utils.ts           small shared helpers (fenKey, sideToMove, toWhitePov, uciToSan, pvToSan, material, capturedPieces)
   engine/
@@ -23,13 +27,18 @@ src/
     uci.ts                 pure UCI line parsing
     StockfishEngine.ts     ChessEngine implementation over an EngineTransport (search queue, stop/bestmove race handling)
     workerTransport.ts     EngineTransport over a Web Worker running public/engine/stockfish-19-lite-single.js
+    EngineMux.ts           one worker shared by bot + analysis (single-engine fallback)
+    createEngines.ts       creates the two engines (or the shared one)
     AnalysisService.ts     cached, prioritised analysis on top of one ChessEngine (ensure / watch)
+    selfTest.ts            diagnostics run by the ?enginetest page
   analysis/
     types.ts               CONTRACT: MoveClass, Classification, Arrow, Explanation
     winprob.ts             centipawns/mate -> win probability, score formatting
     classify.ts            chess.com-style move classification
+    sacrifice.ts           sacrifice detection for Brilliant
     accuracy.ts            per-move and per-game accuracy (lichess formulas)
     see.ts                 attackers / static exchange evaluation helpers
+    motifs.ts              tactic / threat detectors (fork, pin, hanging, mate threats, ...)
     explain.ts             plain-English coaching explanations
   bot/
     types.ts               CONTRACT: BotPersona, OpeningInfo, BotMove
@@ -43,11 +52,15 @@ src/
     rating.ts              Elo maths + profile persistence (localStorage)
   game/
     types.ts               CONTRACT: Ply, GameSettings, GameOutcome, Color
-    store.ts               app state as signals
-    controller.ts          game flow: player move -> coach -> bot move; analysis orchestration
+    store.ts               app state as signals + computed view models (one per component)
+    controller.ts          GameController: player move -> coach -> bot move; analysis orchestration, review
+    coach.ts               coach wording that needs no engine (class sentences, move labels, tips)
+    review.ts              game summary (accuracy, counts, key moments)
+    pgn.ts                 PGN export with [%eval] comments and NAGs
     persistence.ts         save/restore the in-progress game + settings
     sound.ts               synthesized move sounds (Web Audio, unlocked on first tap)
   ui/                      presentational components; each has its own CSS file next to it
+                           (SelfTestPage.tsx is the ?enginetest page)
   dev/                     component gallery pages (dev only: /gallery.html?g=<name>)
 ```
 
@@ -55,7 +68,8 @@ src/
 - Contracts live in `*/types.ts`. Do not change their exported shapes without updating every user.
 - Pure logic (`engine/uci.ts`, `analysis/*`, `bot/strength.ts`, `rating/rating.ts`) has **no DOM access**. It is unit-tested with Vitest in node (`npm test`).
 - UI components are **presentational**: they take props and emit callbacks, and never import the store or controller.
-- Colours must come from the CSS variables in `src/styles/app.css`.
+- Colours must come from the CSS variables in `src/styles/app.css`. Light-theme overrides are written
+  as `:root[data-theme='light'] …` (never `prefers-color-scheme`), because the theme is a user choice.
 
 ## Engine design
 
@@ -69,7 +83,8 @@ src/
   - `ensure(fen, {minDepth, multiPv})`: high priority, cached by `fenKey`. It pre-empts live analysis,
     then live analysis resumes.
   - `watch(fen)`: live, depth-capped analysis of the current position, with streaming updates to subscribers.
-  - Analysis pauses when the page is hidden.
+  - Analysis pauses when the page is hidden: the controller calls `setPaused()` from
+    `onVisibilityChange` (AnalysisService does not listen to visibility itself).
 
 ## Module APIs (the integration layer codes against these)
 
@@ -122,8 +137,9 @@ export function isBookMove(fenBefore: string, uci: string, fenAfter: string): bo
 // analysis/winprob.ts  (all probabilities 0..1)
 export function cpToWin(cp: number): number;              // lichess logistic, k = 0.00368208
 export function scoreToWin(score: Score): number;         // POV of the side the score belongs to; mate -> 1 / 0
-export function whiteBarFraction(scoreWhite: Score): number; // eval-bar fill for White
-export function formatScore(scoreWhite: Score): string;   // "+1.3", "-0.4", "0.0", "M3", "-M2", "1-0"/"0-1" when mated
+export function whiteBarFraction(scoreWhite: Score, sideToMove?: Color): number; // eval-bar fill for White
+export function formatScore(scoreWhite: Score, sideToMove?: Color): string; // "+1.3", "-0.4", "0.0", "M3", "-M2", "1-0"/"0-1" when mated
+                                                          // (pass sideToMove: a JSON round trip loses the sign of mate 0)
 export function negateScore(s: Score): Score;
 // analysis/accuracy.ts
 export function moveAccuracy(winBefore: number, winAfter: number): number; // 0..100
@@ -162,8 +178,14 @@ export function requestPersistentStorage(): Promise<boolean>;
 export type SoundKind = 'move' | 'capture' | 'check' | 'castle' | 'promote' | 'gameStart' | 'gameEnd' | 'illegal' | 'notify';
 export function unlockAudio(): void; export function setSoundEnabled(on: boolean): void; export function playSound(kind: SoundKind): void;
 // pwa.ts / ios.ts
-export function registerServiceWorker(opts: { canReloadNow: () => boolean }): void;
-export function installIosGuards(): void; // gesturestart/dblclick zoom guards, audio unlock on first touch
+export function registerServiceWorker(opts: { canReloadNow: () => boolean; onOfflineReady?: () => void }): void;
+/** gesturestart/double-tap zoom guards; onFirstGesture runs inside the first tap (unlockAudio). Returns an uninstaller. */
+export function installIosGuards(opts?: { onFirstGesture?: () => void | boolean; persistStorage?: boolean | 'auto' }): () => void;
+// theme.ts
+export type ThemePref = 'dark' | 'light' | 'system';
+export function loadTheme(): ThemePref; export function saveTheme(t: ThemePref): void;
+export function applyTheme(t: ThemePref): 'dark' | 'light';          // sets <html data-theme>
+export function watchSystemTheme(get: () => ThemePref): () => void;  // re-applies when iOS switches appearance
 ```
 
 ## Scores & probabilities
@@ -275,8 +297,9 @@ interface PlayerStripProps {
 ### Sheet.tsx (base) and sheets
 `Sheet({ open, onClose, title, children })` is a bottom sheet with backdrop, safe-area padding, and swipe/tap-outside to close.
 - `NewGameSheet({ open, initial: GameSettings, playerRating: number, bots: BotPersona[], onStart(settings), onClose })`: bot picker grid, custom Elo slider 100..3200 (step 50), colour choice (white / random / black), toggles (coach, eval bar, best-move arrows, sound, takebacks), and "Match my rating" (adaptive).
-- `MenuSheet({ open, settings: GameSettings, profile: PlayerProfile, canResign: boolean, onChange(partial), onResign, onExportPgn, onFlip, onNewGame, onClose })`: in-game toggles, plus profile stats and recent games.
-- `GameOverSheet({ open, outcome: GameOutcome, playerColor, botName, ratingChange?: { before: number; after: number; rated: boolean }, onReview, onRematch, onNewGame, onClose })`.
+- `MenuSheet({ open, settings: GameSettings, profile: PlayerProfile, canResign: boolean, onChange(partial), onResign, onExportPgn, onFlip, onNewGame, onClose, bots?, theme?, onThemeChange? })`: in-game toggles, the Appearance picker (with `theme` + `onThemeChange`), plus profile stats and recent games. Its callbacks do not close the sheet; App does.
+- `GameOverSheet({ open, outcome: GameOutcome, playerColor, botName, ratingChange?: { before: number; after: number; rated: boolean }, onReview, onRematch, onNewGame, onClose, botEmoji?, botColor?, botElo? })`.
+- `SelfTestPage({ run?, copy? })`: the `?enginetest` page (live log, PASS / FAIL, Copy log, Run again).
 
 ### ReviewPanel.tsx
 ```ts
@@ -292,20 +315,79 @@ interface ReviewPanelProps {
 }
 ```
 
-## Screen layout (iPhone 15 Pro portrait, 393×852 pt)
+## App shell (App.tsx) and the controller
 
-From top to bottom, inside the safe areas:
-1. Opponent `PlayerStrip`.
-2. Eval bar + board. The board takes the full width minus the eval bar.
-3. Player `PlayerStrip`.
-4. `CoachPanel`.
-5. `EvalGraph` (compact).
-6. `MoveList`.
-7. `Toolbar` (New · Undo · Hint · Flip · Coach · Menu).
+`main.tsx` creates one `GameController` (src/game/controller.ts), binds page visibility to it
+(`bindPageLifecycle`), registers the service worker with `canReloadNow: () => controller.canReloadNow()`
+(true only in setup and on the error screen: an update never reloads a game in progress, nor a
+finished game's game-over screen or review, which are not saved), installs the
+iOS guards with `onFirstGesture: unlockAudio`, renders `<App controller/>` and calls `boot()`.
+`window.__chessCoach.controller` is exposed for debugging and the e2e tests.
 
-The review mode reuses the board, graph and move list, and swaps the coach panel for `ReviewPanel`.
+The controller owns all state as signals (`controller.store`, see store.ts). The store also exposes
+ready-made **view models**, one per component (`board`, `evalBar`, `evalGraph`, `moveList`, `coach`,
+`topPlayer`, `bottomPlayer`, `toolbar`, `sheets`, `review`), so App.tsx is thin wiring:
+
+| Component | Props from | Callbacks to |
+|---|---|---|
+| Board | `store.board` | `onMove = playerMove` (updates `plies` synchronously, as Board requires) |
+| EvalBar / EvalGraph | `store.evalBar` / `store.evalGraph` (`visible` hides them) | graph `onSelect = goTo` |
+| MoveList | `store.moveList` | `onSelect = goTo` |
+| CoachPanel | `store.coach` | actions -> `runAction(id)`, `onToggleCollapsed = toggleCoachCollapsed` |
+| ReviewPanel | `store.review` | `onSelectPly = goTo`, `onClose = exitReview` |
+| PlayerStrip | `store.topPlayer` / `store.bottomPlayer` | — |
+| Toolbar | `store.toolbar` (disabled / active per button) | `openSheet`, `undo`, `hint`, `flip`, `toggleCoach`, `stepBack`, `stepForward`, `startReview`, `exitReview` |
+| NewGameSheet / MenuSheet / GameOverSheet | `store.sheets` | `newGame`, `setSettings`, `resign`, `flip`, `rematch`, `startReview`, `closeSheet` |
+
+Each screen area is its own small component that reads only its signals, so a live-analysis update
+re-renders the eval bar and graph but not the board. App-level extras: the boot splash (phase
+`boot`), the engine error screen with *Try again* (`retry()`) and a link to `?enginetest`, the
+"Back to game" chip (while browsing history), the PGN export (Web Share sheet, else clipboard, with
+a toast), ← / → keys to step through moves, and the theme picker in the menu.
+
+**Review.** In phase `review` the panel slot shows the ReviewPanel summary first; stepping to another
+move (toolbar ‹ ›, move list, graph, a key moment) swaps it for the coach's comment on that move
+(`store.coach` in review mode, with *Show best*). The toolbar's *Report* button toggles back. When
+the panel slot is under 300 px tall (phones), the summary floats over the board as a card.
+
+## Screen layout
+
+`#app` is a fixed full-screen flex column padded by the safe areas; `.app` inside it is a CSS grid
+and a size container, so the board is sized from the space really available
+(`--app-board = min(width - eval bar, height - the fixed rows, 820px)`).
+
+**Portrait (iPhone 15 Pro: 393×852 pt, safe areas 59 / 34)**, top to bottom:
+1. Opponent `PlayerStrip` (44 px).
+2. Eval bar (16 px) + board: the board takes the full width minus the eval bar (≈363 px).
+3. Player `PlayerStrip` (44 px; the "Back to game" chip sits on its right while browsing).
+4. `CoachPanel` (or `ReviewPanel`): takes all remaining height (≈170 px), fixed box, text scrolls
+   inside, so nothing jumps when the text changes.
+5. `EvalGraph` (32 px, hidden with the eval bar).
+6. `MoveList` (44 px).
+7. `Toolbar` (57 px): New · Undo · Hint · Flip · Coach · Menu. After the game: New · Flip · ‹ · › ·
+   Menu · Review. In review: Report · Flip · ‹ · › · Menu · Close.
+
+**Short phones (e.g. 375×667):** the board stays full width; when the coach slot is under 84 px the
+coach shows as one row (class icon, title, first sentence). Tapping it floats the full bubble over
+the lower part of the board until the next move.
+
+**Landscape and desktop (aspect ratio ≥ 5:4):** two columns. The eval bar and the board fill the
+height on the left; the right column (280–420 px) holds the opponent strip, coach / review panel,
+graph, move list, your strip and the toolbar.
+
+**Themes:** dark by default; Light and Automatic (follows iOS) in the menu. `theme.ts` and an inline
+script in `index.html` set `<html data-theme>` before the first paint.
 
 ## Deployment
 
 A GitHub Actions workflow builds with `BASE_PATH=/chess/` and deploys to GitHub Pages. The
-service worker precaches the app, including the engine `.wasm`, so it works offline.
+service worker precaches the app, including the engine `.wasm`, so it works offline. Other static
+hosts (Cloudflare Pages, Netlify) work with `npm run build`, output `dist`, and `BASE_PATH=/`.
+
+## Tests
+
+- `npm test`: Vitest unit tests in node (pure logic, the controller against a fake engine, UI helpers).
+- `npm run e2e`: Playwright on the production build with the real engine, iPhone 15 Pro emulation.
+  `e2e/pwa.spec.ts` checks the PWA shell (manifest, service worker, offline); `e2e/game.spec.ts`
+  plays through the UI (moves by tapping squares, coach, hint, undo, flip, reload, resign, review,
+  a game as Black, and `?enginetest`).
