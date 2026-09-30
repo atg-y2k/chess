@@ -71,6 +71,101 @@ src/
   - `watch(fen)`: live, depth-capped analysis of the current position, with streaming updates to subscribers.
   - Analysis pauses when the page is hidden.
 
+## Module APIs (the integration layer codes against these)
+
+```ts
+// engine/createEngines.ts
+export interface EngineSet { analysis: ChessEngine; bot: ChessEngine; mode: 'dual' | 'single'; terminate(): void }
+/** Creates the analysis engine first, then the bot engine. It falls back to ONE shared worker
+ *  (EngineMux: bot searches take priority and transparently pause/resume analysis) when
+ *  `?engines=1` is set, when the second worker fails to init, or when the previous boot
+ *  looks like it crashed (localStorage boot flag, WebKit OMG-compile memory bug). */
+export function createEngines(opts?: { forceSingle?: boolean }): Promise<EngineSet>;
+
+// engine/AnalysisService.ts
+export class AnalysisService {
+  constructor(engine: ChessEngine, opts?: { liveDepth?: number /*18*/; liveMultiPv?: number /*3*/ });
+  /** High-priority analysis to at least minDepth, cached by fenKey; pre-empts live analysis, which resumes afterwards. */
+  ensure(fen: string, opts: { minDepth: number; multiPv?: number }): Promise<AnalysisResult>;
+  /** Live analysis target (null = none). Streams updates to subscribers; stops at liveDepth. */
+  watch(fen: string | null): void;
+  subscribe(cb: (r: AnalysisResult) => void): () => void;
+  /** Best cached result for this position (any depth), if any. */
+  get(fen: string): AnalysisResult | undefined;
+  /** Pause (page hidden) stops the engine and holds the queue; resume re-issues the work. */
+  setPaused(paused: boolean): void;
+  /** Drop queued `ensure` work (rejecting nothing — they resolve with best-so-far, aborted: true). */
+  cancelAll(): void;
+}
+
+// engine/selfTest.ts — diagnostics page (?enginetest) for checking the engine on a real iPhone
+export function runEngineSelfTest(log: (line: string) => void): Promise<boolean>;
+
+// bot/BotPlayer.ts
+export class BotPlayer {
+  constructor(engine: ChessEngine, opts?: { rng?: () => number; thinkDelay?: boolean /*true*/ });
+  /** Call at game start: draws the per-game opening-book profile for this Elo. */
+  newGame(elo: number): Promise<void>;
+  /** Chooses the bot's move. `history` = UCI moves from the start position (for the book). null if aborted or no legal move. */
+  move(fen: string, elo: number, history: string[], signal?: AbortSignal): Promise<BotMove | null>;
+}
+// bot/personas.ts
+export const BOTS: BotPersona[];            // ascending Elo, ~16 original characters from 100 to 3200
+export function personaById(id: string): BotPersona | undefined;
+export function customPersona(elo: number): BotPersona;
+// bot/book.ts (lazy-loads src/data/openings.json)
+export function loadOpenings(): Promise<void>;
+export function openingAt(fen: string): OpeningInfo | null;
+export function currentOpening(fens: string[]): (OpeningInfo & { ply: number }) | null; // walks back to last named position
+export function isBookMove(fenBefore: string, uci: string, fenAfter: string): boolean;
+
+// analysis/winprob.ts  (all probabilities 0..1)
+export function cpToWin(cp: number): number;              // lichess logistic, k = 0.00368208
+export function scoreToWin(score: Score): number;         // POV of the side the score belongs to; mate -> 1 / 0
+export function whiteBarFraction(scoreWhite: Score): number; // eval-bar fill for White
+export function formatScore(scoreWhite: Score): string;   // "+1.3", "-0.4", "0.0", "M3", "-M2", "1-0"/"0-1" when mated
+export function negateScore(s: Score): Score;
+// analysis/accuracy.ts
+export function moveAccuracy(winBefore: number, winAfter: number): number; // 0..100
+export function gameAccuracy(evalsWhite: (Score | null)[]): { w: number | null; b: number | null }; // index 0 = start position
+// analysis/classify.ts
+export function classifyMove(p: {
+  fenBefore: string; moveUci: string;
+  before: AnalysisResult;          // analysis of fenBefore (MultiPV >= 2 preferred)
+  after?: AnalysisResult;          // analysis of the position after the move (needed if the move isn't in before.lines)
+  opponentPrevWinLoss?: number;    // winLoss of the opponent's previous move (for "miss")
+  isBook?: boolean;
+  playerRating?: number;           // rating tiers for "brilliant"
+}): Classification;
+// analysis/explain.ts
+export function explainMove(p: {
+  fenBefore: string; moveUci: string; classification: Classification;
+  before: AnalysisResult; after?: AnalysisResult;
+  prevMove?: { to: string; captured?: string };
+}): Explanation;
+export function explainBestMove(fen: string, line: PvLine, opts?: { prevMove?: { to: string; captured?: string } }): Explanation;
+export function describeThreat(fen: string): Explanation | null; // what the side NOT to move threatens (null-move)
+
+// rating/rating.ts
+export function expectedScore(rating: number, opponent: number): number;
+export function kFactor(gamesPlayed: number): number;
+export function applyGameResult(profile: PlayerProfile, record: Omit<GameRecord, 'ratingBefore' | 'ratingAfter'>): { profile: PlayerProfile; record: GameRecord };
+export function loadProfile(): PlayerProfile;
+export function saveProfile(p: PlayerProfile): void;
+export function suggestedOpponentElo(profile: PlayerProfile): number;
+// game/persistence.ts
+export interface SavedGame { version: 1; id: string; startFen: string; moves: string[]; playerColor: Color; botId: string; botElo: number; botName: string; assisted: boolean; startedAt: string; annotations: Record<number, Pick<Ply, 'evalWhite' | 'evalDepth' | 'classification' | 'explanation' | 'isBook'>> }
+export function saveGame(g: SavedGame): void; export function loadGame(): SavedGame | null; export function clearGame(): void;
+export function saveSettings(s: GameSettings): void; export function loadSettings(): GameSettings;
+export function requestPersistentStorage(): Promise<boolean>;
+// game/sound.ts
+export type SoundKind = 'move' | 'capture' | 'check' | 'castle' | 'promote' | 'gameStart' | 'gameEnd' | 'illegal' | 'notify';
+export function unlockAudio(): void; export function setSoundEnabled(on: boolean): void; export function playSound(kind: SoundKind): void;
+// pwa.ts / ios.ts
+export function registerServiceWorker(opts: { canReloadNow: () => boolean }): void;
+export function installIosGuards(): void; // gesturestart/dblclick zoom guards, audio unlock on first touch
+```
+
 ## Scores & probabilities
 
 - Engine scores are **side-to-move POV**. Positions are stored in plies as **White POV** (`Ply.evalWhite`).
