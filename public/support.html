@@ -1,0 +1,210 @@
+<!doctype html>
+<!--
+  Support page (the App Store's "Support URL"): answers to common questions and how to get in touch.
+  Static and self-contained (no scripts, fonts or other files needed), so it also opens offline.
+  OWNER: before release, replace chesscoach-support@example.com with your support address (Apple
+  wants real contact details here); if you rename the app, replace "Chess Coach" here, in
+  privacy.html and in terms.html.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="Help with Chess Coach: restoring Pro, offline use, the engine self-test, and how to contact us." />
+    <title>Support · Chess Coach</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <style>
+      :root {
+        --bg: #1d1c1a;
+        --surface: #282623;
+        --border: #45403a;
+        --text: #f3f0ea;
+        --dim: #b7afa4;
+        --link: #6dbb7b;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f4f1ec;
+          --surface: #ffffff;
+          --border: #d8d1c7;
+          --text: #22201d;
+          --dim: #514b44;
+          --link: #2e7a3e;
+        }
+      }
+      * { box-sizing: border-box; }
+      html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 17px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', Arial, sans-serif;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      }
+      .wrap { max-width: 42rem; margin: 0 auto; padding: 0 20px 48px; }
+      .top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 20px; padding: 18px 0 14px; border-bottom: 1px solid var(--border); }
+      .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: 18px; text-decoration: none; }
+      .brand img { width: 32px; height: 32px; border-radius: 8px; }
+      nav { display: flex; gap: 18px; font-size: 15px; }
+      nav a { color: var(--dim); text-decoration: none; }
+      nav a[aria-current='page'] { color: var(--text); font-weight: 600; }
+      h1 { font-size: clamp(25px, 7vw, 30px); line-height: 1.2; margin: 28px 0 8px; }
+      h2 { font-size: 20px; line-height: 1.3; margin: 32px 0 8px; }
+      p, ul, ol { margin: 0 0 12px; }
+      ul, ol { padding-left: 1.3em; }
+      li { margin-bottom: 6px; }
+      a { color: var(--link); }
+      .lead { color: var(--dim); }
+      .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px 18px; }
+      .card p:last-child { margin-bottom: 0; }
+      .toc { columns: 2 14rem; padding-left: 1.1em; font-size: 15px; }
+      .toc li { break-inside: avoid; }
+      footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--dim); font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="top">
+        <a class="brand" href="support.html"><img src="favicon.svg" alt="" width="32" height="32" />Chess Coach</a>
+        <nav aria-label="Pages">
+          <a href="support.html" aria-current="page">Support</a>
+          <a href="privacy.html">Privacy</a>
+          <a href="terms.html">Terms</a>
+        </nav>
+      </header>
+
+      <main>
+        <h1>Chess Coach support</h1>
+        <p class="lead">
+          Play chess against the computer at any level, from beginner to grandmaster strength, with a coach
+          that rates every move and explains it in plain English. Everything runs on your iPhone.
+        </p>
+
+        <div class="card" id="contact">
+          <p>
+            <strong>Contact:</strong>
+            <a href="mailto:chesscoach-support@example.com">chesscoach-support@example.com</a>.
+            Bug reports are also welcome on
+            <a href="https://github.com/atg-y2k/chess/issues">GitHub</a>. If the engine misbehaves, please
+            include the engine self-test log (see <a href="#self-test">below</a>).
+          </p>
+        </div>
+
+        <h2>Questions</h2>
+        <ul class="toc">
+          <li><a href="#restore">How do I restore my purchase?</a></li>
+          <li><a href="#locked">I bought Pro, but it’s still locked</a></li>
+          <li><a href="#family">Does Family Sharing work?</a></li>
+          <li><a href="#refund">How do I get a refund?</a></li>
+          <li><a href="#free">What’s free, and what does Pro add?</a></li>
+          <li><a href="#offline">Does it work offline?</a></li>
+          <li><a href="#data">Where are my games and rating?</a></li>
+          <li><a href="#self-test">The engine doesn’t start or seems slow</a></li>
+          <li><a href="#ratings">What do the ratings mean?</a></li>
+          <li><a href="#requirements">Which iPhones does it run on?</a></li>
+          <li><a href="#source">Is it open source?</a></li>
+        </ul>
+
+        <h2 id="restore">How do I restore my purchase?</h2>
+        <p>
+          Open the <strong>Menu</strong> and tap <strong>Restore Purchases</strong> (in the Chess Coach Pro
+          section), or tap <strong>Restore Purchases</strong> on the Pro screen. Use the same Apple Account
+          you bought Pro with. You never pay twice: buying again with an account that already owns Pro
+          just unlocks it.
+        </p>
+
+        <h2 id="locked">I bought Pro, but it’s still locked</h2>
+        <ul>
+          <li>Tap <strong>Restore Purchases</strong> in the Menu.</li>
+          <li>
+            Check that this iPhone uses the Apple Account that bought Pro: Settings → your name → Media &amp;
+            Purchases.
+          </li>
+          <li>
+            If your family uses <strong>Ask to Buy</strong>, Pro unlocks as soon as the request is approved. The
+            Menu says “Waiting for approval” until then.
+          </li>
+          <li>If it still doesn’t unlock, <a href="#contact">contact us</a>.</li>
+        </ul>
+
+        <h2 id="family">Does Family Sharing work?</h2>
+        <p>
+          Yes. Pro is shared with up to five other members of your Family Sharing group, when you share your
+          purchases with them. They tap <strong>Restore Purchases</strong> to unlock it.
+        </p>
+
+        <h2 id="refund">How do I get a refund?</h2>
+        <p>
+          Apple handles all payments and refunds. Request one at
+          <a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>. After a refund, Pro is
+          locked again.
+        </p>
+
+        <h2 id="free">What’s free, and what does Pro add?</h2>
+        <p>
+          <strong>Always free:</strong> every opponent at any level, your rating and game history, the
+          evaluation bar and graph, the rating of each move (Best, Mistake, Blunder…) and your accuracy,
+          takebacks and Retry, and PGN export.
+        </p>
+        <p>
+          <strong>Pro</strong> is a one-time purchase, not a subscription. It adds the coach’s explanations
+          of why each move is good or bad, Hints, Show best, best-move arrows, and the full Game Review with
+          its key moments and a comment on every move.
+        </p>
+
+        <h2 id="offline">Does it work offline?</h2>
+        <p>
+          Yes. The chess engine and everything else are inside the app, so it works in airplane mode from the
+          first launch. Pro stays unlocked offline too. The App Store is only needed to buy or restore Pro.
+        </p>
+
+        <h2 id="data">Where are my games and rating?</h2>
+        <p>
+          Only on your iPhone. Nothing is uploaded, so your games and rating don’t move to another device, and
+          deleting the app deletes them. The free web version keeps its own, separate data. See the
+          <a href="privacy.html">Privacy Policy</a>.
+        </p>
+
+        <h2 id="self-test">The engine doesn’t start or seems slow</h2>
+        <ol>
+          <li>Close the app completely (swipe it away in the app switcher) and open it again.</li>
+          <li>
+            Run the engine self-test: <strong>Menu → Engine → Run engine self-test</strong>. It starts the chess
+            engine, runs a few searches and shows <strong>PASS</strong> or <strong>FAIL</strong>.
+          </li>
+          <li>Tap <strong>Copy log</strong> and paste the log into an email to us.</li>
+        </ol>
+        <p>
+          On iPhones with less memory, the app may switch to one shared engine (“compatibility mode”) for 14
+          days. The coach then pauses while your opponent thinks. <strong>Try two engines again</strong> in the
+          Menu’s Engine section turns it off.
+        </p>
+
+        <h2 id="ratings">What do the ratings mean?</h2>
+        <p>
+          Your rating is an Elo rating against the app’s computer opponents, from 100 to 3200. It goes up when
+          you do better than expected against a bot and down when you do worse. These are engine-scale
+          ratings: they are not FIDE or online-site ratings, and they won’t match them exactly. A game where
+          you use a hint, a takeback, Retry or best-move arrows doesn’t count for your rating.
+        </p>
+
+        <h2 id="requirements">Which iPhones does it run on?</h2>
+        <p>Any iPhone with iOS 16.4 or later.</p>
+
+        <h2 id="source">Is it open source?</h2>
+        <p>
+          Yes. Chess Coach is free software under the GNU General Public License, version 3 or later, and
+          uses the open-source Stockfish chess engine. The source code of every release is at
+          <a href="https://github.com/atg-y2k/chess">github.com/atg-y2k/chess</a>. The app’s Menu → About shows
+          the licenses and credits.
+        </p>
+      </main>
+
+      <footer>
+        <a href="privacy.html">Privacy Policy</a> · <a href="terms.html">Terms of Use (EULA)</a> ·
+        <a href="https://github.com/atg-y2k/chess">Source code</a>
+      </footer>
+    </div>
+  </body>
+</html>

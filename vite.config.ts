@@ -1,22 +1,61 @@
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type HtmlTagDescriptor, type Plugin } from 'vite';
 import preact from '@preact/preset-vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { APP_ID, APP_NAME } from './capacitor.config.js';
+
+/**
+ * VITE_NATIVE=1 (`npm run build:native`, into dist-native/): the App Store app (Capacitor, see
+ * ios/README-native.md). Its files ship inside the app and are served from capacitor://localhost/,
+ * so base is '/', and there is no service worker, update logic or web app manifest (vite-plugin-pwa
+ * is left out). The PWA build (without VITE_NATIVE) is unaffected.
+ */
+const native = process.env.VITE_NATIVE === '1';
 
 // BASE_PATH is set to "/chess/" by the GitHub Pages workflow. Every URL in the app (engine,
 // manifest, service worker) is relative to it, so the build also works under "/" or a custom domain.
-const base = process.env.BASE_PATH ?? '/';
+const base = native ? '/' : (process.env.BASE_PATH ?? '/');
+
+/** The app version (package.json): shown in About; the App Store version (MARKETING_VERSION). */
+const VERSION = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }).version;
+
+/** The repository. Every App Store build is tagged there (see ios/README-native.md, "Releasing"). */
+const REPO_URL = 'https://github.com/atg-y2k/chess';
+
+/** Runs git in this repository; null when git or the repository is not available (e.g. a source archive). */
+function git(...args: string[]): string | null {
+  try {
+    return execFileSync('git', args, {
+      cwd: fileURLToPath(new URL('.', import.meta.url)),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/** Native build only: the commit the App Store app is built from (null outside a git checkout). */
+const COMMIT = native ? git('rev-parse', 'HEAD') : null;
+
+/** Native build only: the work tree differs from COMMIT (changed or new, not ignored, files). */
+const DIRTY = COMMIT !== null && git('status', '--porcelain') !== '';
 
 /**
  * Where users of the deployed app can get its source code (the GPL requires offering it; see
- * README "Hosting"). Override it with VITE_SOURCE_URL, e.g. for a source archive published next to
- * the app (`npm run build:source`).
+ * README "Hosting"): the repository for the web app, which is deployed from main, and for the App
+ * Store app the exact commit it was built from (`tree/<sha>`; the release workflow also tags it
+ * `ios-v<version>-b<build>` and passes that tag here, so it stays reachable). Override it with
+ * VITE_SOURCE_URL, e.g. for a source archive published next to the app (`npm run build:source`).
+ * The app reads it as import.meta.env.VITE_SOURCE_URL.
  */
-const SOURCE_URL = process.env.VITE_SOURCE_URL || 'https://github.com/atg-y2k/chess';
+const SOURCE_URL =
+  process.env.VITE_SOURCE_URL || (native ? `${REPO_URL}/tree/${COMMIT ?? `v${VERSION}`}` : REPO_URL);
 
 /** The licences of everything the build ships, written to dist/ (see thirdPartyLicenses()). */
 const LICENSES_FILE = 'THIRD-PARTY-LICENSES.txt';
@@ -108,12 +147,13 @@ function immutableEngineFiles(): Plugin {
 /**
  * Completes Vite's `build.license` file: a note on Chess Coach's own licence and source, the engine
  * (public/engine/ has its own README and licence text), and Workbox, whose service-worker runtime is
- * built outside the Vite bundle so Vite does not list it.
+ * built outside the Vite bundle so Vite does not list it. The native build has no service worker;
+ * instead it lists Capacitor's native iOS code, which is not part of the JavaScript bundle either.
  */
 function thirdPartyLicenses(): Plugin {
-  const header = `Chess Coach: licences of the software it includes
+  const header = `${APP_NAME}: licences of the software it includes
 
-Chess Coach is free software: you can redistribute it and/or modify it under the terms of the GNU
+${APP_NAME} is free software: you can redistribute it and/or modify it under the terms of the GNU
 General Public License as published by the Free Software Foundation, either version 3 of the
 License, or (at your option) any later version. It comes with ABSOLUTELY NO WARRANTY.
 Source code: ${SOURCE_URL}
@@ -121,15 +161,40 @@ Source code: ${SOURCE_URL}
 The chess engine in engine/ is Stockfish (Stockfish.js): GPL-3.0. engine/README.md says where
 its source is, and engine/COPYING-stockfish.txt is the GPL-3.0 text (it applies to the app too).
 
-The app's JavaScript includes the packages below. The service worker (sw.js, workbox-*.js) is
-built from the Workbox packages listed last.
+${
+  native
+    ? `The app's JavaScript includes the packages below. The iOS app around it is built with Capacitor:
+its native code (@capacitor/ios and the native parts of the @capacitor plugins below) is listed last.`
+    : `The app's JavaScript includes the packages below. The service worker (sw.js, workbox-*.js) is
+built from the Workbox packages listed last.`
+}
 `;
+  const packageDir = (name: string): string => dirname(createRequire(import.meta.url).resolve(`${name}/package.json`));
   const workboxNotice = (): string => {
     // The service-worker runtime packages all carry workbox-core's licence and version.
-    const dir = dirname(createRequire(import.meta.url).resolve('workbox-core/package.json'));
+    const dir = packageDir('workbox-core');
     const { version } = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version: string };
     const license = readFileSync(join(dir, 'LICENSE'), 'utf8').trim();
     return `\n## workbox-core, workbox-precaching, workbox-routing, workbox-strategies - ${version} (MIT)\n\n${license}\n`;
+  };
+  const capacitorNotice = (): string => {
+    const dir = packageDir('@capacitor/ios');
+    const { version } = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version: string };
+    const license = readFileSync(join(dir, 'LICENSE'), 'utf8').trim();
+    // Capacitor's Cordova compatibility layer (CapacitorCordova, linked into the app) contains code
+    // from Apache Cordova. TypeScript (needed to build) ships the same Apache-2.0 text.
+    let apache = 'The full text is at https://www.apache.org/licenses/LICENSE-2.0';
+    try {
+      apache = readFileSync(join(packageDir('typescript'), 'LICENSE'), 'utf8').trim();
+    } catch {
+      // keep the link
+    }
+    return (
+      `\n## @capacitor/ios (Capacitor and CapacitorCordova for iOS) - ${version} (MIT)\n\n${license}\n` +
+      '\nCapacitorCordova includes code from Apache Cordova, Copyright The Apache Software Foundation,\n' +
+      'licensed under the Apache License, Version 2.0. This product includes software developed at\n' +
+      `The Apache Software Foundation (https://www.apache.org/).\n\n${apache}\n`
+    );
   };
   return {
     name: 'chess-coach:third-party-licenses',
@@ -141,8 +206,121 @@ built from the Workbox packages listed last.
         if (file?.type !== 'asset') return;
         const text = typeof file.source === 'string' ? file.source : new TextDecoder().decode(file.source);
         // Replace Vite's generic heading with ours; keep its per-package sections.
-        file.source = header + text.replace(/^# Licenses\s+The app bundles[^\n]*\n/, '') + workboxNotice();
+        file.source =
+          header + text.replace(/^# Licenses\s+The app bundles[^\n]*\n/, '') + (native ? capacitorNotice() : workboxNotice());
       },
+    },
+  };
+}
+
+/**
+ * Native build only: the source link must match what is built (GPL-3.0 section 6, and Stockfish's
+ * "the exact binary" condition). A build from uncommitted changes (whatever VITE_SOURCE_URL says), or
+ * outside a git checkout without VITE_SOURCE_URL, gets a warning, and fails with RELEASE_BUILD=1
+ * (`npm run build:native:release`, and the release workflow), which every build that is uploaded to
+ * App Store Connect must use.
+ */
+function sourceMatchesBuild(): Plugin {
+  return {
+    name: 'chess-coach:source-matches-build',
+    apply: 'build',
+    buildStart() {
+      // Outside a git checkout, an explicit VITE_SOURCE_URL (e.g. a source archive) is trusted.
+      if (COMMIT === null ? !!process.env.VITE_SOURCE_URL : !DIRTY) return;
+      const why = COMMIT === null ? 'this is not a git checkout' : 'the work tree has uncommitted changes';
+      const message =
+        `About links to the source at ${SOURCE_URL}, but ${why}, so that source would not match this build. ` +
+        'Commit (and push) first.';
+      if (process.env.RELEASE_BUILD === '1') this.error(`${message} (RELEASE_BUILD=1)`);
+      this.warn(`${message} Fine for testing; never upload this build (uploads use npm run build:native:release).`);
+    },
+  };
+}
+
+/**
+ * Native build only: copies the app's identity into the Xcode project, so each value has one home:
+ * the bundle ID and the Home Screen name come from capacitor.config.ts (APP_ID, APP_NAME), the
+ * version from package.json. Rewrites PRODUCT_BUNDLE_IDENTIFIER and MARKETING_VERSION in
+ * ios/App/App.xcodeproj/project.pbxproj and CFBundleDisplayName in ios/App/App/Info.plist when they
+ * differ (and says so), so a rename or a version bump is one edit plus `npm run build:native`.
+ */
+function nativeProjectSettings(): Plugin {
+  /** The App target's build configurations (Debug, Release) in project.pbxproj. */
+  const APP_TARGET_CONFIGS = ['504EC3171FED79650016851F', '504EC3181FED79650016851F'];
+  const xmlEscape = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const update = (file: string, edit: (text: string) => string): boolean => {
+    const path = fileURLToPath(new URL(file, import.meta.url));
+    if (!existsSync(path)) return false;
+    const before = readFileSync(path, 'utf8');
+    const after = edit(before);
+    if (after === before) return false;
+    writeFileSync(path, after);
+    return true;
+  };
+  return {
+    name: 'chess-coach:native-project-settings',
+    apply: 'build',
+    buildStart() {
+      if (
+        update('./ios/App/App.xcodeproj/project.pbxproj', (t) =>
+          // Only in the App target's Debug and Release configurations (IDs from Capacitor's template),
+          // so another target (tests, an extension) keeps its own bundle ID.
+          APP_TARGET_CONFIGS.reduce((text, id) => {
+            const start = text.indexOf(`\t\t${id} /* `);
+            const end = start < 0 ? -1 : text.indexOf('\n\t\t};', start);
+            if (end < 0) {
+              this.warn(`Build configuration ${id} not found in project.pbxproj; bundle ID and version not updated.`);
+              return text;
+            }
+            const block = text
+              .slice(start, end)
+              .replace(/PRODUCT_BUNDLE_IDENTIFIER = [^;]+;/, `PRODUCT_BUNDLE_IDENTIFIER = ${APP_ID};`)
+              .replace(/MARKETING_VERSION = [^;]+;/, `MARKETING_VERSION = ${VERSION};`);
+            return text.slice(0, start) + block + text.slice(end);
+          }, t),
+        )
+      ) {
+        this.warn(`Updated ios/App/App.xcodeproj/project.pbxproj: bundle ID ${APP_ID}, version ${VERSION}.`);
+      }
+      if (
+        update('./ios/App/App/Info.plist', (t) =>
+          t.replace(/(<key>CFBundleDisplayName<\/key>\s*<string>)[^<]*(<\/string>)/, `$1${xmlEscape(APP_NAME)}$2`),
+        )
+      ) {
+        this.warn(`Updated ios/App/App/Info.plist: display name "${APP_NAME}".`);
+      }
+    },
+  };
+}
+
+/** Files in public/ that only the web app uses (Home Screen icons, launch images, the icon master). */
+const WEB_ONLY_FILES = /^(?:splash|pwa-[^/]*\.png|maskable-[^/]*\.png|icon-source\.svg)$/;
+
+/**
+ * Native build only: the virtual modules vite-plugin-pwa would provide (src/pwa.ts imports
+ * virtual:pwa-register; main.tsx never calls it in this build), and removal of the web-only files
+ * from the output, which Vite copies from public/ (the app has its own icon and launch screen).
+ */
+function nativeBuild(): Plugin {
+  const PWA_REGISTER = 'virtual:pwa-register';
+  let outDir = '';
+  return {
+    name: 'chess-coach:native-build',
+    resolveId(id) {
+      return id === PWA_REGISTER ? `\0${PWA_REGISTER}` : null;
+    },
+    load(id) {
+      // The same signature as vite-plugin-pwa's registerSW(), doing nothing.
+      return id === `\0${PWA_REGISTER}` ? 'export function registerSW() { return async () => {}; }' : null;
+    },
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      if (!outDir || !existsSync(outDir)) return;
+      for (const name of readdirSync(outDir)) {
+        if (WEB_ONLY_FILES.test(name)) rmSync(join(outDir, name), { recursive: true, force: true });
+      }
     },
   };
 }
@@ -151,10 +329,12 @@ export default defineConfig({
   base,
   plugins: [
     preact(),
-    appleSplashScreens(),
+    ...(native ? [] : [appleSplashScreens()]),
     immutableEngineFiles(),
     thirdPartyLicenses(),
-    VitePWA({
+    ...(native ? [sourceMatchesBuild(), nativeBuild(), nativeProjectSettings()] : []),
+    // The service worker (offline + updates, see src/pwa.ts) and the web app manifest: web build only.
+    native ? null : VitePWA({
       strategies: 'generateSW',
       // New builds activate straight away; src/pwa.ts decides when the page reloads onto them.
       registerType: 'autoUpdate',
@@ -219,9 +399,18 @@ export default defineConfig({
       devOptions: { enabled: false },
     }),
   ],
+  // The app's name (capacitor.config.ts), version (package.json) and source link (SOURCE_URL), for
+  // src/native/platform.ts and src/ui/About.tsx.
+  define: {
+    'import.meta.env.VITE_APP_NAME': JSON.stringify(APP_NAME),
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(VERSION),
+    'import.meta.env.VITE_SOURCE_URL': JSON.stringify(SOURCE_URL),
+  },
   build: {
     target: 'es2022',
-    sourcemap: true,
+    outDir: native ? 'dist-native' : 'dist',
+    // Source maps would add ~2.4 MB to the app bundle; the source is on GitHub (see SOURCE_URL).
+    sourcemap: !native,
     // The lazy-loaded opening book chunk (src/data/openings.json) is ~890 kB raw / ~140 kB gzipped.
     chunkSizeWarningLimit: 1024,
     // Writes the bundled packages' licences to dist/ (completed by thirdPartyLicenses()).

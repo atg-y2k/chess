@@ -1,0 +1,234 @@
+<!doctype html>
+<!--
+  Terms of Use: the app's custom End User License Agreement (EULA), the paywall's "Terms of Use
+  (EULA)" link. Same text as docs/EULA-draft.md (below its DRAFT notes): change both together, and
+  paste the same text into App Store Connect (App Information > License Agreement).
+  OWNER: this is a DRAFT. Have a lawyer review it, and fill in the legal name, postal address,
+  governing law and support email placeholders before release; then delete the "draft-notice"
+  paragraph under the title. `npm run check:legal` lists whatever is left.
+  Static and self-contained (no scripts, fonts or other files needed), so it also opens offline.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="Chess Coach End User License Agreement. The app is free software under the GNU GPL." />
+    <title>Terms of Use (EULA) · Chess Coach</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <style>
+      :root {
+        --bg: #1d1c1a;
+        --surface: #282623;
+        --border: #45403a;
+        --text: #f3f0ea;
+        --dim: #b7afa4;
+        --link: #6dbb7b;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f4f1ec;
+          --surface: #ffffff;
+          --border: #d8d1c7;
+          --text: #22201d;
+          --dim: #514b44;
+          --link: #2e7a3e;
+        }
+      }
+      * { box-sizing: border-box; }
+      html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 17px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', Arial, sans-serif;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      }
+      .wrap { max-width: 42rem; margin: 0 auto; padding: 0 20px 48px; }
+      .top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 20px; padding: 18px 0 14px; border-bottom: 1px solid var(--border); }
+      .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: 18px; text-decoration: none; }
+      .brand img { width: 32px; height: 32px; border-radius: 8px; }
+      nav { display: flex; gap: 18px; font-size: 15px; }
+      nav a { color: var(--dim); text-decoration: none; }
+      nav a[aria-current='page'] { color: var(--text); font-weight: 600; }
+      h1 { font-size: clamp(25px, 7vw, 30px); line-height: 1.2; margin: 28px 0 4px; }
+      h2 { font-size: 20px; line-height: 1.3; margin: 32px 0 8px; }
+      p, ul { margin: 0 0 12px; }
+      ul { padding-left: 1.3em; }
+      li { margin-bottom: 6px; }
+      a { color: var(--link); overflow-wrap: anywhere; }
+      code { font-size: 0.92em; }
+      .updated { color: var(--dim); font-size: 15px; margin-bottom: 24px; }
+      .draft-notice { margin: 0 0 24px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+      .contact { list-style: none; padding: 0; }
+      .contact li { margin-bottom: 2px; }
+      footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--dim); font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="top">
+        <a class="brand" href="support.html"><img src="favicon.svg" alt="" width="32" height="32" />Chess Coach</a>
+        <nav aria-label="Pages">
+          <a href="support.html">Support</a>
+          <a href="privacy.html">Privacy</a>
+          <a href="terms.html" aria-current="page">Terms</a>
+        </nav>
+      </header>
+
+      <main>
+        <h1>Chess Coach — End User License Agreement</h1>
+        <p class="updated">Last updated: October 2, 2026</p>
+        <p class="draft-notice" role="note">
+          <strong>Draft.</strong> This agreement is still being prepared for the App Store version of
+          Chess Coach and is not in force yet.
+        </p>
+
+        <p>
+          This agreement (“Agreement”) is between you and [YOUR LEGAL NAME] (“we”, “us”), the developer of
+          the Chess Coach app (“the App”). It covers the copy of the App that you get from Apple’s App Store
+          and the in-app purchase in it. This Agreement is between you and us only, not with Apple, and we,
+          not Apple, are solely responsible for the App and its content.
+        </p>
+
+        <h2 id="gpl">1. The App is free software under the GNU GPL</h2>
+        <p>
+          The App is free software. You can redistribute it and/or modify it under the terms of the GNU
+          General Public License as published by the Free Software Foundation, either version 3 of the
+          License, or (at your option) any later version (“GPL”). The App includes software by other authors
+          under the GPL, such as the Stockfish chess engine and the chessground board, and software under
+          other open-source licenses. The App lists them, with their license texts, under Menu → About.
+        </p>
+        <ul>
+          <li>
+            The complete source code of every App Store build is published at
+            <a href="https://github.com/atg-y2k/chess">https://github.com/atg-y2k/chess</a>. Menu → About in
+            the App links to the exact source of the copy you have (a tag such as <code>ios-v1.0.0-b12</code>,
+            or the commit it was built from), and each released version is also tagged with its version
+            number (for example <code>v1.0.0</code>).
+          </li>
+          <li>
+            Your rights to run, study, copy, modify and share the software come from the GPL. Nothing in this
+            Agreement limits those rights. If anything in this Agreement conflicts with the GPL, the GPL
+            prevails for the software.
+          </li>
+          <li>
+            The GPL is a copyright license: it gives no rights to use our app name or icon as trademarks. If
+            you publish a modified version, please give it a different name and icon.
+          </li>
+        </ul>
+
+        <h2 id="license">2. Your license to use the App Store copy</h2>
+        <p>
+          In addition to your rights under the GPL, we grant you a non-transferable license to use the App
+          Store copy of the App on any Apple-branded products that you own or control, as permitted by the
+          Usage Rules in Apple’s Media Services Terms and Conditions, except that the App may also be used by
+          other accounts associated with you through Family Sharing. This section adds to your rights under
+          the GPL. It does not take any of them away.
+        </p>
+
+        <h2 id="pro">3. Pro (in-app purchase)</h2>
+        <p>
+          Pro is a one-time, non-consumable in-app purchase that unlocks more coaching features in the App.
+          It is not a subscription. The price is shown in the App before you buy. Apple processes the payment
+          and handles refunds under its own policies. Pro is shared with the members of your Family Sharing
+          group. Buying Pro does not change your rights under the GPL.
+        </p>
+
+        <h2 id="privacy">4. Privacy</h2>
+        <p>
+          The App does not collect any personal data. Your games, rating and settings stay on your device.
+          Our Privacy Policy is at
+          <a href="https://atg-y2k.github.io/chess/privacy.html">https://atg-y2k.github.io/chess/privacy.html</a>.
+        </p>
+
+        <h2 id="warranty">5. No warranty</h2>
+        <p>
+          The App is provided “as is”, without warranty of any kind, to the extent permitted by applicable
+          law, as described in sections 15 and 16 of the GPL. The App’s move ratings, evaluations, advice and
+          player ratings are computer estimates. They can be wrong, and the ratings are not official (for
+          example FIDE) ratings.
+        </p>
+        <p>
+          If the App fails to conform to any applicable warranty, you may notify Apple, and Apple will refund
+          the purchase price you paid, if any. To the maximum extent permitted by applicable law, Apple has no
+          other warranty obligation with respect to the App. Any other claims, losses, liabilities, damages,
+          costs or expenses attributable to any failure to conform to any warranty are our responsibility, to
+          the extent they are not disclaimed in this Agreement.
+        </p>
+        <p>
+          Nothing in this Agreement limits rights you have under consumer protection laws that cannot be
+          waived or limited by contract.
+        </p>
+
+        <h2 id="liability">6. Limitation of liability</h2>
+        <p>
+          To the extent permitted by applicable law, we are not liable for any damages arising out of the use
+          of, or the inability to use, the App, as described in section 16 of the GPL.
+        </p>
+
+        <h2 id="support">7. Maintenance and support</h2>
+        <p>
+          We, not Apple, are solely responsible for providing maintenance and support for the App, as
+          described at
+          <a href="https://atg-y2k.github.io/chess/support.html">https://atg-y2k.github.io/chess/support.html</a>.
+          Apple has no obligation whatsoever to furnish any maintenance or support services for the App.
+        </p>
+
+        <h2 id="claims">8. Claims</h2>
+        <p>
+          We, not Apple, are responsible for addressing any claims by you or any third party relating to the
+          App or your possession and use of it, including: (i) product liability claims; (ii) any claim that
+          the App fails to conform to any applicable legal or regulatory requirement; and (iii) claims arising
+          under consumer protection, privacy or similar legislation. If a third party claims that the App or
+          your possession and use of it infringes that third party’s intellectual property rights, we, not
+          Apple, are solely responsible for the investigation, defense, settlement and discharge of that
+          claim.
+        </p>
+
+        <h2 id="compliance">9. Legal compliance</h2>
+        <p>
+          You represent and warrant that (i) you are not located in a country that is subject to a U.S.
+          Government embargo, or that has been designated by the U.S. Government as a “terrorist supporting”
+          country; and (ii) you are not listed on any U.S. Government list of prohibited or restricted
+          parties.
+        </p>
+
+        <h2 id="third-party">10. Third-party terms</h2>
+        <p>
+          When you use the App, you must comply with any third-party terms that apply to you, for example
+          your wireless data service agreement.
+        </p>
+
+        <h2 id="apple">11. Apple as a third-party beneficiary</h2>
+        <p>
+          Apple and Apple’s subsidiaries are third-party beneficiaries of this Agreement. Once you accept this
+          Agreement, Apple will have the right (and will be deemed to have accepted the right) to enforce this
+          Agreement against you as a third-party beneficiary.
+        </p>
+
+        <h2 id="law">12. Governing law and changes</h2>
+        <p>
+          This Agreement is governed by [GOVERNING LAW], except where the law of the country you live in
+          requires otherwise. We may update this Agreement for future versions of the App and will post the
+          current version at
+          <a href="https://atg-y2k.github.io/chess/terms.html">https://atg-y2k.github.io/chess/terms.html</a>.
+        </p>
+
+        <h2 id="contact">13. Contact</h2>
+        <p>Questions, complaints or claims about the App:</p>
+        <ul class="contact">
+          <li>[YOUR LEGAL NAME]</li>
+          <li>[YOUR POSTAL ADDRESS]</li>
+          <li>Email: <a href="mailto:chesscoach-support@example.com">chesscoach-support@example.com</a></li>
+          <li>Support: <a href="https://atg-y2k.github.io/chess/support.html">https://atg-y2k.github.io/chess/support.html</a></li>
+        </ul>
+      </main>
+
+      <footer>
+        Chess Coach is free software under the GNU General Public License v3.0 or later.
+        <a href="https://github.com/atg-y2k/chess">Source code</a>
+      </footer>
+    </div>
+  </body>
+</html>

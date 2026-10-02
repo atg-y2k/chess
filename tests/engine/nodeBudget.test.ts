@@ -97,7 +97,13 @@ describe('node budgets in a position where one iteration takes millions of nodes
     expect(shown).toMatchObject({ fen: STALL, done: true });
     expect(shown.depth).toBeGreaterThanOrEqual(r.depth);
     expect(shown.lines.every((l) => legalIn(STALL, l.pv[0]))).toBe(true);
-    expect(svc.get(STALL)!.depth).toBeLessThan(18);
+    // It stopped on its own limits: usually the node budget runs out below depth 18, but with a
+    // lucky hash table depth 18 can be reached first, so assert the budget rather than the depth.
+    // (Stockfish checks the node limit periodically, so allow a small overshoot.)
+    const live = svc.get(STALL)!;
+    expect(live.depth).toBeLessThanOrEqual(18);
+    expect(live.lines[0]?.nodes).toBeGreaterThan(0);
+    expect(live.lines[0]!.nodes!).toBeLessThanOrEqual(LIVE_NODES * 1.05);
     const k = gos().length;
     await sleep(300);
     expect(gos()).toHaveLength(k); // finished: not restarted

@@ -34,16 +34,19 @@ import {
   KEY_CLASSES,
   RETRY_CLASSES,
   TOP_CLASSES,
+  UNLOCK_LABEL,
   answerFreeLines,
   classLabel,
   coachTip,
   concession,
+  lockedTeaser,
   mentionsMove,
   moveLabel,
   offersShowBest,
   recaptureTip,
   verdictTitle,
 } from './coach';
+import type { ProFeature } from './entitlements';
 import type { ReviewSummary } from './review';
 import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings, type Ply } from './types';
 
@@ -167,6 +170,12 @@ export interface AppState {
   pendingAssist: Signal<PendingAssist | null>;
   /** `annotationKey`s of plies whose analysis failed (the coach offers to try again). */
   failedAnnotations: Signal<ReadonlySet<string>>;
+  /**
+   * Pro features that are locked (game/entitlements.ts; empty where Pro is not sold or is
+   * unlocked). The view models never show what they would reveal: explanations, hints, the best
+   * move, best-move arrows, the review's key moments.
+   */
+  locked: ReadonlySignal<ReadonlySet<ProFeature>>;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -196,12 +205,18 @@ export type CoachActionId =
   | 'newGame'
   | 'rematch'
   | 'retryBoot'
-  | 'retryAnalysis';
+  | 'retryAnalysis'
+  /** Opens the paywall for the action's `feature` (the coach's text is locked). */
+  | 'unlock';
 
 export interface CoachActionView {
   id: CoachActionId;
   label: string;
   primary?: boolean;
+  /** A Pro feature that is locked: the button shows a lock and opens the paywall instead. */
+  locked?: boolean;
+  /** 'unlock': the feature the paywall is opened for. */
+  feature?: ProFeature;
 }
 
 /** What the panel shows: 'coach' feedback, a 'hint', 'minimal' (coach off), 'review', or 'status'. */
@@ -231,6 +246,8 @@ export interface ToolState {
   disabled: boolean;
   /** Toggle state (coach on, hint shown, reviewing). */
   active?: boolean;
+  /** A Pro feature that is locked (Hint): the button shows a lock and opens the paywall. */
+  locked?: boolean;
 }
 
 export type ToolbarView = Record<ToolbarId, ToolState>;
@@ -261,7 +278,7 @@ export interface SheetsView {
   } | null;
 }
 
-export type ReviewView = Omit<ReviewPanelProps, 'onSelectPly' | 'onClose'>;
+export type ReviewView = Omit<ReviewPanelProps, 'onSelectPly' | 'onClose' | 'onUnlock'>;
 
 /** Facts about the displayed position (memoised per FEN). */
 export interface PositionInfo {
@@ -321,6 +338,7 @@ const HUMAN_EMOJI = '🙂';
 /** Shared empty values, so unchanged view models keep their identity (fewer chessground updates). */
 const NO_DESTS: Map<string, string[]> = new Map();
 const NO_ARROWS: Arrow[] = [];
+const NONE_LOCKED: ReadonlySet<ProFeature> = new Set();
 
 /** Identifies one ply of one game (move and position), e.g. for failed analyses. */
 export function annotationKey(gameId: string, p: Pick<Ply, 'index' | 'fenBefore' | 'uci'>): string {
@@ -406,7 +424,12 @@ export function winForWhite(scoreWhite: Score, fen: string): number {
 // Store
 
 /** Creates the state signals with their initial values. */
-export function createState(init: { settings?: GameSettings; profile: PlayerProfile }): AppState {
+export function createState(init: {
+  settings?: GameSettings;
+  profile: PlayerProfile;
+  /** Locked Pro features (default: none). */
+  locked?: ReadonlySignal<ReadonlySet<ProFeature>>;
+}): AppState {
   return {
     phase: signal<Phase>('boot'),
     error: signal<AppError | null>(null),
@@ -429,6 +452,7 @@ export function createState(init: { settings?: GameSettings; profile: PlayerProf
     reviewState: signal<ReviewState | null>(null),
     pendingAssist: signal<PendingAssist | null>(null),
     failedAnnotations: signal<ReadonlySet<string>>(new Set()),
+    locked: init.locked ?? signal(NONE_LOCKED),
   };
 }
 
@@ -485,25 +509,29 @@ export function createStore(state: AppState): Store {
 
   const inReviewLike = computed(() => phase.value === 'review' || phase.value === 'over');
 
+  /** A Pro feature is locked (tracks `state.locked`). */
+  const locked = (f: ProFeature): boolean => state.locked.value.has(f);
+
   // --- board ---------------------------------------------------------------------------------
+  // Locked Pro features draw no arrow at all: an arrow would give the best move away.
   const arrows = computed<Arrow[]>(() => {
     const m = coachMode.value;
     if (m.kind === 'showBest') {
       const ply = plies.value[m.index];
-      if (!ply) return NO_ARROWS;
+      if (!ply || locked('showBest')) return NO_ARROWS;
       return [...uciArrow(ply.uci, 'played'), ...uciArrow(m.bestUci, 'best')];
     }
     if (m.kind === 'hint' && isLive.value && m.fen === liveFen.value) {
       const e = m.explanation;
-      return e?.arrows?.length ? e.arrows : NO_ARROWS;
+      return e?.arrows?.length && !locked('hint') ? e.arrows : NO_ARROWS;
     }
     if (phase.value === 'review') {
       const ply = displayedPly.value;
       const cl = ply?.classification;
-      if (ply && cl && offersShowBest(cl, ply.uci)) return uciArrow(cl.bestMoveUci, 'best');
+      if (ply && cl && offersShowBest(cl, ply.uci) && !locked('reviewDetails')) return uciArrow(cl.bestMoveUci, 'best');
       return NO_ARROWS;
     }
-    if (settings.value.showBestMoves && humanToMove.value && isLive.value) {
+    if (settings.value.showBestMoves && !locked('bestMoveArrows') && humanToMove.value && isLive.value) {
       const r = liveForDisplayed.value;
       return r ? lineArrows(r) : NO_ARROWS;
     }
@@ -707,10 +735,31 @@ export function createStore(state: AppState): Store {
     };
   }
 
+  /** The coach's "Unlock to see why" (opens the paywall for `feature`). */
+  function unlockAction(feature: ProFeature, primary = false): CoachActionView {
+    return { id: 'unlock', label: UNLOCK_LABEL, feature, ...(primary ? { primary } : {}) };
+  }
+
+  /** "Show best", with a lock while it is part of Pro and locked. */
+  function showBestAction(primary = false): CoachActionView {
+    return { id: 'showBest', label: 'Show best', ...(primary ? { primary } : {}), ...(locked('showBest') ? { locked: true } : {}) };
+  }
+
   function showBestCoach(m: Extract<CoachMode, { kind: 'showBest' }>): Omit<CoachView, 'collapsed'> {
     const ply = plies.value[m.index];
     const actions: CoachActionView[] = [{ id: 'backToGame', label: phase.value === 'playing' ? 'Back to game' : 'Back', primary: true }];
     if (ply && canRetry(ply)) actions.push({ id: 'retry', label: 'Retry' });
+    if (locked('showBest')) {
+      // Not reachable from the UI (the controller asks for Pro first, and leaves Show best when Pro
+      // is locked again), but the best move must never show while it is locked.
+      return {
+        kind: phase.value === 'playing' ? 'coach' : 'review',
+        title: 'Best move',
+        lines: ['Show best is part of Pro.'],
+        busy: false,
+        actions: [...actions, unlockAction('showBest')],
+      };
+    }
     return {
       kind: phase.value === 'playing' ? 'coach' : 'review',
       cls: 'best',
@@ -759,8 +808,15 @@ export function createStore(state: AppState): Store {
       }
       return { kind: 'review', title: moveLabel(ply), lines: [], busy: true, actions: [] };
     }
+    const showBest = offersShowBest(cl, ply.uci);
+    if (locked('reviewDetails')) {
+      // The verdict and its icon are free; the comment (and the better move) are Pro.
+      const actions: CoachActionView[] = [unlockAction('reviewDetails', true)];
+      if (showBest) actions.push(showBestAction());
+      return { kind: 'review', ...verdictTitle(ply), titleMove: moveLabel(ply), lines: [lockedTeaser(ply)], busy: false, actions };
+    }
     const lines = explanationLines(ply.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null);
-    const actions: CoachActionView[] = offersShowBest(cl, ply.uci) ? [{ id: 'showBest', label: 'Show best' }] : [];
+    const actions: CoachActionView[] = showBest ? [showBestAction()] : [];
     return { kind: 'review', ...verdictTitle(ply), titleMove: moveLabel(ply), lines, busy: false, actions };
   }
 
@@ -775,6 +831,16 @@ export function createStore(state: AppState): Store {
       const back: CoachActionView[] = [{ id: 'backToGame', label: 'Back to game', primary: true }];
       if (ply && s.coach && ply.color === g.playerColor && ply.classification) {
         const cl = ply.classification;
+        if (locked('coachExplanations')) {
+          return {
+            kind: 'coach',
+            ...verdictTitle(ply),
+            titleMove: moveLabel(ply),
+            lines: [lockedTeaser(ply)],
+            busy: false,
+            actions: [...back, unlockAction('coachExplanations')],
+          };
+        }
         // The move the coach is discussing may still be retried: keep its answer hidden here too.
         const base = m.kind === 'hint' ? m.prev : m;
         const hide = base.kind === 'feedback' && base.index === ply.index && canRetry(ply);
@@ -796,6 +862,16 @@ export function createStore(state: AppState): Store {
       };
     }
     if (m.kind === 'hint') {
+      if (locked('hint')) {
+        // Like a locked Show best: not reachable from the UI, and never the move.
+        return {
+          kind: 'hint',
+          title: 'Hint',
+          lines: ['Hints are part of Pro.'],
+          busy: false,
+          actions: [{ id: 'dismissHint', label: 'Got it' }, unlockAction('hint', true)],
+        };
+      }
       return {
         kind: 'hint',
         title: 'Hint',
@@ -807,7 +883,7 @@ export function createStore(state: AppState): Store {
     if (!s.coach) return minimalCoach();
     if (m.kind === 'retry') {
       const lines = [`Find a better move than ${m.san}.`];
-      if (m.headline) lines.push(m.headline);
+      if (m.headline && !locked('coachExplanations')) lines.push(m.headline);
       return { kind: 'coach', title: 'Try again', lines, busy: false, actions: [] };
     }
     if (m.kind === 'feedback') {
@@ -827,6 +903,13 @@ export function createStore(state: AppState): Store {
           return { kind: 'coach', title: `Checking ${ply.san}…`, lines: [], busy: true, actions: [] };
         }
         const retry = canRetry(ply);
+        if (locked('coachExplanations')) {
+          // The verdict and its icon are free; why, and what was better, are Pro.
+          const actions: CoachActionView[] = [unlockAction('coachExplanations', true)];
+          if (offersShowBest(cl, ply.uci)) actions.push(showBestAction());
+          if (retry) actions.push({ id: 'retry', label: 'Retry' });
+          return { kind: 'coach', ...verdictTitle(ply), titleMove: moveLabel(ply), lines: [lockedTeaser(ply)], busy: false, actions };
+        }
         // While Retry is on offer, the text must not give the better move away ("Show best" does).
         const lines = retry ? answerFreeLines(ply.explanation, cl) : explanationLines(ply.explanation);
         const reply = plies.value[m.index + 1];
@@ -837,7 +920,7 @@ export function createStore(state: AppState): Store {
         }
         const actions: CoachActionView[] = [];
         // In a rated game Retry costs the rating, so the free "Show best" is the main action.
-        if (offersShowBest(cl, ply.uci)) actions.push({ id: 'showBest', label: 'Show best', primary: !g.assisted });
+        if (offersShowBest(cl, ply.uci)) actions.push(showBestAction(!g.assisted));
         if (retry) actions.push({ id: 'retry', label: 'Retry', primary: g.assisted });
         if (!actions.some((a) => a.primary) && actions.length) actions[0] = { ...actions[0], primary: true };
         return { kind: 'coach', ...verdictTitle(ply), titleMove: moveLabel(ply), lines, busy: false, actions };
@@ -934,6 +1017,7 @@ export function createStore(state: AppState): Store {
       hint: {
         disabled: !(humanToMove.value && isLive.value && m.kind !== 'showBest'),
         active: m.kind === 'hint' && isLive.value,
+        ...(locked('hint') ? { locked: true } : {}),
       },
       flip: { disabled: p === 'boot' },
       coach: { disabled: p === 'boot', active: settings.value.coach },
@@ -992,13 +1076,16 @@ export function createStore(state: AppState): Store {
     const g = game.value;
     if (phase.value !== 'review' || !r || !g) return null;
     const botName = g.bot.name;
+    // Accuracy and counts are free; the key moments (each with its comment) are Pro.
+    const hide = locked('reviewDetails');
     return {
       progress: r.progress,
       accuracy: r.accuracy,
       counts: r.counts,
       playerColor: g.playerColor,
       names: g.playerColor === 'w' ? { w: 'You', b: botName } : { w: botName, b: 'You' },
-      keyMoments: r.keyMoments,
+      keyMoments: hide ? [] : r.keyMoments,
+      ...(hide ? { lockedMoments: r.keyMoments.length } : {}),
     };
   });
 

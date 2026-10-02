@@ -2,6 +2,7 @@ import { MOVE_CLASS_ORDER, type MoveClass } from '../analysis/types';
 import type { Color } from '../game/types';
 import { CLASS_META, ClassIcon } from './ClassIcon';
 import { IconChevronRight, IconClose } from './icons';
+import { IconLock } from './PaywallSheet';
 import './ReviewPanel.css';
 
 export interface KeyMoment {
@@ -25,6 +26,12 @@ export interface ReviewPanelProps {
   playerColor: Color;
   names: { w: string; b: string };
   keyMoments: KeyMoment[];
+  /**
+   * The key moments are part of Pro and locked: how many there are (`keyMoments` is then empty).
+   * An unlock card takes the list's place; its button calls `onUnlock`.
+   */
+  lockedMoments?: number;
+  onUnlock?: () => void;
   /** Called with the number of plies to show (index + 1). */
   onSelectPly: (current: number) => void;
   onClose: () => void;
@@ -68,6 +75,13 @@ export function momentLabel(m: Pick<KeyMoment, 'cls' | 'concedes'>): string {
   return CLASS_META[m.cls].label;
 }
 
+/** The locked key moments card's title: how many turning points Pro would show. */
+export function lockedTitle(count: number, analysing: boolean): string {
+  if (analysing && count === 0) return 'Looking for turning points…';
+  if (count === 0) return 'No big swings: Pro explains every move.';
+  return count === 1 ? '1 key moment found' : `${count} key moments found`;
+}
+
 /** Neutral marker for a key moment that gives something away (no class icon praising it). */
 function ConcessionIcon({ label, size }: { label: string; size: number }) {
   return (
@@ -94,12 +108,16 @@ export function ReviewPanel({
   playerColor,
   names,
   keyMoments,
+  lockedMoments,
+  onUnlock,
   onSelectPly,
   onClose,
 }: ReviewPanelProps) {
   const analysing = progress != null;
   const pct = analysing ? Math.round(Math.max(0, Math.min(1, progress)) * 100) : 100;
   const rows = visibleReviewClasses(counts);
+  const locked = lockedMoments !== undefined;
+  const momentCount = locked ? lockedMoments : keyMoments.length;
 
   return (
     <section class="review" aria-label="Game Review" data-analysing={analysing ? '' : undefined}>
@@ -181,9 +199,24 @@ export function ReviewPanel({
         <div class="review-moments">
           <h3 class="review-subtitle">
             Key moments
-            {keyMoments.length > 0 && <span class="review-badge">{keyMoments.length}</span>}
+            {momentCount > 0 && <span class="review-badge">{momentCount}</span>}
           </h3>
-          {keyMoments.length === 0 ? (
+          {locked ? (
+            <div class="review-locked" data-id="review-locked">
+              <span class="review-locked-icon" aria-hidden="true">
+                <IconLock size={18} />
+              </span>
+              <div class="review-locked-text">
+                <strong>{lockedTitle(lockedMoments, analysing)}</strong>
+                <span>See where the game was won and lost, with coaching on every move.</span>
+              </div>
+              {onUnlock && (
+                <button type="button" class="btn btn-primary review-locked-btn" data-id="review-unlock" onClick={onUnlock}>
+                  Unlock
+                </button>
+              )}
+            </div>
+          ) : keyMoments.length === 0 ? (
             <p class="review-empty">{analysing ? 'Looking for turning points…' : 'No big swings — a clean game.'}</p>
           ) : (
             <ul class="review-list">

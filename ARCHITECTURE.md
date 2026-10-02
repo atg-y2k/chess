@@ -1,14 +1,18 @@
 # Chess Coach — architecture
 
-An installable iPhone web app (PWA): play chess against Stockfish at any Elo, with a live
-evaluation bar and a coach that classifies and explains moves. Everything runs on the phone:
-no server and no account, and it works offline once installed.
+An iPhone chess app: play against Stockfish at any Elo, with a live evaluation bar and a coach that
+classifies and explains moves. Everything runs on the phone: no server and no account. One codebase
+ships two ways: an installable web app (PWA) that works offline once installed, and a native App
+Store app (Capacitor) with the files inside it and a one-time "Pro" in-app purchase (see
+[Native iOS app](#native-ios-app-app-store)).
 
 - **UI:** Preact + `@preact/signals`, TypeScript, Vite.
 - **Rules:** `chess.js` (BSD-2).
 - **Board:** `@lichess-org/chessground` (GPL-3).
 - **Engine:** Stockfish 19 "lite single-threaded" WASM from `stockfish` (nmrugg/stockfish.js, GPL-3). It is vendored in `public/engine/`.
 - **Hosting:** GitHub Pages (static). The app is installed with Safari → ⋯ → Share → *Add to Home Screen*.
+- **App Store app:** Capacitor 8 (MIT) around the same build (`VITE_NATIVE=1`), Xcode project in `ios/`,
+  StoreKit 2 through the app's own plugin.
 
 ## Module map (ownership boundaries)
 
@@ -68,6 +72,14 @@ src/
   ui/                      presentational components; each has its own CSS file next to it
                            (SelfTestPage.tsx is the ?enginetest page)
   dev/                     component gallery pages (dev only: /gallery.html?g=<board|panels|sheets|engine>)
+  game/entitlements.ts     Pro: FEATURE_TIERS (the free / Pro split), the entitlement state and the paywall's state
+  native/                  the App Store app (see "Native iOS app"): platform.ts (build / runtime flags, the only
+                           Capacitor imports), purchases.ts (StoreKit plugin / mock store / always unlocked),
+                           storage.ts, haptics.ts, share.ts, statusbar.ts
+  ui/PaywallSheet.tsx      the Pro paywall + lock glyphs; ui/LicenseSheet.tsx: in-app viewer for the license texts
+ios/                       Xcode project (Capacitor, Swift Package Manager): ios/README-native.md
+public/privacy.html, terms.html, support.html   static pages the App Store listing and the paywall link to
+scripts/appstore-screenshots.mjs                App Store screenshots (Playwright)
 ```
 
 **Rules for all modules**
@@ -480,7 +492,7 @@ interface CoachPanelProps {
   titleMove?: string;         // the move part of such a title ("3. Qxf7+"): a one-line row cuts it before the verdict
   lines: string[];            // explanation sentences
   busy?: boolean;             // analyzing spinner
-  actions?: { id: string; label: string; onClick: () => void; primary?: boolean }[];
+  actions?: { id: string; label: string; onClick: () => void; primary?: boolean; locked?: boolean }[]; // locked: a Pro lock badge
   collapsed?: boolean;        // one-row summary
   onToggleCollapsed?: () => void;
 }
@@ -508,7 +520,7 @@ interface PlayerStripProps {
 `Toggle({ label, description?, checked, onChange, disabled?, icon?, iconColor?, id? })` is the switch row used by the sheets.
 
 ### Sheet.tsx (base) and sheets
-`Sheet({ open, onClose, title, children, footer?, hideTitle?, class? })` is a bottom sheet with backdrop, safe-area padding, and swipe/tap-outside/Escape to close.
+`Sheet({ open, onClose, title, children, footer?, hideTitle?, class? })` is a bottom sheet with backdrop, safe-area padding, and swipe/tap-outside/Escape to close (Escape closes only the sheet opened last, e.g. the paywall over the Menu, through a module-level stack of open sheets).
 - `NewGameSheet({ open, initial: GameSettings, playerRating: number, bots: BotPersona[], onStart(settings), onClose, inProgress?, newPlayer?, levels?, onSetLevel? })`:
   bot picker grid, custom Elo slider 100..3200 (step 50), color choice (white / random / black), toggles (coach, eval bar,
   best-move arrows, takebacks, sound), and "Match my rating" (adaptive).
@@ -517,12 +529,17 @@ interface PlayerStripProps {
   - `newPlayer` with `levels` + `onSetLevel`: a "Your level" LevelPicker at the top sets the starting rating before the first game.
     Picking a level also switches the opponent to "Match my rating", unless the player already picked a bot, the slider or
     the toggle in the sheet.
+  - `arrowsLocked?: string | null` + `onUnlock?`: best-move arrows are part of Pro and locked; the toggle shows the line and a
+    lock, stays off, and calls `onUnlock` (the paywall).
 - `LevelPicker({ levels, value: number | null, onChange(rating), labelledBy?, id? })`: five-way segmented control over
   `STARTING_LEVELS` with a caption describing the selected level (`LEVEL_BLURB`).
 - `MenuSheet({ open, settings, profile, canResign, onChange(partial), onResign, onExportPgn, onFlip, onNewGame, onClose, bots?, theme?, onThemeChange?, engine?, onRetryDualEngines?, selfTestHref?, offlineReady?, levels?, onSetLevel? })`:
   action tiles (flip, export, new game, resign with an inline confirmation), in-game toggles, the Appearance picker
   (with `theme` + `onThemeChange`), profile stats with "Set my level" (LevelPicker + confirmation, with `levels` + `onSetLevel`),
   recent games, the Engine section and About. Its callbacks do not close the sheet; App does.
+  - `pro?: { name; unlocked; pending?; restoring? }` + `onUnlock?(feature?)` + `onRestore?` + `arrowsLocked?`: where Pro is
+    sold, a Pro section (Unlock, or "Unlocked ✓" / "Waiting for approval") with Restore Purchases; locked best-move
+    arrows open the paywall.
   - `engine: { mode: 'dual' | 'single' | null; singleUntil?: number | null }`: a "Stockfish 19" row reading "2 workers" or
     "1 worker (compatibility mode, until Oct 14)"; in single mode a "Try two engines again" row (`onRetryDualEngines`) and a
     note; with `offlineReady` an "Available offline" row; always a "Run engine self-test" link (`selfTestHref`, default
@@ -534,9 +551,15 @@ interface PlayerStripProps {
 - `ConfirmSheet({ open, title, message, confirmLabel, cancelLabel?, onConfirm, onClose })`: a small confirmation sheet.
   `assistPrompt(kind: 'hint' | 'undo' | 'retry')` gives its wording for "this makes the game unrated".
 - `About()` (in the Menu): the GPL notice with the no-warranty line, the Source code link (`SOURCE_URL` =
-  `VITE_SOURCE_URL` or `https://github.com/atg-y2k/chess`), the full GPL text loaded on demand, credits with the BSD
-  and MIT texts, and links to `THIRD-PARTY-LICENSES.txt` and `engine/README.md` (under `BASE_URL`).
+  `VITE_SOURCE_URL` or `https://github.com/atg-y2k/chess`; the exact commit or build tag in the App Store app), where Pro
+  is sold (`SHOW_LEGAL_LINKS`) the Privacy Policy, Terms of Use and Support links (`LEGAL_URLS`, so they stay reachable
+  once Pro is unlocked), the app's name and version,
+  credits with the BSD and MIT texts, and the GPL text, `THIRD-PARTY-LICENSES.txt` and `engine/README.md` (under
+  `BASE_URL`). Those three keep real hrefs, but a tap opens them in `LicenseSheet({ doc, onClose })`, an in-app viewer
+  rendered into `document.body` (a new-window link to the app's own files would do nothing in the App Store app).
   `LegalFooter()` is the one-line version on the self-test page.
+- `PaywallSheet({ open, feature, price, unavailable?, status, onBuy, onRestore, onClose, features? })`: the Pro paywall
+  (see "Entitlements and the paywall"). It also exports `IconLock` and `LockedIcon` (the toolbar's locked Hint).
 - `SelfTestPage({ run?, copy? })`: the `?enginetest` page (live log, PASS / FAIL, Copy log, Run again).
 
 ### ReviewPanel.tsx
@@ -548,6 +571,8 @@ interface ReviewPanelProps {
   playerColor: Color;
   names: { w: string; b: string };
   keyMoments: KeyMoment[];    // { index; cls; san; text; concedes?: 'material' | 'mate' }
+  lockedMoments?: number;     // Pro locked: how many key moments there are (keyMoments is then empty)
+  onUnlock?: () => void;      // the locked card's button (the paywall)
   onSelectPly: (current: number) => void;
   onClose: () => void;
 }
@@ -558,7 +583,8 @@ A key moment with `concedes` shows a neutral grey marker and the label "Gives up
 ## App shell (App.tsx) and the controller
 
 `main.tsx` creates one `GameController` (src/game/controller.ts), binds page visibility to it
-(`bindPageLifecycle`), and registers the service worker with
+(`bindPageLifecycle`), and (in the web app; the App Store app has none, see
+[Native iOS app](#native-ios-app-app-store)) registers the service worker with
 `canReloadNow: () => controller.canReloadNow({ hidden: document.visibilityState === 'hidden' })`:
 - true in the `setup` and `error` phases;
 - in `over` (a finished game), true when no sheet is open; with a sheet open over it (such as the
@@ -573,7 +599,8 @@ back, so an update never reloads the New game sheet while the user is choosing (
 lazy chunk that fails while an update waits, is described in `pwa.ts`). `main.tsx` also passes
 `onOfflineReady`, which sets an `OfflineStatus` signal (`'cached'` when the page was controlled at
 startup, else `'installed'`); `App` shows "Available offline" in the Menu's Engine section, and as a
-toast once after the splash when it is `'installed'` (not over another toast). `main.tsx` installs
+toast once after the splash when it is `'installed'` (not over another toast). In the App Store app the
+signal stays null, so neither shows (a web-ism there). `main.tsx` installs
 the iOS guards with `onFirstGesture: unlockAudio`, renders `<App controller offline/>` and calls
 `boot()`. `window.__chessCoach.controller` is exposed for debugging and the e2e tests.
 
@@ -604,7 +631,7 @@ starting level and saves the profile), `playerMove(from, to, promotion?)`, `undo
 advice by `engineFailureKind`. Dependencies are injectable (`ControllerDeps`): `createEngines(request:
 { onProgress })` (a zero-argument factory also type-checks), `onlineEvents` (where `online` comes
 from, for the download retry), `storage`, `rng`, `sound`, `now`, `thinkDelay`, `createBot`,
-`createId`, `analysisOptions`. `BotLike` is `{ newGame(elo); move(fen, elo, history, signal?, startFen?) }`;
+`createId`, `analysisOptions`, `entitlements` (Pro; default `getEntitlements()`). `BotLike` is `{ newGame(elo); move(fen, elo, history, signal?, startFen?) }`;
 the controller passes the game's `startFen`, so games from a custom position get the repetition
 handling too.
 
@@ -714,19 +741,191 @@ graph, move list, your strip and the toolbar.
 **Themes:** dark by default; Light and Automatic (follows iOS) in the menu. `theme.ts` and an inline
 script in `index.html` set `<html data-theme>` before the first paint.
 
+## Native iOS app (App Store)
+
+The App Store app is the same web app in a [Capacitor 8](https://capacitorjs.com/) shell
+(`@capacitor/ios` 8.5.2, MIT): a WKWebView that serves the built files from inside the app at
+`capacitor://localhost/`. `ios/README-native.md` covers the Xcode side in detail.
+
+### Build modes
+
+| Build | How | Output | Service worker | Store (`getPurchases()`) | Pro |
+|---|---|---|---|---|---|
+| Web app (PWA) | `npm run build` | `dist/`, base `BASE_PATH` | yes (vite-plugin-pwa) | `AlwaysUnlocked` | everything unlocked; no paywall, lock or Pro row |
+| Paywall test | `VITE_PAYWALL=1` on any web build (the second Playwright server, `scripts/appstore-screenshots.mjs`) | wherever it is built | as the build | `MockPurchases` | locked until a mock purchase |
+| App Store app | `npm run build:native`, then `npm run cap:sync` | `dist-native/`, base `/`, copied to `ios/App/App/public/` | none | `NativePurchases` (the Store plugin) | locked until bought |
+
+- `nativeBuild` (`import.meta.env.VITE_NATIVE === '1'`) is a build-time constant: no service worker
+  (`virtual:pwa-register` is a stub), no "Available offline" (the `offline` signal stays null), no source maps, no Safari launch images,
+  web-only files left out of `dist-native/`, and `THIRD-PARTY-LICENSES.txt` lists Capacitor's native
+  code (MIT, with Apache-2.0 Cordova code) instead of Workbox. `vite.config.ts` also copies `APP_ID`
+  and `APP_NAME` (`capacitor.config.ts`) and the `package.json` version into the Xcode project
+  (`PRODUCT_BUNDLE_IDENTIFIER`, `CFBundleDisplayName`, `MARKETING_VERSION`), and injects
+  `VITE_APP_NAME`, `VITE_APP_VERSION` and `VITE_SOURCE_URL` (in the native build the exact commit,
+  `tree/<git HEAD>`, unless `VITE_SOURCE_URL` is set, e.g. to the release workflow's build tag). A native
+  build from uncommitted changes warns, and fails with `RELEASE_BUILD=1` (`npm run build:native:release`).
+- `isNative` is true only when the native runtime is there too (`Capacitor.isNativePlatform()` on the
+  global the bridge injects), so `dist-native/` opened in a browser behaves like the web app.
+- `paywallEnabled = isNative || VITE_PAYWALL === '1'`: whether Pro is sold (locked until bought).
+
+### src/native/
+
+```ts
+// platform.ts — the only module that imports Capacitor: each import sits behind `nativeBuild` in this
+// module, so the web build drops them (an import elsewhere behind an imported flag would still become a
+// chunk and land in the PWA precache).
+export const nativeBuild: boolean; export const isNative: boolean; export const paywallEnabled: boolean;
+export const APP_NAME: string; export const APP_VERSION: string;
+export const LEGAL_URLS: { privacy: string; terms: string; support: string }; // public/*.html on GitHub Pages
+export const nativePlugins: { core(); haptics(); preferences(); share(); splashScreen(); statusBar() }; // reject on the web
+
+// purchases.ts — the store contract (failures are results — 'failed' / 'cancelled' / null — except that
+// isUnlocked() rejects when the store cannot be asked at all, so a paying player's cached Pro is kept)
+export const PRO_PRODUCT_ID: string;                    // 'io.github.atgy2k.chesscoach.pro'
+export interface ProProduct { id: string; title: string; description: string; displayPrice: string }
+export type PurchaseResult = 'purchased' | 'cancelled' | 'pending' | 'failed';
+export type RestoreResult = 'restored' | 'none' | 'cancelled' | 'failed'; // failed: the sync failed (offline), not "none"
+export interface Purchases {
+  getProduct(): Promise<ProProduct | null>;  // null: store unavailable
+  isUnlocked(): Promise<boolean>;            // verified, unrevoked entitlement (Family Sharing included); offline;
+                                             // rejects if the plugin is missing or the call fails (unknown ≠ locked)
+  purchase(): Promise<PurchaseResult>;
+  restore(): Promise<RestoreResult>;         // AppStore.sync(), then isUnlocked; never rejects
+  onChange(cb: (unlocked: boolean) => void): () => void; // Transaction.updates: Ask to Buy, other devices, refunds
+}
+export function getPurchases(): Purchases;  // NativePurchases | MockPurchases (window.__mockStore) | AlwaysUnlocked
+```
+
+- `storage.ts`: iOS may purge a web view's localStorage when space runs low, so every `chesscoach.*`
+  key is mirrored to `@capacitor/preferences` (UserDefaults). `prepareNativeStorage()` restores missing
+  keys at startup (at most 1.5 s for the plugin and key list, then up to 5 s for the values, read in
+  parallel; nothing is written after it gives up), then wraps `Storage.prototype` to write changes
+  through. Backed-up keys it could not restore are held (never written through this session) and
+  listed under `chesscoach-native-unrestored`, so the next launch restores them over the defaults the
+  app started with. The plugin proxy is always passed boxed (`{ prefs }`), never as a promise's value.
+- `haptics.ts`: `withHaptics(soundPort, isSoundEnabled)` plays a haptic with each game sound while
+  Sound is on.
+- `share.ts`: `installNativeShare()` backs `navigator.share` with the iOS share sheet, so App.tsx's
+  PGN export is unchanged (closing the sheet rejects with an AbortError, like Safari).
+- `statusbar.ts`: the status bar follows `<html data-theme>` (a MutationObserver); `hideSplash()`
+  hides the launch screen after the first frame, or on an error.
+
+`main.tsx` in the native app: theme, iOS guards, status bar, native share and error hooks for the
+launch screen; then `prepareNativeStorage()` before the controller is created (the saved game, rating
+and settings must be back first); the controller gets the haptics sound port; no service worker.
+
+### StoreKit plugin (ios/App/App/StorePlugin.swift)
+
+The app's own Capacitor plugin, `jsName` `"Store"`, registered by `MainViewController`
+(a `CAPBridgeViewController` subclass that `SceneDelegate` creates) in `capacitorDidLoad()`. StoreKit 2,
+no server: StoreKit verifies each transaction's signature on the device, and only verified ones count.
+
+| Method / event | Does |
+|---|---|
+| `getProduct({productId})` | `Product.products(for:)` → `{id, title, description, displayPrice}`; rejects if unknown or offline |
+| `isUnlocked({productId})` | a verified `Transaction.currentEntitlements` entry for the product without `revocationDate` (StoreKit's on-device cache) |
+| `purchase({productId})` | `product.purchase()` (in the app's window scene on iOS 17+) → `purchased` (verified, then `finish()`), `cancelled`, `pending` (Ask to Buy), or `failed` with `error` |
+| `restore({productId})` | `AppStore.sync()` (may show the sign-in), then the entitlement check even if the sync failed → `{unlocked, error?}` (`error` is `"cancelled"` for a closed sign-in); `NativePurchases` maps it to `restored` / `none` / `cancelled` / `failed` |
+| event `entitlementChanged` `{productId, unlocked}` | for each `Transaction.updates` item (listened to from `load()`, i.e. launch): finish it if verified, check the entitlements again, notify on the bridge's queue |
+
+`loadStorePlugin()` checks `Capacitor.isPluginAvailable('Store')` first and logs a `console.error` once if
+the plugin was not registered (e.g. SceneDelegate creating a plain `CAPBridgeViewController`); every call
+then fails as "unknown", so a cached Pro stays unlocked.
+`ios/App/App/Products.storekit` is a local StoreKit configuration (Pro at $9.99, Family Sharing on) that
+the shared `App` scheme uses when running from Xcode; it is not copied into the app.
+`NativePurchases` (purchases.ts) wraps the plugin, passes `PRO_PRODUCT_ID` with every call, and reports
+`onChange` only when an event changes the known state. `tests/native/purchases.test.ts` checks that
+the JavaScript and Swift method and event names match.
+
+### Entitlements and the paywall (src/game/entitlements.ts)
+
+```ts
+export type ProFeature = 'coachExplanations' | 'hint' | 'showBest' | 'bestMoveArrows' | 'reviewDetails';
+export const FEATURE_TIERS: Readonly<Record<ProFeature, 'free' | 'pro'>>; // THE free / Pro split
+export const PRO_NAME: string;              // `${APP_NAME} Pro`
+export const PRO_CACHE_KEY = 'chesscoach.pro';
+export interface Entitlements {
+  readonly enabled: boolean;                       // paywallEnabled
+  readonly pro: ReadonlySignal<boolean>;            // always true when not enabled
+  readonly locked: ReadonlySignal<ReadonlySet<ProFeature>>;
+  readonly product; readonly productState; readonly status /* idle | buying | restoring | pending | success | failed | restoreNone | restoreFailed */;
+  readonly paywall: ReadonlySignal<{ open: boolean; feature: ProFeature | null }>;
+  isAllowed(f): boolean; requirePro(f): boolean /* else opens the paywall */; openPaywall(f?); closePaywall();
+  loadProduct(); buy(): Promise<PurchaseResult>; restore(): Promise<RestoreResult>; dispose();
+}
+export function createEntitlements(opts: { enabled: boolean; purchases?; storage?; tiers? }): Entitlements;
+export function getEntitlements(): Entitlements; // the app's one instance (the controller's default)
+```
+
+- `pro` starts from the cached flag (`PRO_CACHE_KEY`, so the first frame is right), is confirmed by
+  `isUnlocked()`, and follows `onChange`, purchases and restores; the store's answer always wins (a
+  rejected `isUnlocked()` is no answer: the cached flag stays). Restore: `none` → `restoreNone`
+  ("No earlier purchase…"), `failed` → `restoreFailed` ("Couldn't reach the App Store", Try again),
+  `cancelled` → `idle` (nothing said).
+- **Always free:** every bot at any Elo, the rating, the evaluation bar and graph, move classes and
+  badges, accuracy, takebacks and Retry, PGN export. The engine still analyzes every move either way;
+  only what the view models show is gated.
+- **Gating** (`GameController.entitlements`; the store gets `locked`): the coach panel keeps the
+  verdict and the class icon but replaces the explanation with `lockedTeaser()` (game/coach.ts: what
+  the coach would explain, never the answer) and an "Unlock to see why" action; Show best shows a lock
+  and opens the paywall (`runAction`); the toolbar's Hint shows a lock and `requestHint()` opens the
+  paywall instead of the "unrated" question; no arrows are drawn from locked features; best-move arrows
+  (Menu, New game sheet) open the paywall instead of switching on; the review keeps accuracy and
+  counts but shows a locked key-moments card (`ReviewPanel` `lockedMoments` + `onUnlock`). When features
+  become locked again (a refund), `onLocksChanged()` closes a hint or Show best and turns arrows off.
+- **UI:** `PaywallSheet` (the store's localized price on the Buy button, Restore Purchases, the
+  Privacy Policy and Terms of Use links, thanks then closes after a purchase); the Menu's Pro section
+  (Unlock / "Unlocked ✓" / "Waiting for approval", Restore Purchases); a toast when Pro unlocks while the
+  paywall is closed (Ask to Buy approval, a purchase on another device). While the paywall is open or a
+  purchase runs, `canReloadNow()` is false.
+
+### Xcode project and release
+
+- `ios/App/App.xcodeproj` (scheme and target `App`), Swift Package Manager: `ios/App/CapApp-SPM/Package.swift`
+  (rewritten by `cap sync`) pulls `capacitor-swift-pm` and the plugins from `node_modules/`, so
+  `npm ci` comes before any Xcode build. iOS 16.4+ (WebAssembly SIMD), iPhone only, portrait only,
+  `ITSAppUsesNonExemptEncryption = NO`, `PrivacyInfo.xcprivacy` (UserDefaults, reason CA92.1).
+- `.github/workflows/ios-build.yml`: on pushes and pull requests that touch the app, a `macos-26`
+  runner with the latest stable Xcode runs `npm ci`, `build:native` and `cap:sync`, resolves the
+  Swift packages, and builds Debug for the Simulator and Release for devices with
+  `CODE_SIGNING_ALLOWED=NO`; compiler errors and warnings in `ios/` become annotations, and the logs are
+  uploaded on failure.
+- `.github/workflows/ios-release.yml`: on a tag `v<version>` (must equal `package.json`) or by hand.
+  A `prepare` job (the only one that may write to the repository; it runs no npm packages) checks the
+  secrets, the version and the legal pages (`scripts/check-legal-pages.mjs`, fatal on a tag), and tags
+  the commit `ios-v<version>-b<build>`; then the `testflight` job runs the unit tests,
+  `build:native:release` with that tag as `VITE_SOURCE_URL`, `cap:sync`, `MARKETING_VERSION` from `package.json` and
+  `CURRENT_PROJECT_VERSION` = run number + `vars.IOS_BUILD_NUMBER_OFFSET`, then codemagic-cli-tools
+  (App Store Connect API key + a distribution-certificate key from repository secrets) create or reuse
+  the certificate and App Store profile, archive, export and upload to TestFlight.
+- GPL: every App Store build links to its exact source (its `ios-v<version>-b<build>` tag, or the commit);
+  the released version is also tagged `v<version>`.
+  `docs/APP_STORE.md` is the owner's release checklist; `docs/EULA-draft.md` (= `public/terms.html`)
+  is the custom license agreement, which defers to the GPL.
+- `scripts/appstore-screenshots.mjs`: builds `VITE_NATIVE=1 VITE_PAYWALL=1` into
+  `node_modules/.cache/chess-coach-screenshots`, serves it with `vite preview` on port 5640, seeds
+  storage (profile, settings, a saved game from a fixed move list, the mock purchase), drives the app
+  through `window.__chessCoach.controller` with the real engine, applies a 6.9-inch iPhone's safe areas
+  (and draws a status bar), and saves 1320 × 2868 RGB PNGs to `appstore/screenshots/`: 01–04 for the
+  product page (screens with a Pro feature get a "Pro · in-app purchase" tag, Guideline 2.3.2) and
+  `iap-review/paywall.png`, the in-app purchase's review screenshot (it shows the price).
+
 ## Deployment
 
 A GitHub Actions workflow (`deploy.yml`) runs the unit tests and the e2e tests against a
 `BASE_PATH=/chess/` build, then builds with `BASE_PATH=/chess/` and deploys to GitHub Pages; `ci.yml`
 runs the same checks on branches and pull requests, with the e2e tests at both `/` and `/chess/`.
 Other static hosts (Cloudflare Pages, Netlify) work with `npm run build`, output `dist`, and
-`BASE_PATH=/`. The repository is private, so a public site must also offer the source (see README
-"Hosting": a public repository, or `npm run build:source` + `VITE_SOURCE_URL`).
+`BASE_PATH=/`. A public site must also offer the source: the repository is public, and the app links
+to it (see README "Hosting" for hosting from a private fork: `npm run build:source` +
+`VITE_SOURCE_URL`). The site also serves `privacy.html`, `terms.html` and `support.html` from
+`public/` (static, self-contained pages) for the App Store app. The App Store app has its own workflows
+(`ios-build.yml`, `ios-release.yml`, see [Native iOS app](#native-ios-app-app-store)).
 
 Service worker (`vite.config.ts`, Workbox `generateSW`):
 - It precaches the whole app, including the engine `.js` + `.wasm` and the license notices, so it
-  works offline: 22 files, about 3.3 MB (the engine `.wasm` 1.8 MB, the opening book 0.9 MB; about
-  1.6 MB gzipped). Hashed `assets/` and the engine files (versioned by name; `ENGINE_FILES` pins
+  works offline: 25 files, about 3.3 MB (the engine `.wasm` 1.8 MB, the opening book 0.9 MB; about
+  1.6 MB gzipped), the privacy, terms and support pages included. Hashed `assets/` and the engine files (versioned by name; `ENGINE_FILES` pins
   their SHA-256 and fails the build if they change) are precached without a revision, so the first
   visit can reuse the engine download from the HTTP cache instead of fetching it twice.
 - The first install is all or nothing: if one download fails, the browser deletes the registration.
@@ -744,20 +943,32 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
 
 ## Tests
 
-- `npm test`: Vitest unit tests in node, 676 tests in 30 files (the one test in
+- `npm test`: Vitest unit tests in node, about 790 tests in 40 files (the one test in
   `tests/bot/calibration.slow.test.ts` is skipped unless `CALIBRATE=1`, see `npm run calibrate`). They
   cover pure logic, the engine layer against scripted transports, the controller against a fake
   engine and a scripted bot (`tests/helpers/fakeEngine.ts`), the store's view models, UI helpers, the
   service-worker registration keeper and reload gate, and some real-engine checks that run the
   vendored Stockfish WASM in node (`tests/helpers/nodeTransport.ts`: engine searches, the position
-  history, bot mates and conversions).
+  history, bot mates and conversions). `tests/native/` covers src/native (platform flags, haptics,
+  the storage mirror, share, and the purchases contract against a fake Store plugin, including that
+  the JavaScript and Swift names match); `tests/game/entitlements.test.ts` and `paywall.test.ts` cover
+  Pro's state and the gating in the controller and the view models.
 - `npm run e2e`: Playwright on the production build with the real engine, iPhone 15 Pro emulation,
-  20 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id`, iOS tags, engine MIME
+  28 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id`, iOS tags, engine MIME
   types, service worker and precache, offline, license notices served as files, full-screen layout);
-  `e2e/game.spec.ts` (13) plays through the UI (moves by tapping squares, coach, hint, undo, flip,
+  `e2e/game.spec.ts` (15) plays through the UI (moves by tapping squares, coach, hint, undo, flip,
   reload, resign, review, a game as Black, a mating promotion, the move list staying on the current
-  move when a review starts, coach readability at six phone heights, landscape (the Unrated pill
+  move when a review starts or the phone is rotated, coach readability at six phone heights, a
+  position that needs millions of nodes, landscape (the Unrated pill
   and the Back to game chip, the coach verdict, the floating review header), the starting level and
   Set my level, the Engine rows and compatibility mode, "Available offline", download progress on
   the splash, a failed download that recovers when back online, and `?enginetest`).
+  `e2e/paywall.spec.ts` (6) runs against a second build made with `VITE_PAYWALL=1` (playwright.config.ts
+  serves it on port 4174) and steers the mock store through `window.__mockStore`: the locked coach,
+  Hint and Show best, the paywall and a purchase, cancelled / failed / pending (Ask to Buy) purchases,
+  Restore Purchases (also cancelled and offline) and a refund, the locked key moments of Game Review,
+  About's privacy / terms / support links with Pro locked and unlocked, and Escape over stacked sheets.
   `E2E_REQUIRE_APP_SW=1` makes the PWA tests fail if the app does not register its service worker.
+- The native shell itself (Swift, Xcode project) is only compiled on macOS: `ios-build.yml` in CI, or
+  Xcode on a Mac. Runtime checks in WKWebView need a device (see `docs/APP_STORE.md`, "Device
+  checklist").

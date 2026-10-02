@@ -9,6 +9,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "build:source": "git archive --format=tar.gz --prefix=chess-coach/ -o dist/chess-coach-source.tar.gz HEAD",
+    "build:native": "tsc --noEmit && VITE_NATIVE=1 BASE_PATH=/ vite build --outDir dist-native",
+    "build:native:release": "RELEASE_BUILD=1 npm run build:native",
+    "check:legal": "node scripts/check-legal-pages.mjs",
+    "cap:sync": "npx cap sync ios",
+    "ios:open": "npx cap open ios",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -19,12 +24,20 @@
     "calibrate": "CALIBRATE=1 vitest run tests/bot/calibration.slow.test.ts --reporter=verbose"
   },
   "dependencies": {
+    "@capacitor/core": "8.5.2",
+    "@capacitor/haptics": "8.0.2",
+    "@capacitor/ios": "8.5.2",
+    "@capacitor/preferences": "8.0.1",
+    "@capacitor/share": "8.0.2",
+    "@capacitor/splash-screen": "8.0.2",
+    "@capacitor/status-bar": "8.0.3",
     "@lichess-org/chessground": "^10.4.1",
     "@preact/signals": "^2.11.2",
     "chess.js": "^1.4.0",
     "preact": "^10.29.8"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.5.2",
     "@playwright/test": "^1.63.0",
     "@preact/preset-vite": "^2.10.6",
     "@types/node": "^26.6.3",
