@@ -1,0 +1,86 @@
+# Checks pull requests and work branches: unit tests, typecheck + production build, and the
+# Playwright end-to-end tests (PWA shell: manifest, service worker, offline reload, engine files;
+# game: playing through the UI with the real engine, review, and the ?enginetest page), both at the
+# site root and under the GitHub Pages base path /chess/.
+# Pushes to main are checked by deploy.yml, which runs the unit tests and the /chess/ end-to-end
+# tests again before it publishes.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+
+permissions:
+  contents: read
+
+# Newer pushes to the same branch or PR supersede older runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24 # @lichess-org/chessground declares engines.node >= 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build # tsc --noEmit && vite build
+
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - base: /
+            name: root
+          - base: /chess/ # the GitHub Pages layout (deploy.yml)
+            name: pages
+    name: e2e (${{ matrix.name }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright e2e tests
+        run: npx playwright test # builds with vite and serves it with vite preview (playwright.config.ts)
+        env:
+          BASE_PATH: ${{ matrix.base }}
+          # Fail if the app does not register its service worker itself (src/main.tsx).
+          E2E_REQUIRE_APP_SW: '1'
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-${{ matrix.name }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

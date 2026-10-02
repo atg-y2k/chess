@@ -1,0 +1,490 @@
+/* NewGameSheet: opponent hero + picker, Elo slider, colour choice, options, Play. */
+
+/* ---------------------------------------------------------------- your level (new players) */
+
+.ngs-level-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ngs-level-hint {
+  margin: 0 4px 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+/* ---------------------------------------------------------------- hero (selected opponent) */
+
+.ngs-hero {
+  position: relative;
+  padding: 14px 14px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--sheet-group);
+  overflow: hidden;
+}
+/* A soft wash of the opponent's colour behind the avatar. */
+.ngs-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 90% at 0% 0%, var(--ngs-tint, transparent), transparent 60%);
+  opacity: 0.22;
+  pointer-events: none;
+}
+
+.ngs-hero-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ngs-hero-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  box-shadow:
+    inset 0 -3px 0 rgba(0, 0, 0, 0.14),
+    0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.ngs-hero-avatar span {
+  font-size: 32px;
+  line-height: 1;
+  transform: translateY(1px);
+}
+
+.ngs-hero-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ngs-hero-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.ngs-hero-level {
+  margin-top: 1px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.ngs-hero-elo {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1;
+}
+.ngs-hero-elo-num {
+  font-size: 30px;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.ngs-hero-elo-unit {
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.ngs-hero-tagline {
+  position: relative;
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+/* ---------------------------------------------------------------- Elo slider */
+
+.ngs-slider-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px -4px 0;
+}
+
+.ngs-step {
+  appearance: none;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+.ngs-step::before {
+  content: '';
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  transition: transform 0.12s ease;
+}
+.ngs-step svg {
+  position: relative;
+}
+.ngs-step:active:not(:disabled)::before {
+  transform: scale(0.88);
+}
+.ngs-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.ngs-step:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.ngs-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 12px;
+  touch-action: pan-y;
+  cursor: pointer;
+  outline: none;
+}
+.ngs-slider-track {
+  position: relative;
+  height: 44px;
+}
+.ngs-slider-track::before,
+.ngs-slider-fill {
+  content: '';
+  position: absolute;
+  top: 19px;
+  left: 0;
+  height: 6px;
+  border-radius: 3px;
+}
+.ngs-slider-track::before {
+  right: 0;
+  background: var(--surface-3);
+}
+.ngs-slider-fill {
+  background: var(--accent);
+}
+.ngs-slider-thumb {
+  position: absolute;
+  top: 8px;
+  width: 28px;
+  height: 28px;
+  margin-left: -14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 2px 7px rgba(0, 0, 0, 0.3),
+    0 0 0 0.5px rgba(0, 0, 0, 0.12);
+  transition: transform 0.12s ease;
+}
+.ngs-slider:active .ngs-slider-thumb {
+  transform: scale(1.1);
+}
+.ngs-slider:focus-visible .ngs-slider-thumb {
+  box-shadow:
+    0 2px 7px rgba(0, 0, 0, 0.3),
+    0 0 0 3px var(--accent);
+}
+.ngs-slider-scale {
+  display: flex;
+  justify-content: space-between;
+  margin: -4px -6px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- bot cards */
+
+.ngs-bots {
+  display: flex;
+  gap: 4px;
+  margin: 10px calc(-1 * var(--sheet-pad)) 0;
+  padding: 2px var(--sheet-pad) 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scroll-padding: 0 var(--sheet-pad);
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.ngs-bots::-webkit-scrollbar {
+  display: none;
+}
+
+.ngs-bot {
+  appearance: none;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 80px;
+  margin: 0;
+  padding: 8px 2px 7px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text);
+  scroll-snap-align: start;
+  cursor: pointer;
+  transition: background-color 0.18s ease;
+}
+.ngs-bot:active {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.ngs-bot[aria-checked='true'] {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.ngs-bot:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ngs-bot-avatar {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 50px;
+  height: 50px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.14);
+  transition:
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+.ngs-bot:active .ngs-bot-avatar {
+  transform: scale(0.94);
+}
+.ngs-bot[aria-checked='true'] .ngs-bot-avatar {
+  box-shadow:
+    inset 0 -3px 0 rgba(0, 0, 0, 0.14),
+    0 0 0 2.5px var(--sheet-bg),
+    0 0 0 5px var(--accent);
+}
+.ngs-bot-emoji {
+  font-size: 28px;
+  line-height: 1;
+  transform: translateY(1px);
+}
+.ngs-bot-check {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+  box-shadow: 0 0 0 2.5px var(--sheet-bg);
+}
+
+.ngs-bot-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+.ngs-bot-elo {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.ngs-bot[aria-checked='true'] .ngs-bot-elo {
+  color: var(--accent);
+}
+
+.ngs-adaptive {
+  margin-top: 8px;
+}
+.ngs-emoji-icon {
+  font-size: 17px;
+  line-height: 1;
+}
+
+/* ---------------------------------------------------------------- colour segmented control */
+
+.ngs-colors {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 3px;
+  border-radius: calc(var(--radius) + 3px);
+  background: var(--sheet-group);
+}
+.ngs-colors-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / 3);
+  border-radius: var(--radius);
+  background: var(--surface-3);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
+  transition: transform 0.3s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+
+.ngs-color {
+  appearance: none;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 64px;
+  margin: 0;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+.ngs-color[aria-checked='true'] {
+  color: var(--text);
+}
+.ngs-color:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ngs-color .king-glyph {
+  transition: transform 0.2s ease;
+}
+.ngs-color:active .king-glyph {
+  transform: scale(0.9);
+}
+.ngs-color-label {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* King piece glyph (also used by GameOverSheet). */
+.king-glyph {
+  position: relative;
+  display: inline-block;
+  flex: none;
+}
+.king-glyph svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+/* Keep the black king readable on dark surfaces. */
+.king-glyph svg[data-c='b'] {
+  filter: drop-shadow(0 0 0.8px color-mix(in srgb, var(--text) 70%, transparent));
+}
+.king-glyph--split svg[data-c='b'] {
+  clip-path: inset(0 0 0 50%);
+}
+
+/* ---------------------------------------------------------------- note + Play */
+
+.sheet-note[data-warn] {
+  color: var(--warning);
+}
+
+.ngs-abandon {
+  display: flex;
+  gap: 7px;
+  margin: 0 2px 10px;
+  font-size: 13.5px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: var(--text);
+}
+.ngs-abandon svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: var(--warning);
+}
+
+.ngs-play {
+  display: block;
+  width: 100%;
+  min-height: 54px;
+  border-radius: var(--radius-lg);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 30%, transparent);
+  transition:
+    transform 0.12s ease,
+    filter 0.12s ease;
+}
+.ngs-play:active {
+  transform: scale(0.98);
+}
+.ngs-play:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+:root[data-theme='light'] .ngs-colors-thumb {
+  background: var(--surface);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.12),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06);
+}
+:root[data-theme='light'] .ngs-colors {
+  background: var(--surface-3);
+}
+:root[data-theme='light'] .ngs-hero {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+:root[data-theme='light'] .king-glyph svg[data-c='b'] {
+  filter: none;
+}
+:root[data-theme='light'] .sheet-note[data-warn] {
+  color: color-mix(in srgb, var(--warning) 70%, var(--text));
+}
+
+/* Roomy screens: show every opponent as a grid instead of a scroller. */
+@media (min-width: 600px) and (min-height: 760px) and (hover: hover) {
+  .ngs-bots {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    margin: 12px 0 0;
+    padding: 0;
+    overflow: visible;
+  }
+  .ngs-bot {
+    width: calc((100% - 6 * 4px) / 7);
+  }
+}

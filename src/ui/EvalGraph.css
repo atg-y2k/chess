@@ -1,0 +1,85 @@
+.evalgraph {
+  position: relative;
+  width: 100%;
+  flex: none;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  touch-action: pan-y;
+  -webkit-user-select: none;
+  user-select: none;
+  outline: none;
+}
+.evalgraph::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--eval-black) 30%, transparent);
+  pointer-events: none;
+}
+.evalgraph-interactive {
+  cursor: pointer;
+}
+.evalgraph-interactive:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.evalgraph-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  overflow: hidden;
+}
+.evalgraph-black {
+  fill: var(--eval-black);
+}
+.evalgraph-white {
+  fill: var(--eval-white);
+}
+.evalgraph-mid {
+  stroke: var(--text-faint);
+  stroke-width: 1px;
+  stroke-opacity: 0.7;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.evalgraph-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+.evalgraph-knob {
+  position: absolute;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.evalgraph-marker {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--eval-black);
+  z-index: 1;
+  pointer-events: none;
+  transition: transform 150ms ease-out;
+}
+.evalgraph-marker-current {
+  transform: scale(1.5);
+  box-shadow: 0 0 0 1.5px var(--surface);
+}

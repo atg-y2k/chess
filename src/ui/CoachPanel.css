@@ -1,0 +1,321 @@
+/* CoachPanel: coach avatar + speech bubble (title, explanation, actions). */
+
+.coach {
+  --coach-bubble-bg: var(--surface);
+  --coach-bubble-border: var(--border);
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  min-height: 92px;
+  max-height: var(--coach-max-height, 196px);
+  padding: 4px var(--gap);
+  min-width: 0;
+}
+.coach[data-cls] {
+  --coach-tone-text: var(--coach-tone);
+  --coach-bubble-bg: color-mix(in srgb, var(--coach-tone) 9%, var(--surface));
+  --coach-bubble-border: color-mix(in srgb, var(--coach-tone) 38%, var(--border));
+}
+
+.coach-avatar {
+  flex: none;
+  align-self: flex-start;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  margin-top: 2px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 21px;
+  line-height: 1;
+}
+
+.coach-bubble {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 9px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--coach-bubble-bg);
+  border: 1px solid var(--coach-bubble-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease;
+}
+/* Tail pointing at the avatar. */
+.coach-bubble::before {
+  content: '';
+  position: absolute;
+  top: 15px;
+  left: -6px;
+  width: 10px;
+  height: 10px;
+  background: var(--coach-bubble-bg);
+  border-left: 1px solid var(--coach-bubble-border);
+  border-bottom: 1px solid var(--coach-bubble-border);
+  transform: rotate(45deg);
+  border-bottom-left-radius: 2px;
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease;
+}
+
+.coach-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+/* Up to two lines in the bubble (a narrow side column cannot fit "23… Qxf7+ is an inaccuracy"). */
+.coach-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  color: var(--coach-tone-text, var(--text));
+}
+
+.coach-toggle {
+  appearance: none;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: -12px -12px -12px 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.coach-toggle:active {
+  color: var(--text);
+}
+
+.coach-chevron {
+  flex: none;
+  transform: rotate(90deg);
+  transition: transform 0.2s ease;
+}
+.coach-chevron--up {
+  transform: rotate(-90deg);
+}
+
+.coach-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 3px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.coach-body::-webkit-scrollbar {
+  display: none;
+}
+/* More text below: fade the last line to hint that the bubble scrolls. */
+.coach-body[data-more] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+}
+
+.coach-line {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.42;
+  color: var(--text-dim);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.coach-line + .coach-line {
+  margin-top: 3px;
+}
+.coach-line--lead {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.coach-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 5px;
+}
+.coach-skeleton i {
+  display: block;
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%);
+  background-size: 200% 100%;
+  animation: coach-shimmer 1.4s linear infinite;
+}
+.coach-skeleton i:first-child {
+  width: 88%;
+}
+.coach-skeleton i:last-child {
+  width: 58%;
+}
+
+@keyframes coach-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.coach-spin {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2.5px solid var(--surface-3);
+  border-top-color: var(--accent);
+  animation: coach-rot 0.8s linear infinite;
+}
+
+@keyframes coach-rot {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.coach-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.coach .coach-action {
+  position: relative;
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1;
+}
+/* Three actions (e.g. after the game): tighter pills, so they fit on one row of a phone-width bubble. */
+.coach-actions:has(> :nth-child(3)) {
+  gap: 6px;
+}
+.coach-actions:has(> :nth-child(3)) .coach-action {
+  padding: 0 10px;
+  font-size: 13.5px;
+}
+/* Extend the tap target to 44px without making the pill taller. */
+.coach .coach-action::after {
+  content: '';
+  position: absolute;
+  inset: -6px -4px;
+}
+
+/* Collapsed: one 44px summary row. */
+.coach--collapsed {
+  min-height: 0;
+  max-height: none;
+}
+.coach-row {
+  appearance: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 8px 0 5px;
+  border: 1px solid var(--coach-bubble-border);
+  border-radius: 22px;
+  background: var(--coach-bubble-bg);
+  text-align: left;
+  cursor: pointer;
+}
+.coach-row:disabled {
+  cursor: default;
+}
+.coach-row .coach-avatar {
+  align-self: center;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  font-size: 17px;
+}
+.coach-row .coach-title {
+  flex: none;
+  display: block;
+  -webkit-line-clamp: none;
+  line-clamp: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+/* One line, "<move> <verdict>": the move label gives way first ("4. Bx… is a blunder"). */
+.coach-row .coach-title--split {
+  display: flex;
+  gap: 0.25em;
+  max-width: 55%;
+}
+.coach-row .coach-title-move,
+.coach-row .coach-title-verdict {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.coach-row .coach-title-move {
+  flex: 0 1000 auto;
+  min-width: 1.6em; /* at least "2…", never a sliver of a glyph */
+}
+.coach-row .coach-title-verdict {
+  flex: 0 1 auto;
+}
+.coach-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.coach-row .coach-chevron {
+  color: var(--text-faint);
+  margin-left: auto;
+}
+
+/* Light theme: pale class colours (inaccuracy yellow, good green) need more contrast as text. */
+:root[data-theme='light'] .coach[data-cls] {
+  --coach-tone-text: color-mix(in srgb, var(--coach-tone) 72%, var(--text));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coach-skeleton i {
+    animation: none;
+  }
+  .coach-spin {
+    animation-duration: 2s;
+  }
+}

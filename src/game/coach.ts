@@ -1,0 +1,243 @@
+/**
+ * Coach wording that does not need the engine: class labels and sentences, move labels
+ * ("12. Nf3", "12… Nf6") and short, phase-aware playing tips.
+ */
+import { Chess, type Square } from 'chess.js';
+import { see } from '../analysis/see';
+import type { Classification, Explanation, MoveClass } from '../analysis/types';
+import { PIECE_VALUES } from '../chess/utils';
+import { CLASS_META } from '../ui/ClassIcon';
+import type { Ply } from './types';
+
+/** Display label of a class, e.g. "Blunder" (from CLASS_META). */
+export function classLabel(cls: MoveClass): string {
+  return CLASS_META[cls].label;
+}
+
+const PHRASE: Record<MoveClass, string> = {
+  brilliant: 'is brilliant',
+  great: 'is a great move',
+  best: 'is the best move',
+  excellent: 'is excellent',
+  good: 'is good',
+  book: 'is a book move',
+  forced: 'is forced',
+  inaccuracy: 'is an inaccuracy',
+  mistake: 'is a mistake',
+  miss: 'is a miss',
+  blunder: 'is a blunder',
+};
+
+/** chess.com-style verdict, e.g. "Qxd4 is a blunder" or "e4 is a book move". */
+export function classSentence(san: string, cls: MoveClass): string {
+  return `${san} ${PHRASE[cls]}`;
+}
+
+/** Classes that already say the move was weak, so an explanation can never contradict them. */
+const WEAK_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['inaccuracy', 'mistake', 'miss', 'blunder']);
+
+/** Expected score from which a side counts as winning (as in the explanations: "You are still winning."). */
+const WINNING = 0.75;
+
+/**
+ * What a move gives away when its class would praise it (`Explanation.concedes`): in a decided
+ * position an "Excellent" Kd8 can leave the queen en prise, because the expected score barely
+ * moves. Such a move gets a neutral verdict (`verdictTitle`) and no praise icon anywhere. Null
+ * for every other move.
+ */
+export function concession(ply: Pick<Ply, 'classification' | 'explanation'>): 'material' | 'mate' | null {
+  const c = ply.explanation?.concedes;
+  const cls = ply.classification?.cls;
+  return (c === 'material' || c === 'mate') && cls && !WEAK_CLASSES.has(cls) ? c : null;
+}
+
+/**
+ * The coach's verdict on a classified move, e.g. "12. Nf3 is a mistake" (`classSentence`), with
+ * the class icon to show beside it. A move whose text says what it gives away (`concession`) gets
+ * a neutral verdict and no icon instead: "10… Kd8 doesn't change the result" when the game was
+ * already lost (also when it only lets the opponent mate faster), "25. Rd1 still wins, but gives
+ * up material" when still winning, else "gives up material".
+ */
+export function verdictTitle(
+  ply: Pick<Ply, 'fenBefore' | 'san' | 'color' | 'index' | 'classification' | 'explanation'>,
+): { title: string; cls?: MoveClass } {
+  const label = moveLabel(ply);
+  const cl = ply.classification;
+  if (!cl) return { title: label };
+  const c = concession(ply);
+  if (!c) return { title: classSentence(label, cl.cls), cls: cl.cls };
+  if (c === 'mate' || cl.winBefore <= 1 - WINNING) return { title: `${label} doesn’t change the result` };
+  if (cl.winAfter >= WINNING) return { title: `${label} still wins, but gives up material` };
+  return { title: `${label} gives up material` };
+}
+
+/** Classes that do not need a "Show best" (the move was already the best or the only option). */
+export const TOP_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['brilliant', 'great', 'best', 'book', 'forced']);
+
+/**
+ * Whether the coach offers "Show best" (and review draws the best-move arrow) for a move: it was
+ * not the engine's top move, and its class does not already say it was the best or only option.
+ * A Brilliant sacrifice can be nearly-best, so it offers the engine's choice too.
+ */
+export function offersShowBest(cl: Pick<Classification, 'cls' | 'bestMoveUci'>, playedUci: string): boolean {
+  if (!cl.bestMoveUci || cl.bestMoveUci === playedUci) return false;
+  return cl.cls === 'brilliant' || !TOP_CLASSES.has(cl.cls);
+}
+
+/** Classes that offer "Retry" in coach mode. */
+export const RETRY_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['mistake', 'miss', 'blunder']);
+
+/** Classes drawn as markers on the eval graph and listed as key moments. */
+export const KEY_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['brilliant', 'great', 'mistake', 'miss', 'blunder']);
+
+/** "12. Nf3" for White, "12… Nf6" for Black (move number from the FEN before the ply). */
+export function moveLabel(ply: Pick<Ply, 'fenBefore' | 'san' | 'color' | 'index'>): string {
+  const n = Number(ply.fenBefore.split(' ')[5]);
+  const no = Number.isFinite(n) && n > 0 ? n : Math.floor(ply.index / 2) + 1;
+  return ply.color === 'w' ? `${no}. ${ply.san}` : `${no}… ${ply.san}`;
+}
+
+const OPENING_TIPS = [
+  'Fight for the center with your pawns and pieces.',
+  'Develop your knights and bishops before moving the same piece twice.',
+  'Castle early to tuck your king away safely.',
+  'Keep your queen back for now: early queen moves can be chased around.',
+  'Connect your rooks by developing all of your minor pieces.',
+];
+
+const MIDDLEGAME_TIPS = [
+  'Before you move, look at every check, capture and threat, for both sides.',
+  'Look for undefended pieces: yours and your opponent’s.',
+  'Rooks love open files.',
+  'Improve your worst-placed piece.',
+  'Ask yourself what your opponent wants to do next.',
+];
+
+const ENDGAME_TIPS = [
+  'In the endgame the king is a strong piece: bring it toward the center.',
+  'Passed pawns must be pushed.',
+  'Rooks belong behind passed pawns.',
+  'When you are ahead, trade pieces rather than pawns.',
+];
+
+/** Non-pawn material of both sides together (queen 9, rook 5, minor 3). Start position: 62. */
+function pieceMaterial(fen: string): number {
+  let total = 0;
+  for (const ch of fen.split(' ')[0]) {
+    const p = ch.toLowerCase();
+    if (p !== 'p' && p !== 'k' && p in PIECE_VALUES) total += PIECE_VALUES[p];
+  }
+  return total;
+}
+
+/**
+ * A short playing tip for the side to move: opening principles early on, tactics in the
+ * middlegame and endgame technique once most pieces are gone. Stable for a whole move (it only
+ * changes every two plies), so the coach panel does not flicker.
+ */
+export function coachTip(fen: string, plyCount: number, inCheck = false): string {
+  if (inCheck) return 'You are in check: move your king, block the check or capture the checking piece.';
+  const endgame = pieceMaterial(fen) <= 26;
+  const tips = endgame ? ENDGAME_TIPS : plyCount < 16 ? OPENING_TIPS : MIDDLEGAME_TIPS;
+  return tips[Math.floor(plyCount / 2) % tips.length];
+}
+
+const PIECE_NAMES: Record<string, string> = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen' };
+
+/**
+ * The tip right after the opponent took one of your pieces, when you can take back on that square
+ * without losing material (static exchange, `see` >= 0, with some legal capture there): "Rocco just
+ * took your bishop on c1. Can you recapture?". Null when `last` was no capture by the opponent, or
+ * no recapture holds its own.
+ */
+export function recaptureTip(
+  fen: string,
+  last: Pick<Ply, 'uci' | 'color' | 'captured'> | null | undefined,
+  opponent: string,
+): string | null {
+  const piece = last?.captured ? PIECE_NAMES[last.captured] : undefined;
+  if (!last || !piece) return null;
+  let chess: Chess;
+  try {
+    chess = new Chess(fen);
+  } catch {
+    return null;
+  }
+  const me = chess.turn();
+  if (me === last.color) return null;
+  const to = last.uci.slice(2, 4) as Square;
+  const holds = chess
+    .moves({ verbose: true })
+    .some((m) => m.to === to && !!m.captured && see(fen, to, me, m.from) >= 0);
+  return holds ? `${opponent} just took your ${piece} on ${to}. Can you recapture?` : null;
+}
+
+/** Whether `text` names the move `san` as a whole word (check / mate signs ignored). */
+export function mentionsMove(text: string, san: string): boolean {
+  const core = san.replace(/[+#?!]+$/, '');
+  if (!core) return false;
+  const escaped = core.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^A-Za-z0-9-])${escaped}(?![A-Za-z0-9=-])`).test(text);
+}
+
+/** Opening sentence when the explanation's own headline would give the better move away. */
+const ANSWER_FREE_LEAD: Partial<Record<MoveClass, string>> = {
+  mistake: 'There was a clearly better move here.',
+  miss: 'You missed a chance to punish your opponent’s mistake.',
+  blunder: 'There was a much better move here.',
+};
+
+/**
+ * The explanation of a move the player may still Retry, without giving the better move away: no
+ * line that names it ("Best was Nf3, which …", "You missed Qxh5, which wins a knight."), no
+ * description of a missed tactic, and no "promotes to a knight instead of a queen" (which says
+ * what to promote to). "Show best" reveals the rest. Always at least one line.
+ */
+export function answerFreeLines(e: Explanation | undefined | null, cl: Classification): string[] {
+  const all = e ? [e.headline, ...e.details] : [];
+  const best = cl.bestMoveSan;
+  const motifs = e?.motifs ?? [];
+  const missedTactic = motifs.includes('missedTactic');
+  const underpromotion = motifs.includes('underpromotion');
+  const lines = all.filter(
+    (line, i) => !(best && mentionsMove(line, best)) && !(missedTactic && i > 0) && !(underpromotion && i === 0),
+  );
+  if (e && lines[0] !== e.headline) {
+    const lead = motifs.includes('missedMate')
+      ? 'You missed a checkmate.'
+      : missedTactic
+        ? 'You missed a chance to win material.'
+        : (ANSWER_FREE_LEAD[cl.cls] ?? 'There was a better move here.');
+    lines.unshift(lead);
+  }
+  return lines.length ? lines : [ANSWER_FREE_LEAD[cl.cls] ?? 'There was a better move here.'];
+}
+
+/**
+ * Explanation of a move that repeats the position for the third time (the game is drawn at once).
+ * The engine only sees the position, not the game's history, so its own explanation would praise
+ * or criticize the move as if play went on.
+ */
+export function repetitionExplanation(
+  san: string,
+  cl: Classification,
+  opts: { human: boolean; botName: string },
+): Explanation {
+  const details: string[] = [];
+  if (cl.winBefore >= 0.6) {
+    details.push(
+      opts.human
+        ? 'You were winning: when you are ahead, avoid repeating the position.'
+        : `${opts.botName} was winning, so the draw let you off the hook.`,
+    );
+    if (cl.bestMoveSan && cl.bestMoveSan !== san) details.push(`Best was ${cl.bestMoveSan}.`);
+  } else if (cl.winBefore <= 0.4) {
+    details.push(opts.human ? 'A draw is a good result from a lost position.' : `${opts.botName} was losing, so a draw is a good result for it.`);
+  }
+  return {
+    headline: `${san} repeats the position for the third time, so the game is a draw.`,
+    details,
+    title: 'Repetition',
+    motifs: ['repetition'],
+  };
+}
