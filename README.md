@@ -8,6 +8,9 @@ after the first visit.
 
 **Open it:** <https://atg-y2k.github.io/chess/> (see [Hosting](#hosting) if the link is not live yet).
 
+**On the App Store (in preparation):** the same app as a native iPhone app, a free download with an
+optional one-time "Pro" purchase for the coaching features. See [iOS app](#ios-app-app-store).
+
 ## What you get
 
 - **Opponents from 100 to 3200 Elo.** 16 named bots (Pip 🐣 at 100 … Quasar 🌌 at 3200), a custom
@@ -233,6 +236,7 @@ match chess.com exactly. The Brilliant and Great thresholds depend on your ratin
 ## The Menu
 
 - **Flip board, Export PGN, New game and Resign** (Resign asks first).
+- **Chess Coach Pro** (App Store app only): Unlock, or "Unlocked ✓", and **Restore Purchases**.
 - **While playing:** Coach, Evaluation bar, Best-move arrows (makes the game unrated) and Sound.
 - **Appearance:** Dark, Light or Automatic (follows iOS).
 - **Your stats:** rating, peak, games, wins/draws/losses and **Set my level**; then your
@@ -240,8 +244,8 @@ match chess.com exactly. The Brilliant and Great thresholds depend on your ratin
 - **Engine:** "Stockfish 19" with "2 workers", or "1 worker (compatibility mode, until …)";
   **Available offline** once the app and the engine are saved on the phone; and **Run engine
   self-test**. See below.
-- **About:** the license notice, a link to the source code, the credits, and links to the
-  third-party licenses and the engine's source and license.
+- **About:** the license notice, a link to the source code, the credits, and the third-party
+  licenses and the engine's source and license (shown in the app).
 
 ## If something goes wrong
 
@@ -270,9 +274,8 @@ The app is a static site: `npm run build` writes it to `dist/`.
   tests and the end-to-end tests (against a `BASE_PATH=/chess/` build), builds with
   `BASE_PATH=/chess/` and publishes. Nothing is published if a test fails. One-time setup:
   repository **Settings → Pages → Build and deployment → Source: GitHub Actions**. GitHub Pages on
-  the **Free plan requires a public repository**. This repository is private, so either make it
-  public, upgrade to GitHub Pro (or a paid organization plan), or use one of the hosts below.
-- **Cloudflare Pages or Netlify** (both free for private repositories): connect the repository,
+  the Free plan needs a public repository, which this one is.
+- **Cloudflare Pages or Netlify** (both free, also for private repositories): connect the repository,
   set the build command to `npm run build`, the output directory to `dist`, and the environment
   variable **`BASE_PATH=/`** (the site is served from the root there, not from `/chess/`). Use
   Node 24.
@@ -280,11 +283,18 @@ The app is a static site: `npm run build` writes it to `dist/`.
 
 Whatever the host, open the site once in Safari and add it to the Home Screen as above.
 
+The site also serves the pages the App Store app needs: `privacy.html` (privacy policy), `terms.html`
+(the license agreement) and `support.html`, from `public/`. They are static, self-contained pages that
+also open offline, and the app's purchase screen links to them at
+`https://atg-y2k.github.io/chess/…`. Keep them online even if you stop hosting the web app (see
+[`docs/APP_STORE.md`](docs/APP_STORE.md), "The free web version").
+
 **A public site must offer its source code.** Everyone who opens the site receives GPL-3.0 code (the
 app itself, chessground and Stockfish), so they must also be able to get the source. The app points
 to <https://github.com/atg-y2k/chess> (the Menu's About section, the self-test page and
-`THIRD-PARTY-LICENSES.txt` next to the app), which is enough once that repository is public; the
-GitHub Pages route needs that anyway. To host publicly from a private repository instead, publish
+`THIRD-PARTY-LICENSES.txt` next to the app). The repository is public, so that is enough; keep it
+public, also because the App Store app links to its release tags. To host publicly from a private
+repository instead (a fork, say), publish
 the source next to the app: use the build command `npm run build && npm run build:source` (it adds
 `chess-coach-source.tar.gz`, a `git archive` of the committed source of the commit being deployed,
 to `dist/`) and set `VITE_SOURCE_URL=chess-coach-source.tar.gz` so the app points there. Or keep the
@@ -298,12 +308,13 @@ Requires Node 24 (chessground declares `engines.node >= 24`).
 ```sh
 npm ci                 # install
 npm run dev            # dev server with hot reload (http://localhost:5173)
-npm test               # unit tests (Vitest: 676 tests in 30 files; the calibration test is skipped)
+npm test               # unit tests (Vitest: about 790 tests in 40 files; the calibration test is skipped)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
 npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting
 npm run preview        # serve dist/
-npm run e2e            # Playwright (20 tests): builds, serves and runs e2e/ on an emulated iPhone 15 Pro
+npm run e2e            # Playwright: builds, serves and runs e2e/ on an emulated iPhone 15 Pro (the
+                       #   paywall tests run against a second, VITE_PAYWALL=1 build)
 npm run build:openings # regenerate src/data/openings.json from the lichess chess-openings data
 npm run calibrate      # play bot-vs-bot matches with the real engine to check the Elo ladder
 ```
@@ -320,6 +331,64 @@ npm run calibrate      # play bot-vs-bot matches with the real engine to check t
   (e.g. `await __chessCoach.controller.idle()`).
 - `ARCHITECTURE.md` describes the modules, the contracts between them and the screen layout.
 
+## iOS app (App Store)
+
+The App Store app is this same web app, built for a native shell with `VITE_NATIVE=1` and wrapped by
+[Capacitor 8](https://capacitorjs.com/). Every file, the engine included, ships inside the app, so it
+works offline from the first launch and updates only through the App Store: no service worker, no
+update logic, no web manifest. It adds native touches: a haptic with each game sound, the iOS share
+sheet for PGN export, a status bar that follows the theme, a launch screen, and a backup of your
+rating, games and settings in the app's own settings storage (iOS may clear a web view's storage when
+the device runs low on space). iPhone only, portrait, iOS 16.4 or later.
+
+**Free and Pro.** The App Store app is a free download with one in-app purchase, **Pro**: one-time
+(non-consumable), shared through Family Sharing, and bought and checked on the device with StoreKit 2
+(no server, no account; the check works offline).
+
+- **Free:** every opponent at any level, your rating, the evaluation bar and graph, the move ratings
+  and badges, accuracy, takebacks and Retry, and PGN export.
+- **Pro:** the coach's explanations (the "why"), Hint, Show best, best-move arrows, and Game Review's
+  key moments and per-move comments.
+
+The split is `FEATURE_TIERS` in `src/game/entitlements.ts`. The web app has no paywall: everything in
+it is unlocked. A web build made with `VITE_PAYWALL=1` locks Pro behind a mock store, for testing the
+paywall in a browser (`VITE_PAYWALL=1 npm run dev`; `window.__mockStore` steers it, see
+`ios/README-native.md`).
+
+**Build it on a Mac** (Xcode 26 or later, Node 24):
+
+```sh
+npm ci
+npm run build:native   # tsc, then VITE_NATIVE=1 vite build into dist-native/
+npm run cap:sync       # copy dist-native/ into the Xcode project in ios/App
+npm run ios:open       # open it in Xcode; pick your team under Signing & Capabilities, then Run
+```
+
+Run `build:native` and `cap:sync` again after every change to the web app.
+
+- [`ios/README-native.md`](ios/README-native.md): the Xcode project, where each setting lives (bundle
+  ID, name, version, minimum iOS), the StoreKit plugin, and testing purchases in Xcode, in the sandbox
+  and in a browser.
+- [`docs/APP_STORE.md`](docs/APP_STORE.md): the whole path from the Apple Developer account to the
+  release: the in-app purchase, TestFlight, privacy, age rating, screenshots, metadata, App Review
+  notes and the GPL steps for every release. [`docs/EULA-draft.md`](docs/EULA-draft.md) is the draft
+  license agreement for the store.
+- `.github/workflows/ios-build.yml`: builds the iOS app without signing on a macOS runner for every
+  push and pull request that touches it, which shows that the Swift code and the Xcode project compile.
+- `.github/workflows/ios-release.yml`: builds, signs and uploads to TestFlight when a tag
+  `v<version>` is pushed (or when run by hand). It needs an App Store Connect API key and a certificate
+  key as repository secrets (listed at its top).
+- `node scripts/appstore-screenshots.mjs`: App Store screenshots (1320 × 2868) of the real app, in
+  `appstore/screenshots/`.
+- `npm run check:legal`: lists placeholders (and "Draft" notices) still in the privacy policy, terms
+  and support pages; the release workflow refuses a `v*` release while there are any.
+
+**Releases and the GPL.** Every App Store build links, in its About section and its
+`THIRD-PARTY-LICENSES.txt`, to the exact commit it was built from. Builds for upload are made with
+`npm run build:native:release`, which refuses uncommitted changes, and each one's commit is tagged
+`ios-v<version>-b<build number>` (the release workflow does both). The released version is also
+tagged `v<version>`. Never delete or move those tags.
+
 ## Credits and licenses
 
 Chess Coach is free software under the **GNU General Public License v3.0 or later** (see
@@ -335,10 +404,17 @@ Chess Coach is free software under the **GNU General Public License v3.0 or late
 - [lichess chess-openings](https://github.com/lichess-org/chess-openings) (opening names and book):
   **CC0**.
 - [Preact](https://preactjs.com/) and [@preact/signals](https://github.com/preactjs/signals): MIT.
-- [Workbox](https://github.com/GoogleChrome/workbox) (the service worker and its registration): MIT.
+- [Workbox](https://github.com/GoogleChrome/workbox) (the web app's service worker and its
+  registration): MIT.
+- [Capacitor](https://capacitorjs.com/) (the iOS app's native shell, and its haptics, share, status
+  bar, splash screen and preferences plugins): MIT. Its Cordova compatibility layer includes code from
+  Apache Cordova: Apache-2.0.
 - Win-probability and accuracy formulas follow lichess's published ones. Move-classification names
   are inspired by chess.com's; this app is not affiliated with chess.com or lichess.org, and its bots
   are original characters.
 
 The build writes the license texts of every package it includes to `THIRD-PARTY-LICENSES.txt` next to
 the app (the engine's are in `engine/`), and keeps the packages' license comments in the minified code.
+The iOS app ships the same notices (Menu → About shows them). Its license agreement on the App Store
+will say that the GPL governs the software and does not restrict your rights under it (see the draft,
+[`docs/EULA-draft.md`](docs/EULA-draft.md), still to be reviewed by a lawyer).

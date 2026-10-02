@@ -1,0 +1,20 @@
+/* License viewer (About): a tall sheet with the text in a monospace block; the sheet body scrolls. */
+
+.license-sheet {
+  height: min(90dvh, calc(100dvh - var(--safe-top) - 8px));
+}
+
+.license-text {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+  user-select: text;
+  -webkit-user-select: text;
+}

@@ -1,0 +1,20 @@
+# Build products
+App/build
+App/Pods
+App/output
+DerivedData
+xcuserdata
+*.ipa
+*.xcarchive
+*.dSYM
+*.dSYM.zip
+
+# Web assets, copied from dist-native/ by `npx cap sync ios` (npm run cap:sync)
+App/App/public
+
+# Cordova plugins for Capacitor
+capacitor-cordova-ios-plugins
+
+# Generated Config files (written by `npx cap sync ios` from capacitor.config.ts)
+App/App/capacitor.config.json
+App/App/config.xml

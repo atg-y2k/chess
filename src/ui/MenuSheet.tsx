@@ -1,6 +1,7 @@
 import type { ComponentChild } from 'preact';
 import { useEffect, useId, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
+import type { ProFeature } from '../game/entitlements';
 import type { GameSettings } from '../game/types';
 import type { GameRecord, PlayerProfile } from '../rating/types';
 import type { ThemePref } from '../theme';
@@ -20,6 +21,7 @@ import {
   IconSound,
 } from './icons';
 import { LevelPicker, levelFor, type StartingLevel } from './LevelPicker';
+import { IconLock } from './PaywallSheet';
 import { Sheet } from './Sheet';
 import { Toggle } from './Toggle';
 import './MenuSheet.css';
@@ -55,6 +57,32 @@ export interface MenuSheetProps {
   levels?: readonly StartingLevel[];
   /** Called after the "Set my level" confirmation with the chosen rating. */
   onSetLevel?: (rating: number) => void;
+  /** Pro, where it is sold: its row (Unlock, or Unlocked) and Restore Purchases. Omitted: no section. */
+  pro?: ProMenuInfo;
+  /** Opens the paywall (for `feature` when a locked feature was tapped). */
+  onUnlock?: (feature?: ProFeature) => void;
+  /** Restore Purchases. */
+  onRestore?: () => void;
+}
+
+/** The Menu's Pro section. */
+export interface ProMenuInfo {
+  /** e.g. "Chess Coach Pro". */
+  name: string;
+  unlocked: boolean;
+  /** A purchase waits for approval (Ask to Buy). */
+  pending?: boolean;
+  /** Restore Purchases is running. */
+  restoring?: boolean;
+  /** Best-move arrows are locked: their toggle shows a lock and opens the paywall instead. */
+  arrowsLocked?: boolean;
+}
+
+/** The Pro row's second line. */
+export function proStatusLabel(pro: Pick<ProMenuInfo, 'unlocked' | 'pending'>): string {
+  if (pro.unlocked) return 'Unlocked ✓';
+  if (pro.pending) return 'Waiting for approval';
+  return 'Explanations, hints and full reviews';
 }
 
 /** How the engines run: two workers, or one shared worker (compatibility mode). */
@@ -139,6 +167,9 @@ export function MenuSheet({
   offlineReady = false,
   levels,
   onSetLevel,
+  pro,
+  onUnlock,
+  onRestore,
 }: MenuSheetProps) {
   const [confirming, setConfirming] = useState(false);
   const confirmId = useId();
@@ -150,6 +181,7 @@ export function MenuSheet({
   }, [open, canResign]);
 
   const recent = profile.history.slice(0, RECENT_GAMES);
+  const arrowsLocked = !!pro?.arrowsLocked;
 
   return (
     <Sheet open={open} onClose={onClose} title="Menu" class="menu">
@@ -194,9 +226,40 @@ export function MenuSheet({
         )}
       </section>
 
+      {pro && (
+        <section class="sheet-section">
+          <div class="sheet-group menu-pro" data-unlocked={pro.unlocked ? '' : undefined}>
+            <div class="menu-row" data-id="pro-status">
+              <span class="menu-row-icon menu-pro-icon" aria-hidden="true">
+                <ProStar />
+              </span>
+              <span class="menu-row-text">
+                <span class="menu-row-label">{pro.name}</span>
+                <span class="menu-row-desc menu-pro-desc">{proStatusLabel(pro)}</span>
+              </span>
+              {!pro.unlocked && (
+                <button type="button" class="btn btn-primary menu-pro-btn" data-id="pro-unlock" onClick={() => onUnlock?.()}>
+                  Unlock
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              class="menu-row menu-row--action"
+              data-id="pro-restore"
+              disabled={pro.restoring}
+              aria-busy={pro.restoring ? 'true' : undefined}
+              onClick={onRestore}
+            >
+              <span class="menu-row-label">{pro.restoring ? 'Restoring…' : 'Restore Purchases'}</span>
+            </button>
+          </div>
+        </section>
+      )}
+
       <section class="sheet-section">
         <h3 class="sheet-label">While playing</h3>
-        <div class="sheet-group">
+        <div class="sheet-group" data-arrows-locked={arrowsLocked ? '' : undefined}>
           <Toggle
             id="coach"
             label="Coach"
@@ -218,11 +281,11 @@ export function MenuSheet({
           <Toggle
             id="showBestMoves"
             label="Best-move arrows"
-            description="Makes the game unrated"
-            checked={settings.showBestMoves}
-            onChange={(v) => onChange({ showBestMoves: v })}
-            icon={<IconEye />}
-            iconColor="var(--cls-brilliant)"
+            description={arrowsLocked ? `Part of ${pro?.name ?? 'Pro'}` : 'Makes the game unrated'}
+            checked={settings.showBestMoves && !arrowsLocked}
+            onChange={arrowsLocked ? () => onUnlock?.('bestMoveArrows') : (v) => onChange({ showBestMoves: v })}
+            icon={arrowsLocked ? <IconLock /> : <IconEye />}
+            iconColor={arrowsLocked ? 'var(--warning)' : 'var(--cls-brilliant)'}
           />
           <Toggle
             id="sound"
@@ -324,6 +387,15 @@ export function MenuSheet({
 }
 
 /* ------------------------------------------------------------------ pieces */
+
+/** The Pro row's star. */
+function ProStar() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 2.8l2.75 5.8 6.35.75-4.7 4.35 1.25 6.3L12 16.85 6.35 20l1.25-6.3L2.9 9.35l6.35-.75z" />
+    </svg>
+  );
+}
 
 interface ActionTileProps {
   id: string;

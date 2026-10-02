@@ -1,0 +1,154 @@
+# Builds the App Store (Capacitor) iOS app on a GitHub-hosted macOS runner, without signing, to
+# prove that the Xcode project and its Swift code (the app's own StoreKit plugin included) compile
+# with the current Xcode. It needs no Apple account and no secrets, and uploads nothing except the
+# build logs when a build fails.
+#
+# Steps: npm ci -> npm run build:native (tsc + VITE_NATIVE=1 vite build into dist-native/) ->
+# npm run cap:sync (npx cap sync ios: copies dist-native/ into ios/App/App/public and rewrites
+# Package.swift) -> resolve the Swift packages -> build Debug for the iOS Simulator and Release for
+# devices, both with CODE_SIGNING_ALLOWED=NO.
+#
+# Compiler errors and warnings in the app's own files (ios/...) show up as annotations on the run
+# and the pull request. Signed builds for TestFlight and the App Store: ios-release.yml. Web app
+# checks: ci.yml. Standard macOS runners are free for public repositories.
+name: iOS build
+
+on:
+  pull_request:
+    paths:
+      - 'ios/**'
+      - 'src/**'
+      - 'public/**'
+      - 'index.html'
+      - 'capacitor.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'vite.config.ts'
+      - '.github/workflows/ios-build.yml'
+  push:
+    paths:
+      - 'ios/**'
+      - 'src/**'
+      - 'public/**'
+      - 'index.html'
+      - 'capacitor.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'vite.config.ts'
+      - '.github/workflows/ios-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Newer pushes to the same branch or PR supersede older runs.
+concurrency:
+  group: ios-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Apple silicon with macOS 26 (macos-latest points to it as of 2026-10). App Store uploads must
+    # be built with Xcode 26 / the iOS 26 SDK since 2026-04-28; this build uses the same toolchain.
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      PROJECT: ios/App/App.xcodeproj
+      SCHEME: App
+      LOGS: ${{ github.workspace }}/xcodebuild-logs
+      # One checkout of the Swift packages for all the xcodebuild calls below.
+      PACKAGES: ${{ github.workspace }}/build/SourcePackages
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1.7.0
+        with:
+          xcode-version: latest-stable
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          # chessground needs Node >= 24; the Capacitor CLI loads capacitor.config.ts with Node's
+          # built-in TypeScript support (Node >= 22.18).
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build the web app for the native shell
+        run: npm run build:native # tsc --noEmit && VITE_NATIVE=1 BASE_PATH=/ vite build --outDir dist-native
+
+      - name: Copy it into the Xcode project
+        run: npm run cap:sync # npx cap sync ios
+
+      - name: Check that the committed iOS project is up to date
+        # build:native writes the bundle ID, display name and version into the Xcode project, and
+        # cap sync rewrites CapApp-SPM/Package.swift from package.json. A difference means those
+        # changes were not committed. Only a warning: the builds below use the right values anyway.
+        run: |
+          if ! git diff --quiet -- ios/; then
+            git diff --stat -- ios/
+            echo "::warning title=iOS project not in sync::Run 'npm run build:native && npm run cap:sync' and commit the changes under ios/ listed above."
+          fi
+
+      - name: Tool versions
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i ios || true
+          node --version
+
+      - name: Resolve Swift packages
+        # capacitor-swift-pm comes from GitHub; the Capacitor plugins are local packages in node_modules/.
+        run: |
+          mkdir -p "$LOGS"
+          log="$LOGS/resolve-packages.log"
+          xcodebuild -resolvePackageDependencies -project "$PROJECT" -scheme "$SCHEME" \
+            -clonedSourcePackagesDirPath "$PACKAGES" > "$log" 2>&1 \
+            || { tail -n 60 "$log"; exit 1; }
+          tail -n 20 "$log"
+
+      - name: Build for the iOS Simulator (Debug, unsigned)
+        run: |
+          log="$LOGS/build-simulator.log"
+          status=0
+          xcodebuild build \
+            -project "$PROJECT" -scheme "$SCHEME" -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData -clonedSourcePackagesDirPath "$PACKAGES" \
+            CODE_SIGNING_ALLOWED=NO \
+            > "$log" 2>&1 || status=$?
+          # Annotations for errors and warnings in our own files, then every error (packages included).
+          sed -nE "s#^${GITHUB_WORKSPACE}/(ios/[^:]+):([0-9]+):([0-9]+): (error|warning): (.*)\$#::\4 file=\1,line=\2,col=\3::\5#p" "$log" | sort -u
+          grep -E ': error: ' "$log" | sort -u | head -n 100 || true
+          tail -n 5 "$log"
+          exit $status
+
+      - name: Build for devices (Release, unsigned)
+        # The configuration and SDK an App Store archive uses, without signing.
+        run: |
+          log="$LOGS/build-device-release.log"
+          status=0
+          xcodebuild build \
+            -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData -clonedSourcePackagesDirPath "$PACKAGES" \
+            CODE_SIGNING_ALLOWED=NO \
+            > "$log" 2>&1 || status=$?
+          sed -nE "s#^${GITHUB_WORKSPACE}/(ios/[^:]+):([0-9]+):([0-9]+): (error|warning): (.*)\$#::\4 file=\1,line=\2,col=\3::\5#p" "$log" | sort -u
+          grep -E ': error: ' "$log" | sort -u | head -n 100 || true
+          tail -n 5 "$log"
+          exit $status
+
+      - name: Upload the xcodebuild logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: xcodebuild-logs
+          path: xcodebuild-logs/
+          if-no-files-found: ignore
+          retention-days: 14

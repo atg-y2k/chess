@@ -3,6 +3,7 @@ import type { BotPersona } from '../bot/types';
 import type { Color, GameSettings } from '../game/types';
 import { IconChart, IconCoach, IconEye, IconSound, IconUndo } from './icons';
 import { LevelPicker, type StartingLevel } from './LevelPicker';
+import { IconLock } from './PaywallSheet';
 import { Sheet } from './Sheet';
 import { Toggle } from './Toggle';
 import './NewGameSheet.css';
@@ -34,6 +35,12 @@ export interface NewGameSheetProps {
   levels?: readonly StartingLevel[];
   /** A level was picked: set the player's rating to it (the new rating comes back as `playerRating`). */
   onSetLevel?: (rating: number) => void;
+  /**
+   * Best-move arrows are part of Pro and locked: their toggle shows this line (e.g. "Part of Chess
+   * Coach Pro") and a lock, stays off, and calls `onUnlock` (the paywall) instead.
+   */
+  arrowsLocked?: string | null;
+  onUnlock?: () => void;
 }
 
 /** What starting a new game does to the game in progress (null when there is none). */
@@ -146,6 +153,8 @@ export function NewGameSheet({
   newPlayer,
   levels,
   onSetLevel,
+  arrowsLocked,
+  onUnlock,
 }: NewGameSheetProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial, bots));
   /** The player chose an opponent (card, slider or "Match my rating") since the sheet opened. */
@@ -206,7 +215,9 @@ export function NewGameSheet({
     });
   };
 
-  const start = () => onStart(settingsFromDraft(initial, draft, bots, rating));
+  /** Best-move arrows as they will be: never on while they are locked. */
+  const arrowsOn = draft.showBestMoves && !arrowsLocked;
+  const start = () => onStart(settingsFromDraft(initial, { ...draft, showBestMoves: arrowsOn }, bots, rating));
   const abandon = abandonNote(inProgress);
 
   const hero = draft.adaptive
@@ -325,7 +336,7 @@ export function NewGameSheet({
 
       <section class="sheet-section">
         <h3 class="sheet-label">Options</h3>
-        <div class="sheet-group">
+        <div class="sheet-group" data-arrows-locked={arrowsLocked ? '' : undefined}>
           <Toggle
             id="coach"
             label="Coach"
@@ -347,11 +358,11 @@ export function NewGameSheet({
           <Toggle
             id="showBestMoves"
             label="Best-move arrows"
-            description="Shows the engine's top moves"
-            checked={draft.showBestMoves}
-            onChange={(v) => set({ showBestMoves: v })}
-            icon={<IconEye />}
-            iconColor="var(--cls-brilliant)"
+            description={arrowsLocked || "Shows the engine's top moves"}
+            checked={arrowsOn}
+            onChange={arrowsLocked ? () => onUnlock?.() : (v) => set({ showBestMoves: v })}
+            icon={arrowsLocked ? <IconLock /> : <IconEye />}
+            iconColor={arrowsLocked ? 'var(--warning)' : 'var(--cls-brilliant)'}
           />
           <Toggle
             id="allowTakebacks"
@@ -371,10 +382,10 @@ export function NewGameSheet({
             iconColor="var(--cls-miss)"
           />
         </div>
-        <p class="sheet-note" data-warn={draft.showBestMoves ? '' : undefined}>
+        <p class="sheet-note" data-warn={arrowsOn ? '' : undefined}>
           <InfoGlyph />
           <span>
-            {draft.showBestMoves
+            {arrowsOn
               ? 'Best-move arrows are on, so this game won’t count for your rating.'
               : 'The coach and evaluation bar are fine in rated games; takebacks, hints, Retry and best-move arrows make a game unrated.'}
           </span>

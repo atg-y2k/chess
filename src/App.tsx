@@ -17,6 +17,7 @@ import { BOTS } from './bot/personas';
 import { copyText } from './clipboard';
 import { rememberedEngineMode, resetEngineMode } from './engine/createEngines';
 import type { GameController } from './game/controller';
+import { PRO_NAME } from './game/entitlements';
 import type { ReadonlyStore, ToolbarId } from './game/store';
 import type { PromotionPiece } from './game/types';
 import type { OfflineStatus } from './pwa';
@@ -43,6 +44,7 @@ import {
 import { MenuSheet } from './ui/MenuSheet';
 import { MoveList } from './ui/MoveList';
 import { NewGameSheet } from './ui/NewGameSheet';
+import { LockedIcon, PaywallSheet } from './ui/PaywallSheet';
 import { PlayerStrip } from './ui/PlayerStrip';
 import { ReviewPanel } from './ui/ReviewPanel';
 import { Toolbar, type ToolbarItem } from './ui/Toolbar';
@@ -70,6 +72,8 @@ export const REVIEW_FLOAT_PX = 300;
 const TOAST_MS = 2400;
 /** Eval graph height (CSS px). */
 const GRAPH_HEIGHT = 32;
+/** How long the paywall shows its thanks after a purchase or restore before it closes (ms). */
+const PAYWALL_THANKS_MS = 1600;
 /** During play the graph's x axis covers at least this many plies, so a short game is not stretched. */
 const GRAPH_MIN_SPAN = 40;
 
@@ -127,6 +131,18 @@ export function App({ controller: c, offline }: AppProps) {
     if (!toastRef.current) notify('Available offline');
   });
 
+  // Pro unlocked while the paywall is closed (an Ask to Buy approval, a restore from the Menu, a
+  // purchase on another device): say so once. (The open paywall thanks the player itself.)
+  const proBefore = useRef(c.entitlements.pro.peek());
+  useSignalEffect(() => {
+    const unlocked = c.entitlements.pro.value;
+    const was = proBefore.current;
+    proBefore.current = unlocked;
+    if (unlocked && !was && c.entitlements.enabled && !c.entitlements.paywall.peek().open && s.phase.peek() !== 'boot') {
+      notify(`${PRO_NAME} is unlocked`);
+    }
+  });
+
   const exportPgn = () => void sharePgn(c, notify);
 
   // Desktop / keyboard: ← → step through the moves.
@@ -171,6 +187,7 @@ export function App({ controller: c, offline }: AppProps) {
         notify={notify}
         offlineReady={!!offline?.value}
       />
+      <Paywall c={c} />
       <Splash phase={phase} download={s.engineDownload} />
       {phase === 'error' && <ErrorScreen c={c} />}
       <div class="app-toast-host" role="status" aria-live="polite">
@@ -277,7 +294,14 @@ function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean>
       summary.value = false;
       c.goTo(i);
     };
-    content = <ReviewPanel {...review} onSelectPly={select} onClose={() => c.exitReview()} />;
+    content = (
+      <ReviewPanel
+        {...review}
+        onSelectPly={select}
+        onClose={() => c.exitReview()}
+        onUnlock={() => c.entitlements.openPaywall('reviewDetails')}
+      />
+    );
   } else {
     const coach = s.coach.value;
     const collapsed = tight ? !peek : coach.collapsed;
@@ -296,6 +320,7 @@ function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean>
           id: a.id,
           label: a.label,
           primary: a.primary,
+          locked: a.locked,
           onClick: () => {
             setPeek(false);
             c.runAction(a.id);
@@ -388,7 +413,7 @@ function Tools({ c, summary }: { c: GameController; summary: Signal<boolean> }) 
     items = [
       newGame,
       item('undo', 'Undo', <IconUndo />, () => c.requestUndo()),
-      item('hint', 'Hint', <IconBulb />, () => c.requestHint()),
+      item('hint', 'Hint', t.hint.locked ? <LockedIcon><IconBulb /></LockedIcon> : <IconBulb />, () => c.requestHint()),
       flip,
       item('coach', 'Coach', <IconCoach />, () => c.toggleCoach()),
       menu,
@@ -419,6 +444,17 @@ function Sheets({
 }) {
   const sh = c.store.sheets.value;
   const engineMode = c.store.engineMode.value;
+  const pro = c.entitlements;
+  const arrowsLocked = pro.locked.value.has('bestMoveArrows');
+  const proStatus = pro.status.value;
+  const restoreFromMenu = async () => {
+    const wasUnlocked = pro.pro.peek();
+    const r = await pro.restore();
+    // Newly 'restored': the "is unlocked" toast says so. 'cancelled': the player closed the sign-in.
+    if (r === 'restored' && wasUnlocked) notify('Purchases restored');
+    else if (r === 'none') notify('No earlier purchase of Pro was found');
+    else if (r === 'failed') notify('Couldn’t reach the App Store');
+  };
   // When remembered single mode ends and two engines are tried again (localStorage; re-read when the menu opens).
   const menuOpen = sh.open === 'menu';
   const singleUntil = useMemo(
@@ -447,6 +483,8 @@ function Sheets({
         onSetLevel={(rating) => c.setStartingRating(rating)}
         onStart={(settings) => c.newGame(settings)}
         onClose={close}
+        arrowsLocked={arrowsLocked ? `Part of ${PRO_NAME}` : null}
+        onUnlock={() => pro.openPaywall('bestMoveArrows')}
       />
       {assist && (
         <ConfirmSheet
@@ -484,6 +522,19 @@ function Sheets({
           notify(`Your rating is now ${Math.round(c.store.profile.value.rating)}`);
         }}
         onClose={close}
+        pro={
+          pro.enabled
+            ? {
+                name: PRO_NAME,
+                unlocked: pro.pro.value,
+                pending: proStatus === 'pending',
+                restoring: proStatus === 'restoring',
+                arrowsLocked,
+              }
+            : undefined
+        }
+        onUnlock={(feature) => pro.openPaywall(feature ?? null)}
+        onRestore={() => void restoreFromMenu()}
       />
       {over && (
         <GameOverSheet
@@ -496,6 +547,34 @@ function Sheets({
         />
       )}
     </>
+  );
+}
+
+/**
+ * The paywall (only where Pro is sold): the price comes from the store; after a purchase or
+ * restore it thanks the player and closes by itself.
+ */
+function Paywall({ c }: { c: GameController }) {
+  const pro = c.entitlements;
+  const pw = pro.paywall.value;
+  const status = pro.status.value;
+  useEffect(() => {
+    if (!pw.open || status !== 'success') return;
+    const t = window.setTimeout(() => pro.closePaywall(), PAYWALL_THANKS_MS);
+    return () => window.clearTimeout(t);
+  }, [pw.open, status]);
+  if (!pro.enabled) return null;
+  return (
+    <PaywallSheet
+      open={pw.open}
+      feature={pw.feature}
+      price={pro.product.value?.displayPrice ?? null}
+      unavailable={pro.productState.value === 'unavailable'}
+      status={status}
+      onBuy={() => void pro.buy()}
+      onRestore={() => void pro.restore()}
+      onClose={() => pro.closePaywall()}
+    />
   );
 }
 

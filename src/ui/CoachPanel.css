@@ -319,3 +319,22 @@
     animation-duration: 2s;
   }
 }
+
+/* A Pro action that is locked: a small gold lock badge on the pill's corner (as on the toolbar). */
+.coach-action-lock {
+  position: absolute;
+  top: -5px;
+  right: -3px;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--warning);
+  color: #2a1d00;
+  box-shadow: 0 0 0 1.5px var(--coach-bubble-bg);
+  pointer-events: none;
+}
+.coach-action-lock svg {
+  stroke-width: 3;
+}

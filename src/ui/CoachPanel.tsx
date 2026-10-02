@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { MoveClass } from '../analysis/types';
 import { CLASS_META, ClassIcon } from './ClassIcon';
 import { IconChevronRight } from './icons';
+import { IconLock } from './PaywallSheet';
 import './CoachPanel.css';
 
 export interface CoachAction {
@@ -9,6 +10,8 @@ export interface CoachAction {
   label: string;
   onClick: () => void;
   primary?: boolean;
+  /** Part of Pro and locked: a small lock badge on the button (the click opens the paywall). */
+  locked?: boolean;
 }
 
 export interface CoachPanelProps {
@@ -151,9 +154,16 @@ export function CoachPanel({
                 type="button"
                 class={a.primary ? 'btn btn-primary coach-action' : 'btn coach-action'}
                 data-action={a.id}
+                data-locked={a.locked ? '' : undefined}
+                aria-label={a.locked ? `${a.label} (Pro)` : undefined}
                 onClick={a.onClick}
               >
                 {a.label}
+                {a.locked && (
+                  <span class="coach-action-lock" aria-hidden="true">
+                    <IconLock size={9} />
+                  </span>
+                )}
               </button>
             ))}
           </div>

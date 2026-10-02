@@ -20,6 +20,9 @@ export interface SheetProps {
 
 type Phase = 'closed' | 'entering' | 'open' | 'closing';
 
+/** The open sheets, oldest first: Escape closes only the last (e.g. the paywall over the Menu). */
+const openSheets: symbol[] = [];
+
 /** Must match the closing transition in Sheet.css (plus a little slack). */
 const CLOSE_MS = 300;
 /** Pull distance (px) that dismisses on release, capped by a third of the panel height. */
@@ -89,16 +92,22 @@ export function Sheet({ open, onClose, title, children, footer, hideTitle = fals
     return undefined;
   }, [phase]);
 
-  // Escape closes the topmost open sheet.
+  // Escape closes the topmost open sheet (the one opened last), not the ones under it.
   useEffect(() => {
     if (!open) return;
+    const token = Symbol('sheet');
+    openSheets.push(token);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (e.key !== 'Escape' || e.defaultPrevented || openSheets[openSheets.length - 1] !== token) return;
       e.preventDefault();
       onCloseRef.current();
     };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      const i = openSheets.indexOf(token);
+      if (i >= 0) openSheets.splice(i, 1);
+    };
   }, [open]);
 
   function dragStart(y: number) {

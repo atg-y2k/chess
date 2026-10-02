@@ -41,6 +41,12 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Legal pages
+        # public/privacy.html, terms.html and support.html are published with the web app. Until the
+        # owner fills in their placeholders (docs/APP_STORE.md, section 18) this only warns; the iOS
+        # release workflow refuses a release while any are left.
+        run: node scripts/check-legal-pages.mjs
+
       - name: Build
         run: npm run build # tsc --noEmit && vite build
         env:

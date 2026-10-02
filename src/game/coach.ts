@@ -71,6 +71,23 @@ export function verdictTitle(
   return { title: `${label} gives up material` };
 }
 
+/** The coach panel's action that opens the paywall when its explanation is locked (see `lockedTeaser`). */
+export const UNLOCK_LABEL = 'Unlock to see why';
+
+/**
+ * The coach's line on a move while its explanation is part of Pro and locked (game/entitlements.ts):
+ * what the coach would tell, never the answer (no move, square or piece). The verdict ("12. Nf3 is
+ * a mistake") and the class icon stay free.
+ */
+export function lockedTeaser(ply: Pick<Ply, 'classification' | 'explanation'>): string {
+  const cls = ply.classification?.cls;
+  if (concession(ply)) return 'The coach can show you what this move gives away, and what was better.';
+  if (!cls || WEAK_CLASSES.has(cls)) return 'The coach can show you what went wrong here, and what was better.';
+  if (cls === 'book') return 'The coach can show you the idea behind this opening move.';
+  if (cls === 'forced') return 'The coach can show you why there was nothing better.';
+  return 'The coach can show you what makes this move work.';
+}
+
 /** Classes that do not need a "Show best" (the move was already the best or the only option). */
 export const TOP_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['brilliant', 'great', 'best', 'book', 'forced']);
 

@@ -34,6 +34,7 @@ import {
 } from '../rating/rating';
 import type { GameRecord } from '../rating/types';
 import { answerFreeLines, mentionsMove, repetitionExplanation } from './coach';
+import { getEntitlements, type Entitlements, type ProFeature } from './entitlements';
 import {
   clearGame,
   createGameId,
@@ -144,6 +145,8 @@ export interface ControllerDeps {
   createId?: () => string;
   /** AnalysisService tuning (live depth etc.). */
   analysisOptions?: AnalysisServiceOptions;
+  /** Pro and the paywall (default: the app's, `getEntitlements()`). */
+  entitlements?: Entitlements;
 }
 
 export interface NewGameOptions {
@@ -238,6 +241,11 @@ function isScore(v: unknown): v is Score {
 export class GameController {
   /** Signals and view models for the UI (read-only). */
   readonly store: ReadonlyStore;
+  /**
+   * Pro: which features are locked (the store's view models hide them) and the paywall, which the
+   * gated actions (Hint, Show best, best-move arrows, the coach's "Unlock to see why") open.
+   */
+  readonly entitlements: Entitlements;
 
   private readonly s: Store;
   private readonly storage: KeyValueStorage | null | undefined;
@@ -273,6 +281,8 @@ export class GameController {
   private booting: Promise<void> | null = null;
   private hidden = false;
   private openingsReady: Promise<void> = Promise.resolve();
+  /** Stops following `entitlements.locked`. */
+  private unwatchLocks: () => void;
 
   constructor(deps: ControllerDeps = {}) {
     this.storage = deps.storage;
@@ -286,8 +296,34 @@ export class GameController {
     this.makeBotPlayer = deps.createBot ?? ((engine, opts) => new BotPlayer(engine, opts));
     this.createId = deps.createId ?? createGameId;
     this.analysisOptions = deps.analysisOptions ?? {};
-    this.s = createStore(createState({ settings: loadSettings(this.storage), profile: loadProfile(this.storage) }));
+    this.entitlements = deps.entitlements ?? getEntitlements();
+    this.s = createStore(
+      createState({
+        settings: loadSettings(this.storage),
+        profile: loadProfile(this.storage),
+        locked: this.entitlements.locked,
+      }),
+    );
     this.store = this.s;
+    this.unwatchLocks = this.entitlements.locked.subscribe((locked) => this.onLocksChanged(locked));
+  }
+
+  /**
+   * Pro features became locked (at start, or after a refund) or unlocked. A hint or Show best
+   * that is now locked is closed, and best-move arrows are switched off while they are locked, so
+   * buying Pro later does not switch them on in the middle of a rated game.
+   */
+  private onLocksChanged(locked: ReadonlySet<ProFeature>): void {
+    const s = this.s;
+    if (locked.has('bestMoveArrows') && s.settings.value.showBestMoves) {
+      const next = { ...s.settings.value, showBestMoves: false };
+      s.settings.value = next;
+      saveSettings(next, this.storage);
+    }
+    const m = s.coachMode.value;
+    if (m.kind === 'hint' && locked.has('hint')) this.dismissHint();
+    else if (m.kind === 'showBest' && locked.has('showBest')) this.backFromShowBest();
+    this.updateWatch();
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -315,6 +351,7 @@ export class GameController {
   /** Stops everything and terminates the engines. */
   dispose(): void {
     this.cancelOnlineRetry();
+    this.unwatchLocks();
     this.teardown();
   }
 
@@ -533,6 +570,7 @@ export class GameController {
    */
   newGame(settings: GameSettings, opts: NewGameOptions = {}): void {
     const next = { ...settings };
+    if (next.showBestMoves && !this.entitlements.isAllowed('bestMoveArrows')) next.showBestMoves = false;
     this.s.settings.value = next;
     saveSettings(next, this.storage);
     this.sound.setEnabled(next.sound);
@@ -608,7 +646,7 @@ export class GameController {
       bot,
       botElo: bot.elo,
       startedAt: new Date(this.now()).toISOString(),
-      assisted: settings.showBestMoves,
+      assisted: settings.showBestMoves && this.entitlements.isAllowed('bestMoveArrows'),
       settings: { ...settings },
     };
     this.chess = chess;
@@ -965,7 +1003,7 @@ export class GameController {
       return;
     }
     const g = s.game.value;
-    if (!svc || !g || !this.canHint()) return;
+    if (!svc || !g || !this.canHint() || !this.entitlements.isAllowed('hint')) return;
     const fen = s.liveFen.value;
     const epoch = this.epoch;
     s.coachMode.value = { kind: 'hint', fen, explanation: null, prev: m };
@@ -1000,10 +1038,13 @@ export class GameController {
     return !!s.game.value && s.humanToMove.value && s.isLive.value && s.coachMode.value.kind !== 'showBest';
   }
 
-  /** Toolbar Hint: dismisses a shown hint, else asks first in a rated game (see `requestAssist`). */
+  /**
+   * Toolbar Hint: dismisses a shown hint, else asks first in a rated game (see `requestAssist`).
+   * While hints are locked (Pro) it opens the paywall instead.
+   */
   requestHint(): void {
     if (this.s.coachMode.value.kind === 'hint') this.dismissHint();
-    else if (this.canHint()) this.requestAssist({ kind: 'hint' });
+    else if (this.canHint() && this.entitlements.requirePro('hint')) this.requestAssist({ kind: 'hint' });
   }
 
   /** Toolbar Undo (asks first in a rated game, see `requestAssist`). */
@@ -1056,12 +1097,19 @@ export class GameController {
     this.updateWatch();
   }
 
-  /** Runs a coach-panel action by id (the ids in `store.coach.value.actions`). */
+  /**
+   * Runs a coach-panel action by id (the ids in `store.coach.value.actions`). A locked Pro action
+   * (Show best) opens the paywall instead; 'unlock' opens it for the panel's locked feature.
+   */
   runAction(id: CoachActionId): void {
     const s = this.s;
     const m = s.coachMode.value;
     switch (id) {
+      case 'unlock':
+        this.entitlements.openPaywall(s.coach.value.actions.find((a) => a.id === 'unlock')?.feature ?? null);
+        return;
       case 'showBest': {
+        if (!this.entitlements.requirePro('showBest')) return;
         const index = s.phase.value === 'playing' && s.isLive.value && m.kind === 'feedback' ? m.index : s.current.value - 1;
         if (index >= 0) this.showBest(index);
         return;
@@ -1247,11 +1295,16 @@ export class GameController {
 
   /**
    * Changes settings (persisted). Applies sound on/off; switching best-move arrows on during a
-   * game marks it assisted.
+   * game marks it assisted (while they are locked, Pro, it opens the paywall instead).
    */
   setSettings(partial: Partial<GameSettings>): void {
     const s = this.s;
     const prev = s.settings.value;
+    if (partial.showBestMoves && !prev.showBestMoves && !this.entitlements.requirePro('bestMoveArrows')) {
+      const { showBestMoves: _locked, ...rest } = partial;
+      if (!Object.keys(rest).length) return;
+      partial = rest;
+    }
     const next: GameSettings = { ...prev, ...partial };
     s.settings.value = next;
     saveSettings(next, this.storage);
@@ -1578,8 +1631,9 @@ export class GameController {
     const p = s.phase.value;
     const st = s.settings.value;
     let fen: string | null = null;
+    const arrows = st.showBestMoves && this.entitlements.isAllowed('bestMoveArrows');
     if (p === 'over' || p === 'review') fen = s.displayedFen.value;
-    else if (p === 'playing' && (st.showEvalBar || st.coach || st.showBestMoves || s.coachMode.value.kind === 'hint')) {
+    else if (p === 'playing' && (st.showEvalBar || st.coach || arrows || s.coachMode.value.kind === 'hint')) {
       fen = s.displayedFen.value;
     }
     svc.watch(fen);
@@ -1621,12 +1675,15 @@ export class GameController {
    * screen. Yes on a finished game: it is saved with its result and restored as it was (phase
    * 'over', same result, rating and history), unless a sheet is open over it, such as the
    * game-over sheet the player may be reading: then only while the app is in the background
-   * (`hidden`). Never while playing or reviewing, which a reload would interrupt. When it stays
-   * no, the new service worker is active anyway and the next launch runs the new version.
+   * (`hidden`). Never while playing or reviewing, which a reload would interrupt, nor while the
+   * paywall is open or a purchase is on its way. When it stays no, the new service worker is
+   * active anyway and the next launch runs the new version.
    */
   canReloadNow(opts: { hidden?: boolean } = {}): boolean {
     const s = this.s;
     const p = s.phase.value;
+    const pro = this.entitlements;
+    if (pro.paywall.value.open || pro.status.value === 'buying' || pro.status.value === 'restoring') return false;
     if (p === 'setup' || p === 'error') return true;
     if (p === 'over') return s.sheet.value === null || opts.hidden === true;
     return false;

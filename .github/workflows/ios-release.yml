@@ -1,0 +1,260 @@
+# iOS release: builds the App Store app on a GitHub-hosted macOS runner, signs it, and uploads it to
+# App Store Connect, where it appears in TestFlight for your internal testers once Apple has
+# processed it (usually 5-30 minutes). From there you submit it for App Review in App Store Connect.
+#
+# >>> THIS WORKFLOW NEEDS THE OWNER'S APPLE SECRETS. Until they are set, it stops at its first
+# >>> step with a list of what is missing, and nothing is built or uploaded. docs/APP_STORE.md
+# >>> walks through the whole setup.
+#
+# When it runs:
+#   - When you push a tag v<version>, e.g. `git tag v1.0.0 && git push origin v1.0.0`. The tag must
+#     equal "version" in package.json, and the legal pages must be filled in (no placeholders or
+#     Draft notice: `npm run check:legal`).
+#   - By hand: Actions > "iOS release (TestFlight)" > Run workflow (any branch), e.g. for TestFlight
+#     builds before release, or a fixed build after a rejection. Placeholders only warn then.
+#
+# Source (GPL): the first job tags the commit ios-v<version>-b<build number> and pushes the tag,
+# and the app is built with that tag as its source link (About, THIRD-PARTY-LICENSES.txt), with
+# `npm run build:native:release` (which refuses uncommitted changes). So every uploaded build links
+# to its exact source, also when a version is uploaded more than once. Never delete these tags.
+#
+# What it sets:
+#   - Bundle ID: APP_ID in capacitor.config.ts (read from there; the one place to change it).
+#   - Version (CFBundleShortVersionString): "version" in package.json -> MARKETING_VERSION.
+#   - Build number (CFBundleVersion): this workflow's run number + vars.IOS_BUILD_NUMBER_OFFSET
+#     -> CURRENT_PROJECT_VERSION. App Store Connect refuses a build number it has already seen for
+#     that version; raise the offset if you also upload builds from Xcode with higher numbers.
+#
+# One-time setup (in a browser, plus one command on your Mac or any Linux machine):
+#   1. Apple Developer Program membership; the bundle ID registered and the app record created in
+#      App Store Connect (docs/APP_STORE.md).
+#   2. An App Store Connect API key: App Store Connect > Users and Access > Integrations >
+#      App Store Connect API > Team Keys > (+). Access: "App Manager" (use "Admin" if creating the
+#      certificate below is refused). Download AuthKey_<KEY ID>.p8; it can only be downloaded once.
+#      Note the Key ID and the Issuer ID shown on that page.
+#   3. A private key for the distribution certificate. Make it once and keep it; the workflow
+#      creates the certificate from it on the first run and reuses it after that (Apple allows
+#      only a few distribution certificates per team):
+#        ssh-keygen -t rsa -b 2048 -m PEM -f ios_dist_cert_key -q -N ""
+#   4. GitHub: repository Settings > Secrets and variables > Actions:
+#        Variables:  APPSTORE_ISSUER_ID         the Issuer ID (a UUID)
+#                    APPSTORE_API_KEY_ID        the Key ID (10 characters)
+#                    IOS_BUILD_NUMBER_OFFSET    optional, default 0 (see "Build number" above)
+#        Secrets:    APPSTORE_API_PRIVATE_KEY   the whole contents of AuthKey_<KEY ID>.p8
+#                    IOS_DIST_CERT_PRIVATE_KEY  the whole contents of ios_dist_cert_key (not the .pub)
+#
+# Signing and uploading use Codemagic's open-source CLI tools (codemagic-cli-tools, GPL-3.0; no
+# Codemagic account is needed). They create or reuse the Apple Distribution certificate and the
+# App Store provisioning profile through the API key, apply the profile only to the App target
+# (not to the Swift packages), archive, export the .ipa and upload it.
+name: iOS release (TestFlight)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One release build at a time; never cancel an upload that is under way.
+concurrency:
+  group: ios-release
+  cancel-in-progress: false
+
+jobs:
+  # Checks, then tags the commit this build comes from. The only job that may write to the
+  # repository (to push the tag), and it runs no third-party code (no npm install).
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build_number: ${{ steps.version.outputs.build_number }}
+      source_tag: ${{ steps.tag.outputs.source_tag }}
+    steps:
+      - name: Check the Apple secrets
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: ${{ vars.APPSTORE_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ vars.APPSTORE_API_KEY_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          CERTIFICATE_PRIVATE_KEY: ${{ secrets.IOS_DIST_CERT_PRIVATE_KEY }}
+        run: |
+          missing=""
+          [ -n "$APP_STORE_CONNECT_ISSUER_ID" ] || missing="$missing variable APPSTORE_ISSUER_ID,"
+          [ -n "$APP_STORE_CONNECT_KEY_IDENTIFIER" ] || missing="$missing variable APPSTORE_API_KEY_ID,"
+          [ -n "$APP_STORE_CONNECT_PRIVATE_KEY" ] || missing="$missing secret APPSTORE_API_PRIVATE_KEY,"
+          [ -n "$CERTIFICATE_PRIVATE_KEY" ] || missing="$missing secret IOS_DIST_CERT_PRIVATE_KEY,"
+          if [ -n "$missing" ]; then
+            echo "::error title=Apple secrets missing::Set${missing%,} under Settings > Secrets and variables > Actions. See the top of .github/workflows/ios-release.yml and docs/APP_STORE.md."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # with tags
+
+      - name: Version and build number
+        id: version
+        env:
+          OFFSET: ${{ vars.IOS_BUILD_NUMBER_OFFSET }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          # App Store versions are one to three integers separated by periods (no "-beta" suffixes).
+          if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+            echo "::error::package.json version '$VERSION' is not a valid App Store version (e.g. 1.0.0)."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $VERSION (expected v$VERSION)."
+            exit 1
+          fi
+          BUILD_NUMBER=$(( RUN_NUMBER + ${OFFSET:-0} ))
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION, build $BUILD_NUMBER"
+
+      - name: Legal pages filled in
+        # Fatal for a release (a v* tag); TestFlight builds by hand only get a warning.
+        run: node scripts/check-legal-pages.mjs $([[ "$GITHUB_REF_TYPE" == "tag" ]] && echo --strict)
+
+      - name: Tag the source of this build (GPL)
+        id: tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
+        run: |
+          TAG="ios-v$VERSION-b$BUILD_NUMBER"
+          if EXISTING=$(git rev-parse -q --verify "refs/tags/$TAG^{commit}"); then
+            # A re-run of the same run: fine if the tag already names this commit.
+            if [[ "$EXISTING" != "$GITHUB_SHA" ]]; then
+              echo "::error::Tag $TAG already exists on another commit ($EXISTING). Raise vars.IOS_BUILD_NUMBER_OFFSET."
+              exit 1
+            fi
+          else
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG" # fails the run if the tag cannot be published
+          fi
+          echo "source_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Source of this build: https://github.com/$GITHUB_REPOSITORY/tree/$TAG"
+
+  testflight:
+    needs: prepare
+    runs-on: macos-26 # Apple silicon; free for public repositories
+    timeout-minutes: 60
+    env:
+      PROJECT: ios/App/App.xcodeproj
+      SCHEME: App
+      VERSION: ${{ needs.prepare.outputs.version }}
+      BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+      SOURCE: https://github.com/${{ github.repository }}/tree/${{ needs.prepare.outputs.source_tag }}
+    # The Apple credentials are given only to the steps that use them (not to npm ci or the tests,
+    # which run third-party code). codemagic-cli-tools reads them from these environment variables.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false # nothing in this job writes to the repository
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24 # also runs capacitor.config.ts directly (Node >= 22.18)
+          cache: npm
+
+      - name: Bundle ID
+        run: |
+          # The one place the bundle ID is set (Node >= 22.18 runs the TypeScript config directly).
+          BUNDLE_ID=$(node --input-type=module -e "const c = await import('./capacitor.config.ts'); process.stdout.write(c.APP_ID)")
+          if [ -z "$BUNDLE_ID" ]; then
+            echo "::error::Could not read APP_ID from capacitor.config.ts."
+            exit 1
+          fi
+          echo "BUNDLE_ID=$BUNDLE_ID" >> "$GITHUB_ENV"
+          echo "Version $VERSION, build $BUILD_NUMBER, bundle ID $BUNDLE_ID, source $SOURCE"
+
+      # Uploads must be built with Xcode 26 / the iOS 26 SDK (Apple requirement since 2026-04-28).
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1.7.0
+        with:
+          xcode-version: latest-stable
+
+      - name: Install
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build the web app for the native shell
+        env:
+          VITE_SOURCE_URL: ${{ env.SOURCE }} # About and THIRD-PARTY-LICENSES.txt link to this build's tag
+        # RELEASE_BUILD=1 + tsc --noEmit + VITE_NATIVE=1 vite build into dist-native/; fails if the
+        # work tree differs from the tagged commit.
+        run: npm run build:native:release
+
+      - name: Copy it into the Xcode project
+        run: npm run cap:sync # npx cap sync ios
+
+      - name: Set the version and build number in the Xcode project
+        # Info.plist reads CFBundleShortVersionString from MARKETING_VERSION and CFBundleVersion from
+        # CURRENT_PROJECT_VERSION (set only in the App target's Debug and Release configurations).
+        run: |
+          perl -pi -e 's/MARKETING_VERSION = [^;]+;/MARKETING_VERSION = $ENV{VERSION};/; s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = $ENV{BUILD_NUMBER};/' "$PROJECT/project.pbxproj"
+          grep -E 'MARKETING_VERSION|CURRENT_PROJECT_VERSION' "$PROJECT/project.pbxproj"
+          [ "$(grep -c "MARKETING_VERSION = $VERSION;" "$PROJECT/project.pbxproj")" -ge 1 ]
+          [ "$(grep -c "CURRENT_PROJECT_VERSION = $BUILD_NUMBER;" "$PROJECT/project.pbxproj")" -ge 1 ]
+
+      - name: Install codemagic-cli-tools
+        run: |
+          python3 -m venv "$RUNNER_TEMP/codemagic"
+          "$RUNNER_TEMP/codemagic/bin/pip" install --quiet codemagic-cli-tools==0.69.0
+          echo "$RUNNER_TEMP/codemagic/bin" >> "$GITHUB_PATH"
+
+      - name: Code signing (Apple Distribution certificate + App Store profile)
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: ${{ vars.APPSTORE_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ vars.APPSTORE_API_KEY_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          CERTIFICATE_PRIVATE_KEY: ${{ secrets.IOS_DIST_CERT_PRIVATE_KEY }}
+        run: |
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create --strict-match-identifier
+          keychain add-certificates
+          # Applies the profile only to the target whose bundle ID matches (the App target).
+          xcode-project use-profiles --project "$PROJECT"
+
+      - name: Archive and export the .ipa
+        run: xcode-project build-ipa --project "$PROJECT" --scheme "$SCHEME" --config Release
+
+      - name: Upload to App Store Connect (TestFlight)
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: ${{ vars.APPSTORE_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ vars.APPSTORE_API_KEY_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+        run: app-store-connect publish --path 'build/ios/ipa/*.ipa'
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "### Uploaded to App Store Connect"
+            echo ""
+            echo "- Version **$VERSION**, build **$BUILD_NUMBER**, bundle ID \`$BUNDLE_ID\`"
+            echo "- Commit \`$GITHUB_SHA\` ($GITHUB_REF_NAME)"
+            echo "- Source for this build (GPL): $SOURCE"
+            echo ""
+            echo "It shows up in App Store Connect > TestFlight once Apple has processed it."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the build logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-release-logs
+          path: /tmp/xcodebuild_logs/*.log
+          if-no-files-found: ignore
+          retention-days: 14
