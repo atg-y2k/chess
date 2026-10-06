@@ -21,6 +21,7 @@
     "e2e": "playwright test",
     "build:openings": "node scripts/build-openings.mjs",
     "build:openings:eval": "node scripts/build-openings.mjs --eval",
+    "build:opening-lines": "node scripts/build-opening-lines.mjs",
     "calibrate": "CALIBRATE=1 vitest run tests/bot/calibration.slow.test.ts --reporter=verbose"
   },
   "dependencies": {
