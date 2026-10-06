@@ -338,3 +338,231 @@
 .coach-action-lock svg {
   stroke-width: 3;
 }
+
+/* ---------------------------------------------------------------- both moves rated (`other`) */
+
+/*
+ * Your move and the opponent's are both rated: the other one is a compact row inside the bubble,
+ * above the expanded feedback ("You", first) or below it (the opponent). The bubble keeps its
+ * height, so tapping the row only swaps the contents. A little tighter spacing leaves room for
+ * two lines of text on a phone.
+ */
+.coach--dual .coach-bubble {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+.coach--dual .coach-actions {
+  margin-top: 5px;
+}
+.coach--dual .coach-bubble::before {
+  top: 13px;
+}
+/* A two-line title (a narrow side column) takes its room from the text, never from the rows. */
+.coach--dual .coach-head {
+  flex: none;
+}
+/*
+ * "<who>’s <move> <verdict>" over two lines at most, never cut in the verdict: the move part and the
+ * verdict each keep to one line, and the verdict wraps whole. In the move part a long name gives
+ * way first ("Professor Ho… 2… dxe4"), then the move.
+ */
+.coach--dual .coach-title--split {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.25em;
+  -webkit-line-clamp: none;
+  line-clamp: none;
+}
+.coach--dual .coach-title--split > span {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.coach--dual .coach-title-move:has(> .coach-title-who) {
+  display: inline-flex;
+  column-gap: 0.25em;
+}
+.coach--dual .coach-title-who {
+  flex: 0 1 auto;
+  min-width: 1.6em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.coach--dual .coach-title-san {
+  flex: none;
+}
+
+.coach-other {
+  --coach-tone-text: var(--text);
+  appearance: none;
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--text) 4%, var(--surface));
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.coach-other[data-cls] {
+  --coach-tone-text: var(--coach-tone);
+  border-color: color-mix(in srgb, var(--coach-tone) 30%, var(--border));
+}
+.coach-other[data-place='before'] {
+  margin-bottom: 5px;
+}
+.coach-other[data-place='after'] {
+  margin-top: 8px;
+}
+.coach-other:active {
+  background: color-mix(in srgb, var(--text) 9%, var(--surface));
+}
+/*
+ * A 44px tap target without a taller row (the inset is from the padding box: 28 + 16). Above the
+ * expanded feedback it reaches up only, clear of the collapse chevron below it (which is above the
+ * text, so it keeps its own 44px target less the row); below the actions it reaches down, and their
+ * targets give way, so a few px separate the two.
+ */
+.coach-other {
+  z-index: 2;
+}
+.coach-other::after {
+  content: '';
+  position: absolute;
+  inset: -8px -4px;
+}
+.coach-other[data-place='before']::after {
+  inset: -16px -4px 0;
+}
+.coach--dual .coach-toggle {
+  position: relative;
+  z-index: 1;
+}
+.coach-other[data-place='after']::after {
+  inset: -4px -4px -12px;
+}
+.coach--dual .coach-actions:has(+ .coach-other) .coach-action::after {
+  inset: -10px -4px -2px;
+}
+.coach-other-who {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  max-width: 6em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.coach-other-move {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.coach-other-verdict {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--coach-tone-text);
+}
+.coach-other-chevron {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-faint);
+}
+
+.coach-spin--sm {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+
+/* Collapsed (short phones): one row with a half for each move, in the same order. */
+.coach-row--dual {
+  gap: 0;
+  padding-right: 6px;
+  cursor: default;
+}
+.coach-row--dual .coach-avatar {
+  margin-right: 4px;
+}
+.coach-half {
+  --coach-tone-text: var(--text);
+  appearance: none;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.coach-half + .coach-half {
+  border-left: 1px solid var(--coach-bubble-border);
+  padding-left: 10px;
+}
+.coach-half[data-cls] {
+  --coach-tone-text: var(--coach-tone);
+}
+/*
+ * A long name gives way to the verdict ("Prof… Inaccuracy"); the verdict is the half's point. It does
+ * not shrink at all (any shrinking, even a fraction of a pixel, would cut it), only past what is left
+ * beside the icon and a name of 1.6em.
+ */
+.coach-half-who {
+  flex: 0 1 auto;
+  min-width: 1.6em;
+  max-width: 5.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 700;
+}
+.coach-half-verdict {
+  flex: none;
+  max-width: calc(100% - 54px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--coach-tone-text);
+}
+.coach-half:not([data-current]) .coach-half-who {
+  color: var(--text-dim);
+}
+.coach-row--dual .coach-chevron {
+  margin-left: 2px;
+}
+
+:root[data-theme='light'] .coach-other[data-cls],
+:root[data-theme='light'] .coach-half[data-cls] {
+  --coach-tone-text: color-mix(in srgb, var(--coach-tone) 72%, var(--text));
+}

@@ -10,7 +10,10 @@ export interface GameRecord {
   result: GameResult;
   /** 1 win, 0.5 draw, 0 loss — from the player's point of view. */
   playerScore: 1 | 0.5 | 0;
-  /** Whether the game changed the player's rating (no takebacks / hints / best-move arrows used). */
+  /**
+   * Whether the game changed the player's rating (no takebacks, hints, Retry, explorer, best-move
+   * arrows or opponent move ratings used).
+   */
   rated: boolean;
   ratingBefore: number;
   ratingAfter: number;

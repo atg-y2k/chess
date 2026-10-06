@@ -14,6 +14,8 @@
  *    A result that spent the budget is as good as the request gets, so it answers any request
  *    with the same or a smaller budget (the cache remembers the nodes behind each result), and a
  *    request never joins a search with a larger budget (it would wait past its own).
+ *    A request can be withdrawn (`EnsureOptions.signal`): its search is dropped when nobody else
+ *    waits for it.
  *  - `watch()` live-analyses one position (depth `liveDepth`, `liveMultiPv` lines, at most
  *    `liveNodes` nodes) and streams throttled updates to subscribers. Updates for a position never
  *    get shallower.
@@ -87,6 +89,13 @@ export interface EnsureOptions {
    * `Infinity` for none.
    */
   maxNodes?: number;
+  /**
+   * Withdraws the request when aborted: it resolves at once with the best so far (`aborted:
+   * true`), and its search is dropped when nobody else waits for it (or goes on as the live
+   * analysis, for the watched position). For requests that may stop mattering, like the
+   * explorer's when it closes, so they do not hold the queue for the game's own.
+   */
+  signal?: AbortSignal;
 }
 
 interface CacheEntry {
@@ -146,6 +155,8 @@ export class AnalysisService {
   private target: { fen: string; key: string } | null = null;
   private paused = false;
   private broken = false;
+  /** A `pump()` is scheduled for the end of the current task (see `withdraw`). */
+  private pumpQueued = false;
 
   private readonly subscribers = new Set<(r: AnalysisResult) => void>();
   /** Last result accepted for the watched position (emitted or pending). */
@@ -174,11 +185,12 @@ export class AnalysisService {
    * search ran out of nodes or was cut short (`aborted: true`). `done` may be false when the
    * result was reported by a search still running (or later pre-empted). A search cut short by an
    * engine restart is retried (up to twice). Resolves `aborted: true` (best so far) after
-   * cancelAll(), if the engine breaks, or if it keeps crashing on this position. Rejects only for
-   * an invalid FEN.
+   * cancelAll(), when `opts.signal` aborts, if the engine breaks, or if it keeps crashing on this
+   * position. Rejects only for an invalid FEN.
    */
   ensure(fen: string, opts: EnsureOptions): Promise<AnalysisResult> {
     const key = fenKey(fen);
+    const signal = opts.signal;
     const minDepth = Math.max(1, Math.round(opts.minDepth));
     const multiPv = Math.max(1, Math.round(opts.multiPv ?? 1));
     const maxNodes = nodeBudget(opts.maxNodes ?? this.ensureNodes(multiPv));
@@ -192,9 +204,17 @@ export class AnalysisService {
     } catch (e) {
       return Promise.reject(e instanceof Error ? e : new Error(String(e)));
     }
-    if (this.broken) return Promise.resolve(this.bestSoFar(key, fen));
+    if (this.broken || signal?.aborted) return Promise.resolve(this.bestSoFar(key, fen));
     return new Promise<AnalysisResult>((resolve) => {
       const waiter: Waiter = { fen, minDepth, multiPv, maxNodes, resolve };
+      if (signal) {
+        const onAbort = () => this.withdraw(waiter);
+        signal.addEventListener('abort', onAbort, { once: true });
+        waiter.resolve = (r) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(r);
+        };
+      }
       const r = this.running;
       if (r && !r.superseded && !r.ended && r.key === key && covers(r, minDepth, multiPv, maxNodes)) {
         // Already searching this position deeply enough (typically the live search): join it.
@@ -286,6 +306,35 @@ export class AnalysisService {
       else this.supersede(r);
     }
     this.pump();
+  }
+
+  /**
+   * An `ensure` request was withdrawn (its `signal` aborted): it resolves with the best so far. A
+   * queued search nobody waits for any more is dropped; the running one goes on only as live
+   * analysis, which `pump()` replaces unless it is the watched position.
+   */
+  private withdraw(w: Waiter): void {
+    const r = this.running;
+    const job = r && r.waiters.includes(w) ? r : this.queue.find((j) => j.waiters.includes(w));
+    if (!job) return; // already answered
+    job.waiters = job.waiters.filter((x) => x !== w);
+    w.resolve(this.bestSoFar(job.key, w.fen));
+    if (job.waiters.length) return;
+    if (job !== r) {
+      this.queue = this.queue.filter((j) => j !== job);
+      return;
+    }
+    if (job.kind === 'ensure' && !job.superseded && !job.ended) {
+      job.kind = 'live';
+      // After the other requests withdrawn by the same signal, so none of them starts meanwhile.
+      if (!this.pumpQueued) {
+        this.pumpQueued = true;
+        queueMicrotask(() => {
+          this.pumpQueued = false;
+          this.pump();
+        });
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------------------------

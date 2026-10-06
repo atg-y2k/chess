@@ -311,8 +311,8 @@ and press ⌘S in the Simulator to save a 1320 × 2868 screenshot. Screenshots t
 
 Captions or device frames around the screenshots are allowed, but prices don't belong in screenshots.
 
-- [ ] Every screenshot that shows a Pro feature (coach explanations, Hint, Show best, best-move arrows,
-      Game Review's key moments) says that it needs the in-app purchase, e.g. the script's tag or a
+- [ ] Every screenshot that shows a Pro feature (coach explanations, Hint, Show best, the explorer,
+      best-move arrows, Game Review's key moments) says that it needs the in-app purchase, e.g. the script's tag or a
       caption (Guideline 2.3.2). Simulator screenshots need the same label.
 - [ ] No prices in product-page screenshots (Guideline 2.3.7): upload 01–04, not the paywall.
 
@@ -370,12 +370,14 @@ PLAY
 SEE WHO'S WINNING
 • A live evaluation bar and a graph of the whole game
 • Every move rated: Best, Excellent, Good, Inaccuracy, Mistake, Blunder
+• Rate the computer's moves too, to see whether it found the best move
 • Accuracy for both players after the game
 
 LEARN MORE WITH PRO (one-time purchase)
 • The coach explains every move: what it wins or loses, the tactic you missed, the threat you allowed, and what was better
 • Hints with the idea behind the best move
 • Show best: the move you should have played, and why
+• The explorer: try moves for both sides before you play them, with the engine's verdict
 • Best-move arrows while you play
 • A full review of every game, with its key moments and a comment on every move
 Pro is a single in-app purchase, not a subscription, and Family Sharing shares it with your family.
@@ -403,11 +405,11 @@ App Store Connect → the version → App Review Information: your contact detai
 ```text
 Chess Coach is a chess trainer that runs entirely on the device. The Stockfish chess engine (open source, GPL) is bundled in the app, so it works offline and needs no account or sign-in. There is no server.
 
-FREE: all 16 computer opponents (100-3200 Elo), the player's rating, the evaluation bar and graph, the rating of every move (Best, Mistake, Blunder...), and accuracy after the game.
+FREE: all 16 computer opponents (100-3200 Elo), the player's rating, the evaluation bar and graph, the rating of every move (Best, Mistake, Blunder...), also of the computer's moves with the "Rate opponent's moves" option, and accuracy after the game.
 
-PRO is one non-consumable in-app purchase (io.github.atgy2k.chesscoach.pro, Family Sharing on). It unlocks the coach's explanations of each move, Hint, Show best, best-move arrows, and the key moments and per-move comments of the post-game review.
+PRO is one non-consumable in-app purchase (io.github.atgy2k.chesscoach.pro, Family Sharing on). It unlocks the coach's explanations of each move, Hint, Show best, the explorer (trying moves before playing them, with the engine's evaluation and ratings), best-move arrows, and the key moments and per-move comments of the post-game review.
 
-WHERE TO FIND THE PURCHASE: tap Play on the New game sheet and make any move. The coach panel under the board rates the move and shows "Unlock to see why", which opens the purchase screen. The purchase screen also opens from the Hint button, and from Menu > Chess Coach Pro > Unlock. Restore Purchases is in the Menu and on the purchase screen.
+WHERE TO FIND THE PURCHASE: tap Play on the New game sheet and make any move. The coach panel under the board rates the move and shows "Unlock to see why", which opens the purchase screen. The purchase screen also opens from the Hint and Explore buttons, and from Menu > Chess Coach Pro > Unlock. Restore Purchases is in the Menu and on the purchase screen.
 
 OPEN SOURCE: the app is free software under the GNU GPL v3 or later. Menu > About links to the exact source code of this build (https://github.com/atg-y2k/chess/tree/ios-vX.Y.Z-bN) and shows the licenses, the Privacy Policy, the Terms of Use and Support. Our custom EULA states that the GPL governs the software.
 

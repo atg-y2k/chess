@@ -14,7 +14,7 @@ import { NativePurchases, type ProProduct, type Purchases, type StorePlugin } fr
 import { MemoryStorage } from '../helpers/fakeEngine';
 import { FakePurchases, deferred } from './fakePurchases';
 
-const ALL: ProFeature[] = ['coachExplanations', 'hint', 'showBest', 'bestMoveArrows', 'reviewDetails'];
+const ALL: ProFeature[] = ['coachExplanations', 'hint', 'showBest', 'explorer', 'bestMoveArrows', 'reviewDetails'];
 const PRODUCT: ProProduct = { id: 'io.github.atgy2k.chesscoach.pro', title: 'Pro', description: 'Everything', displayPrice: '$9.99' };
 
 const made: Entitlements[] = [];
@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 describe('the free / Pro split (FEATURE_TIERS)', () => {
-  it('sells the coach’s explanations, Hint, Show best, best-move arrows and the review details', () => {
+  it('sells the coach’s explanations, Hint, Show best, the explorer, best-move arrows and the review details', () => {
     expect(proFeatures()).toEqual(ALL);
     for (const f of ALL) expect(FEATURE_TIERS[f]).toBe('pro');
     for (const f of ALL) expect(FEATURE_INFO[f].title.length).toBeGreaterThan(0);

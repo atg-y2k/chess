@@ -37,7 +37,10 @@ export interface SavedGame {
   botId: string;
   botElo: number;
   botName: string;
-  /** Takebacks, hints or best-move arrows were used (the game will not be rated). */
+  /**
+   * Takebacks, hints, Retry, the explorer, best-move arrows or the opponent's move ratings were
+   * used (the game will not be rated).
+   */
   assisted: boolean;
   /** ISO timestamp. */
   startedAt: string;

@@ -7,6 +7,7 @@ import type { GameRecord, PlayerProfile } from '../rating/types';
 import type { ThemePref } from '../theme';
 import { About } from './About';
 import {
+  IconBotRated,
   IconChart,
   IconCheckCircle,
   IconChevronRight,
@@ -21,6 +22,7 @@ import {
   IconSound,
 } from './icons';
 import { LevelPicker, levelFor, type StartingLevel } from './LevelPicker';
+import { RATE_OPPONENT_MENU_DESCRIPTION } from './NewGameSheet';
 import { IconLock } from './PaywallSheet';
 import { Sheet } from './Sheet';
 import { Toggle } from './Toggle';
@@ -286,6 +288,15 @@ export function MenuSheet({
             onChange={arrowsLocked ? () => onUnlock?.('bestMoveArrows') : (v) => onChange({ showBestMoves: v })}
             icon={arrowsLocked ? <IconLock /> : <IconEye />}
             iconColor={arrowsLocked ? 'var(--warning)' : 'var(--cls-brilliant)'}
+          />
+          <Toggle
+            id="rateOpponent"
+            label="Rate opponent’s moves"
+            description={RATE_OPPONENT_MENU_DESCRIPTION}
+            checked={settings.rateOpponent}
+            onChange={(v) => onChange({ rateOpponent: v })}
+            icon={<IconBotRated />}
+            iconColor="var(--cls-inaccuracy)"
           />
           <Toggle
             id="sound"

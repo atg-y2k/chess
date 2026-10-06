@@ -24,6 +24,10 @@ optional one-time "Pro" purchase for the coaching features. See [iOS app](#ios-a
   wins or loses, the tactic or recapture you missed, the threat you allowed, and what the best move
   was.
 - **Hints, Show best and Retry** to learn from your mistakes during the game.
+- **Rate opponent’s moves** (an option): see whether the computer found the best move, with the same
+  ratings and explanations you get for yours.
+- **An explorer** to try moves before you play them: move for both sides, and the engine rates
+  each move, shows the evaluation and its best move, and can answer for the other side.
 - **Game Review** after the game: accuracy for both sides, key moments, and coaching for every move
   of both players.
 - **Takebacks, board flip and PGN export** (with evaluations and move marks) through the iOS share
@@ -75,15 +79,18 @@ The first time you open the app, and whenever you tap **New**, the **New game** 
 - **Pick an opponent:** a named bot, **Custom** (the slider, 100 to 3200 in steps of 50) or
   **Match my rating** (an opponent at your rating, rounded to 50, chosen again for every game).
 - **Pick a color:** White, Random or Black.
-- **Choose options:** Coach, Evaluation bar, Best-move arrows, Takebacks and Sound.
+- **Choose options:** Coach, Evaluation bar, Best-move arrows, Rate opponent’s moves, Takebacks and
+  Sound.
 
 Then tap **Play**. Move by dragging a piece or by tapping it and then its destination square. The
-bar at the bottom has **New** (a new game), **Undo** (take back your last move), **Hint**, **Flip**
-(turn the board around), **Coach** (coach on or off) and **Menu**. When the game ends, a sheet
-shows the result the way chess players write it, from White's side (1–0 when White won, 0–1 when
-Black won, ½–½ for a draw), with White on the left, and your rating change. After the game the bar
-has **Review** and ‹ › to step through the moves. Tap any move in the move list, or anywhere on the graph, to look
-at that position; **Back to game** returns to the current one.
+bar at the bottom has **New** (a new game), **Undo** (take back your last move), **Hint**,
+**Explore** (see [The explorer](#the-explorer)), **Flip** (turn the board around), **Coach** (coach
+on or off) and **Menu**. When the game ends, a sheet shows the result the way chess players write
+it, from White's side (1–0 when White won, 0–1 when Black won, ½–½ for a draw), with White on the
+left, and your rating change. After the game the bar has **Review** and ‹ › to step through the
+moves. Tap any move in the move list, or anywhere on the graph, to look at that position; **Back to
+game** returns to the current one. (With the phone in landscape the bar is narrower: **New** is
+then only in the Menu, and in Game Review **Flip** is.)
 
 If iOS closes the app (it often does in the background), your game is still there when you open it
 again, and a finished game comes back with its result, ready for review, until you start the next
@@ -108,6 +115,20 @@ and explains it. For example, "14. Qg4 is a blunder" with "This hangs your queen
 If you don't take back a piece your opponent just captured, the coach says so, for example "You
 didn't recapture the bishop on c6."
 
+**Rate opponent’s moves** (an option, separate from the coach) does the same for the computer's
+moves: you see whether it found the best move. Its last move gets its icon on the board and in the
+move list (the same icons as yours), its big moments a dot on the graph, and the coach panel gives
+the verdict and the explanation in the third person, for example "Pip’s 12… Nf6 is a mistake" with
+"This leaves Black's knight on f6 undefended." **Show best** shows what it should have played, with
+arrows on the position before its move. With the coach on too, the panel shows both moves, yours
+always on top: one open, the other as a row ("You ★ 12. Nf3 Best"); tap the row to open it. Your move
+stays open while it has something to fix (an inaccuracy or worse, with Retry and Show best at hand);
+after a good move the computer's latest move is open. On a short phone (or in landscape) both fit in
+one row ("You ★ Best | Pip ? Mistake"); tap a half to read it. With the coach off, the panel shows
+only the computer's moves. The option is in the New game sheet and the Menu. It shows you when the
+computer goes wrong, so it makes the game unrated, and it stays on for your next games until you
+switch it off (see [Rated and unrated games](#your-rating-what-elo-means)).
+
 **Good moves that give something away.** When the game is already decided, a move can hardly change
 your winning chances, so it can count as Good or Excellent even if it gives up material. The coach
 does not praise such a move: it says, for example, "10… Kd8 doesn't change the result" (the game
@@ -121,6 +142,38 @@ one. If the check fails (rarely), it says "Couldn't check …" with a **Try agai
 When it is your move right after your opponent took one of your pieces and you can take back
 without losing material, the coach's tip says so, for example "Rocco just took your bishop on c1.
 Can you recapture?"
+
+## The explorer
+
+**Explore** (in the bar at the bottom) lets you try moves before you make them. It opens on the
+position on the board: the current one, or an earlier one you are looking at, also after the game
+and in Game Review. A blue frame around the board, an **Exploring** tag and the blue explorer panel
+show that this is not your game; tap the tag to go back to the game.
+
+- **Move for both sides** on the board. The move list shows your line ("From 15… Nf6: 16. Nf3 Nc6
+  17. Bb5"); tap a move to go back to it.
+- The **evaluation bar** follows the explored position, and the engine's best moves for the side to
+  move are drawn as arrows (**Arrows on** in the panel switches them off, **Arrows off** back on).
+- **Each move gets a rating**, like your moves in the game: an icon on the board and in the list, and
+  in the panel the verdict, the evaluation and the coach's short explanation, for example
+  "16. Nf3 — Excellent · +0.4". **Best here** names the engine's choice in the position.
+- The bar at the bottom has **Reset** (clears your line and goes back to where you started),
+  **Flip**, **Back**, **Forward**, **Reply** (the engine plays the best move for the side to move) and
+  **Exit**.
+- A position that would end the game ends the line too: checkmate, stalemate, or a draw by
+  repetition (counting your game's moves before it), the 50-move rule or too little material. The
+  panel says so ("Threefold repetition: a draw.") and the evaluation is 0.0.
+- **Play 16. Nf3**: when you started on your turn in the game, this plays the first move of your
+  line in the game, and closes the explorer.
+- Your game never changes while you explore. If it was your opponent's turn, it plays on: the panel
+  says so ("Pip played 15… Nf6 in your game.", on a short phone under the panel's row), and **Play** is
+  no longer offered. A move you started (a piece you tapped, the promotion choice) is dropped when you
+  go in or out of the explorer, so it never lands in the other one. **Exit** brings you back to the
+  game as you left it. The explorer is not saved: if iOS closes the app, the game comes back without
+  it.
+- In a game that still counts for your rating, the first **Explore** asks first: "Exploring uses the
+  engine, so it makes this game unrated." It opens on the position you asked about, even if your
+  opponent has moved meanwhile. After the game and in Game Review it does not change anything.
 
 ## The evaluation bar
 
@@ -166,11 +219,15 @@ gains more than beating a weaker one.
 
 **Rated and unrated games.** A game counts for your rating unless you use help:
 
-- A **takeback** (Undo), a **hint**, **Retry** or **best-move arrows** make the game unrated. The
-  coach and the evaluation bar are fine in rated games.
-- In a rated game, the first hint, takeback or Retry asks you to confirm. While a takeback or Retry
-  is waiting for your answer, your opponent holds its reply; if you cancel, it plays on. Switching
-  best-move arrows on (in the Menu, or when starting the game) makes it unrated at once.
+- A **takeback** (Undo), a **hint**, **Retry**, **best-move arrows**, the **explorer** or **Rate
+  opponent’s moves** make the game unrated. The coach and the evaluation bar are fine in rated games.
+- In a rated game, the first hint, takeback, Retry or Explore asks you to confirm, and so does
+  switching on Rate opponent’s moves in the Menu. While a takeback or Retry is waiting for your
+  answer, your opponent holds its reply; if you cancel, it plays on (it also plays on while you
+  explore or answer about Rate opponent’s moves). Switching best-move arrows on (in the Menu, or when
+  starting the game) makes it unrated at once, and a game started with best-move arrows or Rate
+  opponent’s moves on is unrated from the start. Both are settings: they stay on for your next games
+  (a Rematch too) until you switch them off.
 - An **Unrated** tag on your player strip shows when a game no longer counts.
 - **Resigning** counts as a loss, rated unless the game was already unrated. Resigning before you
   have made a move does not change your rating.
@@ -237,7 +294,8 @@ match chess.com exactly. The Brilliant and Great thresholds depend on your ratin
 
 - **Flip board, Export PGN, New game and Resign** (Resign asks first).
 - **Chess Coach Pro** (App Store app only): Unlock, or "Unlocked ✓", and **Restore Purchases**.
-- **While playing:** Coach, Evaluation bar, Best-move arrows (makes the game unrated) and Sound.
+- **While playing:** Coach, Evaluation bar, Best-move arrows (makes the game unrated), Rate opponent’s
+  moves (asks first in a rated game, then makes it unrated) and Sound.
 - **Appearance:** Dark, Light or Automatic (follows iOS).
 - **Your stats:** rating, peak, games, wins/draws/losses and **Set my level**; then your
   **Recent games** (the last 10).
@@ -308,7 +366,7 @@ Requires Node 24 (chessground declares `engines.node >= 24`).
 ```sh
 npm ci                 # install
 npm run dev            # dev server with hot reload (http://localhost:5173)
-npm test               # unit tests (Vitest: about 790 tests in 40 files; the calibration test is skipped)
+npm test               # unit tests (Vitest: about 840 tests in 43 files; the calibration test is skipped)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
 npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting
@@ -346,9 +404,10 @@ the device runs low on space). iPhone only, portrait, iOS 16.4 or later.
 (no server, no account; the check works offline).
 
 - **Free:** every opponent at any level, your rating, the evaluation bar and graph, the move ratings
-  and badges, accuracy, takebacks and Retry, and PGN export.
-- **Pro:** the coach's explanations (the "why"), Hint, Show best, best-move arrows, and Game Review's
-  key moments and per-move comments.
+  and badges (also of the opponent's moves, with Rate opponent’s moves), accuracy, takebacks and
+  Retry, and PGN export.
+- **Pro:** the coach's explanations (the "why", also of the opponent's moves), Hint, Show best, the
+  explorer, best-move arrows, and Game Review's key moments and per-move comments.
 
 The split is `FEATURE_TIERS` in `src/game/entitlements.ts`. The web app has no paywall: everything in
 it is unlocked. A web build made with `VITE_PAYWALL=1` locks Pro behind a mock store, for testing the

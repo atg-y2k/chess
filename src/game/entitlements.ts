@@ -30,7 +30,7 @@ import {
 export type { RestoreResult };
 
 /** Features that can be sold as part of Pro. */
-export type ProFeature = 'coachExplanations' | 'hint' | 'showBest' | 'bestMoveArrows' | 'reviewDetails';
+export type ProFeature = 'coachExplanations' | 'hint' | 'showBest' | 'bestMoveArrows' | 'reviewDetails' | 'explorer';
 
 export type Tier = 'free' | 'pro';
 
@@ -49,6 +49,8 @@ export const FEATURE_TIERS: Readonly<Record<ProFeature, Tier>> = {
   bestMoveArrows: 'pro',
   /** Game Review's key moments and per-move explanations (accuracy and counts stay free). */
   reviewDetails: 'pro',
+  /** The explorer: try moves for both sides, with the engine's eval, arrows and ratings. */
+  explorer: 'pro',
 };
 
 /** The purchase's name as the player sees it, e.g. "Chess Coach Pro" (follows the app's name). */
@@ -93,10 +95,15 @@ export const FEATURE_INFO: Readonly<Record<ProFeature, FeatureInfo>> = {
     detail: 'Key moments and coaching on every move',
     context: 'See the moments that decided the game.',
   },
+  explorer: {
+    title: 'Explorer',
+    detail: 'Test your ideas with the engine’s verdict',
+    context: 'Try moves before you play them.',
+  },
 };
 
 /** The paywall's list order. */
-const FEATURE_ORDER: readonly ProFeature[] = ['coachExplanations', 'hint', 'showBest', 'bestMoveArrows', 'reviewDetails'];
+const FEATURE_ORDER: readonly ProFeature[] = ['coachExplanations', 'hint', 'showBest', 'explorer', 'bestMoveArrows', 'reviewDetails'];
 
 /** The features sold as Pro, in the paywall's order. */
 export function proFeatures(tiers: Readonly<Record<ProFeature, Tier>> = FEATURE_TIERS): ProFeature[] {

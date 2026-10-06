@@ -194,7 +194,7 @@ describe('explainBestMove (hints)', () => {
   it('says "saves" for a defensive move, in both perspectives', () => {
     const fen = fenOf('e4 e5 Qh5');
     expect(hint(fen).headline).toBe('d6 saves your pawn on e5 from Qxe5+.');
-    expect(hint(fen, { perspective: 'neutral' }).headline).toBe("d6 saves Black's pawn on e5 from Qxe5+.");
+    expect(hint(fen, { perspective: 'neutral' }).headline).toBe("d6 saves Black’s pawn on e5 from Qxe5+.");
   });
 
   it('calls a capture on the previous move square a recapture', () => {
@@ -265,7 +265,7 @@ describe('explainMove: mistakes and blunders', () => {
     expect(text(explain(S.backRank, 'Rb7'))).toEqual([
       'This allows a forced mate in 2.',
       'Black mates with Ra1+ Rb1 Rxb1#.',
-      "It's a back-rank mate: your king has no escape square.",
+      "It’s a back-rank mate: your king has no escape square.",
       'f3 was needed: it gives the king an escape square.',
     ]);
     expect(explain(S.backRank, 'Rb7').motifs).toEqual(['allowsMate', 'backRank']);
@@ -342,12 +342,12 @@ describe('explainMove: mistakes and blunders', () => {
   });
 
   it('opening principles broken', () => {
-    expect(explain(S.start, 'f3').headline).toBe("f3 weakens the king's position.");
-    expect(explain(S.start, 'h4').headline).toBe("h4 is an edge-pawn move that doesn't help development.");
+    expect(explain(S.start, 'f3').headline).toBe("f3 weakens the king’s position.");
+    expect(explain(S.start, 'h4').headline).toBe("h4 is an edge-pawn move that doesn’t help development.");
     expect(explain(S.start, 'Na3').headline).toBe('Na3 puts the knight on the edge, where it controls fewer squares.');
     expect(text(explain(fenOf('e4 e5'), 'Qh5'))).toEqual([
       'Qh5 brings the queen out early, where enemy pieces can chase it.',
-      "Black can answer d6, which saves Black's pawn on e5 from Qxe5+.",
+      "Black can answer d6, which saves Black’s pawn on e5 from Qxe5+.",
       'Best was Nf3, which develops the knight and fights for the center.',
     ]);
     expect(explain(fenOf('f3 e5'), 'g4').headline).toBe('This allows Qh4#, checkmate.');
@@ -365,10 +365,10 @@ describe('explainMove: mistakes and blunders', () => {
 
   it('neutral perspective (reviewing the opponent)', () => {
     const e = explain(S.qg4, 'Qg4', { perspective: 'neutral' });
-    expect(e.headline).toBe("This hangs White's queen on g4.");
+    expect(e.headline).toBe("This hangs White’s queen on g4.");
     expect(explain(S.qxf7, 'd3', { perspective: 'neutral' }).headline).toBe('White missed Qxf7#, which was checkmate.');
     expect(explain(S.blackburne, 'Nxe5', { perspective: 'neutral' }).details[0]).toBe(
-      "Black answers Qg5, which attacks White's knight on e5 and White's pawn on g2 at once (a fork).",
+      "Black answers Qg5, which attacks White’s knight on e5 and White’s pawn on g2 at once (a fork).",
     );
   });
 });
@@ -403,7 +403,7 @@ describe('explainMove: good moves', () => {
     const e = explainMove({ fenBefore: S.stalemate, moveUci: uci, classification, before, after });
     expect(text(e)).toEqual([
       "Qc8# is checkmate — well played!",
-      "It's a back-rank mate: the king has no escape square.",
+      "It’s a back-rank mate: the king has no escape square.",
     ]);
     const n = explainMove({ fenBefore: S.stalemate, moveUci: uci, classification, before, perspective: 'neutral' });
     expect(n.headline).toBe('Qc8# is checkmate.');
@@ -412,7 +412,7 @@ describe('explainMove: good moves', () => {
   it('only moves and hopeless defences', () => {
     const fen = fenOf('e4 e5 Nf3 d6 Bc4 Bg4 Nc3 Nc6 h3 Bh5 Nxe5 Bxd1 Bxf7+');
     expect(text(explain(fen, 'Ke7', { cls: 'forced' }))).toEqual([
-      "Ke7 is forced: it's the only legal move.",
+      "Ke7 is forced: it’s the only legal move.",
       'White mates next move.',
     ]);
   });
@@ -640,11 +640,11 @@ describe('tactics that are not real', () => {
     expect(kinds('r2q1rk1/ppp2ppp/2n5/1B6/4Pbb1/2N2N2/PPP2PPP/R2Q1RK1 b - - 1 12', 'd8d1')).not.toContain('pin');
   });
 
-  it("says (it can't move) only when the pinned piece really cannot", () => {
-    expect(hintOf('4k3/4n3/8/8/8/8/8/R4K2 w - - 0 1', cp(50), ['a1e1']).headline).toMatch(/pins the knight on e7 to the king \(it can't move\)/);
+  it("says (it can’t move) only when the pinned piece really cannot", () => {
+    expect(hintOf('4k3/4n3/8/8/8/8/8/R4K2 w - - 0 1', cp(50), ['a1e1']).headline).toMatch(/pins the knight on e7 to the king \(it can’t move\)/);
     const rook = hintOf('4k3/4r3/8/8/8/8/8/R4K2 w - - 0 1', cp(0), ['a1e1']).headline;
     expect(rook).toMatch(/pins the rook on e7 to the king/);
-    expect(rook).not.toMatch(/can't move/);
+    expect(rook).not.toMatch(/can’t move/);
   });
 
   it('keeps a pin when the pinned piece cannot take the pinner because of check', () => {
@@ -744,7 +744,7 @@ describe('hints that compare the engine lines (MultiPV)', () => {
     expect(only.motifs).toContain('onlyGoodMove');
     const neutral = hintWith(LASKER4, set(pvLine(cp(250), c4.pv), g3(20)), { perspective: 'neutral' });
     expect(neutral.headline).toBe('c4 is the only move that keeps the advantage.');
-    expect(neutral.details[0]).toBe("Anything else throws away most of White's advantage.");
+    expect(neutral.details[0]).toBe("Anything else throws away most of White’s advantage.");
   });
 
   it('says what the move keeps in won and lost positions', () => {
@@ -978,10 +978,10 @@ describe('whole games (engine lines at depth 16)', () => {
       'It attacks the rook on d7 while it is pinned to the king.',
     ]);
     expect(out['16.Qb8+']).toEqual(['Qb8+ starts a forced mate in 2.', 'The finish: Qb8+ Nxb8 Rd8#.']);
-    expect(out['16...Nxb8']).toEqual(["Nxb8 is forced: it's the only legal move.", 'White mates next move.']);
+    expect(out['16...Nxb8']).toEqual(["Nxb8 is forced: it’s the only legal move.", 'White mates next move.']);
     expect(out['17.Rd8#']).toEqual([
       'Rd8# is checkmate — well played!',
-      "It's a back-rank mate: the king has no escape square.",
+      "It’s a back-rank mate: the king has no escape square.",
     ]);
   });
 });
@@ -1238,7 +1238,7 @@ describe('recaptures', () => {
     const e = explainWith(RUY, 'g8f6', 'blunder', ruyLines, [pvLine(cp(300), ['c6a4', 'f6e4', 'd2d4'])], [0.45, 0.2], {
       prevMove: { to: 'c6', captured: 'n' },
     });
-    expect(text(e)).toEqual(["You didn't recapture the bishop on c6.", 'Best was dxc6, which recaptures the bishop.']);
+    expect(text(e)).toEqual(["You didn’t recapture the bishop on c6.", 'Best was dxc6, which recaptures the bishop.']);
     expect(e.title).toBe('Missed recapture');
     expect(e.motifs).toEqual(['missedRecapture']);
     // The headline does not give the move away (Retry hides lines that name it).
@@ -1267,7 +1267,7 @@ describe('recaptures', () => {
     const e = explainBestMove(fen.fen(), qa5, { prevMove });
     expect(e.headline).toBe('Qa5+ gives check first, then takes back the bishop with Kxg7.');
     const missed = explainWith(fen.fen(), 'a7a6', 'blunder', [qa5], [pvLine(cp(250), ['g7h6', 'd8d6'])], [0.45, 0.2], { prevMove });
-    expect(missed.headline).toBe("You didn't recapture the bishop on g7.");
+    expect(missed.headline).toBe("You didn’t recapture the bishop on g7.");
   });
 });
 

@@ -92,7 +92,7 @@ describe('acceptance games: what the coach says (depth 14, MultiPV 3)', () => {
     expect(text(e).join(' ')).not.toMatch(/without a defender/);
     expect(text(e)).toEqual([
       'Kd6 gets the king out of check.',
-      "Black's queen on d8 is lost to the skewer whichever way the king moves.",
+      "Black’s queen on d8 is lost to the skewer whichever way the king moves.",
     ]);
     // Not a concession (so not a review key moment): Kxd7, the best move, loses the queen too.
     expect(e.concedes).toBeUndefined();

@@ -21,6 +21,7 @@ import type { Score } from '../engine/types';
 import type { Color, Ply } from '../game/types';
 import { CLASS_META, classBadgeSvg } from '../ui/ClassIcon';
 import { CoachPanel, type CoachPanelProps } from '../ui/CoachPanel';
+import { ExplorerPanel } from '../ui/ExplorerPanel';
 import { IconBulb, IconCoach, IconFlip, IconMenu, IconPlus, IconUndo } from '../ui/icons';
 import { MoveList } from '../ui/MoveList';
 import { PlayerStrip } from '../ui/PlayerStrip';
@@ -529,12 +530,104 @@ function StatesPage() {
               onToggleCollapsed={noop('states:expand-narrow')}
             />
           </div>
+          {/* Both moves rated (Rate opponent's moves): the other one as a row, in order ("You" first). */}
+          <CoachPanel
+            cls="mistake"
+            title="Pip’s 12… Nf6 is a mistake"
+            titleMove="Pip’s 12… Nf6"
+            who="Pip"
+            verdict="Mistake"
+            lines={['This leaves Black’s knight on f6 undefended.', 'Best was Nd7, which keeps the balance.']}
+            actions={[{ id: 'best', label: 'Show best', primary: true, onClick: noop('states:pair-best') }]}
+            onToggleCollapsed={noop('states:pair-toggle')}
+            other={{ who: 'You', move: '12. Nf3', verdict: 'Best', cls: 'best', place: 'before', onSelect: noop('states:pair-you') }}
+          />
+          <CoachPanel
+            cls="best"
+            title="12. Nf3 is the best move"
+            titleMove="12. Nf3"
+            who="You"
+            verdict="Best"
+            lines={['Nf3 develops a piece and guards e5.']}
+            onToggleCollapsed={noop('states:pair-toggle2')}
+            other={{ who: 'Pip', move: '12… Nf6', verdict: 'Checking…', busy: true, place: 'after', onSelect: noop('states:pair-pip') }}
+          />
+          <CoachPanel
+            cls="mistake"
+            title="Pip’s 12… Nf6 is a mistake"
+            who="Pip"
+            verdict="Mistake"
+            lines={['This leaves Black’s knight on f6 undefended.']}
+            collapsed
+            onToggleCollapsed={noop('states:pair-expand')}
+            other={{ who: 'You', move: '12. Nf3', verdict: 'Best', cls: 'best', place: 'before', onSelect: noop('states:pair-you2') }}
+          />
+        </>,
+      )}
+      {section(
+        'ExplorerPanel',
+        <>
+          <ExplorerPanel
+            from="15… Nf6"
+            title="White to move"
+            verdict={null}
+            evalLabel={null}
+            lines={['Make moves for either side to try them out. Your game stays as it is.']}
+            best="Best here: Bd3 (+0.6)"
+            notice={null}
+            actions={[{ id: 'arrows', label: 'Arrows on', pressed: true, onClick: noop('states:xp-arrows') }]}
+          />
+          <ExplorerPanel
+            from="15… Nf6"
+            title="16. Nf3"
+            verdict="Excellent"
+            cls="excellent"
+            evalLabel="+0.4"
+            lines={['Nf3 develops the knight and fights for the center.', 'Bd3 was a little better.']}
+            best="Best here: Nc6 (+0.4)"
+            notice="Pip played 15… Nf6 in your game."
+            noticeShort="Pip played 15… Nf6 in your game"
+            actions={[
+              { id: 'arrows', label: 'Arrows off', pressed: false, onClick: noop('states:xp-arrows') },
+              { id: 'play', label: 'Play 16. Nf3', primary: true, onClick: noop('states:xp-play') },
+            ]}
+          />
+          <ExplorerPanel from={null} title="1. e4" verdict="Checking…" evalLabel={null} busy lines={[]} best={null} notice={null} actions={[]} />
+          <ExplorerPanel
+            from="15… Nf6"
+            title="16. Qxf7+"
+            verdict="Blunder"
+            cls="blunder"
+            evalLabel="-4.1"
+            lines={[]}
+            best={null}
+            notice={null}
+            actions={[{ id: 'play', label: 'Play 16. Qxf7+', primary: true, onClick: noop('states:xp-play') }]}
+            collapsed
+            onToggleCollapsed={noop('states:xp-expand')}
+          />
+          <ExplorerPanel
+            from="15… Nf6"
+            title="16. Nf3"
+            verdict="Excellent"
+            cls="excellent"
+            evalLabel="+0.4"
+            lines={[]}
+            best={null}
+            notice="Pip is thinking about its move in your game…"
+            noticeShort="Pip is thinking in your game…"
+            noticeBusy
+            actions={[]}
+            collapsed
+            onToggleCollapsed={noop('states:xp-expand')}
+          />
         </>,
       )}
       {section(
         'MoveList',
         <>
           <MoveList plies={[]} current={0} onSelect={noop('states:ml-empty')} showClassIcons />
+          <MoveList plies={[]} current={0} onSelect={noop('states:ml-lead')} showClassIcons lead="From 15… Nf6" emptyText="Try a move for either side" />
           <MoveList plies={blackFirst} current={2} onSelect={(n) => logEvent('states:ml-black', n)} showClassIcons />
           <MoveList plies={plies} current={8} onSelect={(n) => logEvent('states:ml-all', n)} showClassIcons iconSet="all" />
           <MoveList plies={plies} current={40} onSelect={(n) => logEvent('states:ml-noicons', n)} showClassIcons={false} />

@@ -65,11 +65,19 @@ describe('choiceFromSettings / settingsFromDraft', () => {
   it('produces complete, consistent settings', () => {
     const out = settingsFromDraft(
       DEFAULT_SETTINGS,
-      { selectedId: 'b', customElo: 0, adaptive: false, playerColor: 'random', showBestMoves: true, sound: false },
+      { selectedId: 'b', customElo: 0, adaptive: false, playerColor: 'random', showBestMoves: true, rateOpponent: true, sound: false },
       BOTS,
       900,
     );
-    expect(out).toEqual({ ...DEFAULT_SETTINGS, playerColor: 'random', botId: 'b', botElo: 700, showBestMoves: true, sound: false });
+    expect(out).toEqual({
+      ...DEFAULT_SETTINGS,
+      playerColor: 'random',
+      botId: 'b',
+      botElo: 700,
+      showBestMoves: true,
+      rateOpponent: true,
+      sound: false,
+    });
     expect(Object.keys(out).sort()).toEqual(Object.keys(DEFAULT_SETTINGS).sort());
   });
 });
@@ -173,5 +181,39 @@ describe('NewGameSheet / ConfirmSheet wording', () => {
       expect(assistPrompt(kind).message).toMatch(/unrated/);
     }
     expect(assistPrompt('hint').confirmLabel).toBe('Show hint');
+    expect(assistPrompt('explore')).toEqual({
+      title: 'Explore this position?',
+      message: 'Exploring uses the engine, so it makes this game unrated: win or lose, your rating stays the same.',
+      confirmLabel: 'Explore',
+    });
+    expect(assistPrompt('rateOpponent')).toEqual({
+      title: 'Rate your opponent’s moves?',
+      message:
+        'Seeing when your opponent goes wrong is a big help, so it makes this game unrated: win or lose, your rating stays the same. It stays on for your next games until you switch it off.',
+      confirmLabel: 'Turn on',
+    });
+  });
+  it('the opponent ratings switch promises no Pro explanations, and the Menu says it keeps games unrated', async () => {
+    const { RATE_OPPONENT_DESCRIPTION, RATE_OPPONENT_MENU_DESCRIPTION } = await import('../../src/ui/NewGameSheet');
+    expect(RATE_OPPONENT_DESCRIPTION).toBe('See whether the computer found the best move, rated like your moves');
+    expect(RATE_OPPONENT_DESCRIPTION).not.toMatch(/explain/);
+    expect(RATE_OPPONENT_MENU_DESCRIPTION).toBe('Makes your games unrated while it’s on');
+  });
+  it('the options note names everything that makes a game unrated, or says this one will be', async () => {
+    const { unratedNote } = await import('../../src/ui/NewGameSheet');
+    const off = unratedNote({ arrows: false, rateOpponent: false });
+    expect(off.warn).toBe(false);
+    for (const help of ['takebacks', 'hints', 'Retry', 'the explorer', 'best-move arrows', 'rating your opponent’s moves']) {
+      expect(off.text).toContain(help);
+    }
+    expect(unratedNote({ arrows: true, rateOpponent: false })).toEqual({
+      text: 'Best-move arrows are on, so this game won’t count for your rating.',
+      warn: true,
+    });
+    expect(unratedNote({ arrows: false, rateOpponent: true })).toEqual({
+      text: 'Your opponent’s moves are rated, so this game won’t count for your rating.',
+      warn: true,
+    });
+    expect(unratedNote({ arrows: true, rateOpponent: true }).text).toMatch(/^Best-move arrows and your opponent’s move ratings are on/);
   });
 });

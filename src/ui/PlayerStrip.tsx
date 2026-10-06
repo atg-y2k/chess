@@ -17,7 +17,10 @@ export interface PlayerStripProps {
   active: boolean;
   /** Bot thinking indicator (animated dots). */
   thinking?: boolean;
-  /** The game no longer counts for this player's rating (takebacks, hints or arrows were used). */
+  /**
+   * The game no longer counts for this player's rating (takebacks, hints, Retry, the explorer,
+   * best-move arrows or the opponent's move ratings were used).
+   */
   unrated?: boolean;
 }
 
@@ -26,7 +29,8 @@ export interface CapturedGroup {
   count: number;
 }
 
-const UNRATED_TITLE = 'Takebacks, hints or best-move arrows were used: this game won’t change your rating';
+const UNRATED_TITLE =
+  'Help was used (takebacks, hints, Retry, the explorer, best-move arrows or opponent move ratings): this game won’t change your rating';
 
 /** Display order of captured pieces: cheapest first, as on most chess sites. */
 const CAPTURE_ORDER = ['p', 'n', 'b', 'r', 'q'];

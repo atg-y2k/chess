@@ -85,7 +85,7 @@ export function LicenseSheet({ doc, onClose }: { doc: LicenseDoc | null; onClose
   return createPortal(
     <Sheet open={doc !== null} onClose={onClose} title={shown.title} class="license-sheet">
       <pre class="license-text" data-id="license-text" aria-busy={text.status === 'loading' ? 'true' : undefined}>
-        {text.status === 'ok' ? text.text : text.status === 'loading' ? 'Loading…' : `Couldn't load ${shown.title}.`}
+        {text.status === 'ok' ? text.text : text.status === 'loading' ? 'Loading…' : `Couldn’t load ${shown.title}.`}
       </pre>
     </Sheet>,
     document.body,

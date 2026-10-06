@@ -19,6 +19,17 @@ export function fenKey(fen: string): string {
   return fen.split(' ').slice(0, 4).join(' ');
 }
 
+/**
+ * Whether the position after move `index` of `moves` (played from `startFen`) occurs for the third
+ * time (counting the start position): a draw by threefold repetition.
+ */
+export function isThirdRepetition(startFen: string, moves: readonly { fenAfter: string }[], index: number): boolean {
+  const key = fenKey(moves[index].fenAfter);
+  let seen = fenKey(startFen) === key ? 1 : 0;
+  for (let i = 0; i <= index; i++) if (fenKey(moves[i].fenAfter) === key) seen++;
+  return seen >= 3;
+}
+
 export function sideToMove(fen: string): Color {
   return fen.split(' ')[1] === 'b' ? 'b' : 'w';
 }

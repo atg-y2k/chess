@@ -41,6 +41,12 @@ export interface GameSettings {
   showEvalBar: boolean;
   /** Live best-move arrows for the side to move while it is your turn. */
   showBestMoves: boolean;
+  /**
+   * Rates the opponent's moves during play like your own (badge, move-list icon, graph marker,
+   * the coach's verdict and explanation). It reveals the computer's mistakes, so a game played
+   * with it is unrated.
+   */
+  rateOpponent: boolean;
   sound: boolean;
   allowTakebacks: boolean;
 }
@@ -53,6 +59,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   coach: true,
   showEvalBar: true,
   showBestMoves: false,
+  rateOpponent: false,
   sound: true,
   allowTakebacks: true,
 };

@@ -4,7 +4,8 @@
  * steered through `window.__mockStore`. Covers the locked coach (teaser, locked Show best and Hint),
  * the paywall with the store's price, a purchase that unlocks everything, cancelled / failed /
  * pending (Ask to Buy) purchases, Restore Purchases (also offline and cancelled), a refund, the
- * locked Game Review, the always-reachable privacy policy, and Escape over stacked sheets.
+ * locked Game Review, the locked explorer, the opponent's move ratings (verdicts free, explanations
+ * locked), the always-reachable privacy policy, and Escape over stacked sheets.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
@@ -371,6 +372,60 @@ test.describe('Chess Coach Pro (paywall build)', () => {
     await expect(paywall(page)).toBeHidden({ timeout: 5_000 });
     await expect(review.locator('.review-moment').first()).toBeVisible();
     await expect(locked).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
+  test('rating the opponent’s moves: its verdict and badge are free, its explanation and Show best are Pro', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await open(page);
+    await page.evaluate((startFen) => {
+      const c = (window as unknown as Win).__chessCoach.controller;
+      const s = { ...c.store.settings.value, playerColor: 'w', botId: 'biscuit', botElo: 250, adaptive: false, coach: true, sound: false };
+      c.newGame({ ...s, rateOpponent: true }, { startFen });
+    }, QXF7_FEN);
+    await expect(page.locator('.app-player--bottom')).toContainText('Unrated');
+    await waitForMyTurn(page);
+    await tapSquare(page, 'h5');
+    await tapSquare(page, 'f7');
+    // Your blunder stays expanded after the bot's reply (3… Kxf7), which is the row below it, with its icon.
+    await expect(coach(page).locator('.coach-title')).toHaveText(/^3\. Qxf7\+ is a blunder/, { timeout: 30_000 });
+    const other = coach(page).locator('.coach-other');
+    await expect(other).toHaveAttribute('data-place', 'after');
+    await expect(other).toContainText('Biscuit');
+    await expect(other.locator('.class-icon')).toBeVisible({ timeout: 30_000 });
+    // Its row expands the bot's move: the verdict in the third person, with its icon; yours is the row above.
+    await other.tap();
+    await expect(coach(page).locator('.coach-title')).toHaveText(/^Biscuit’s 3… \S+ is /);
+    await expect(coach(page).locator('.coach-head .class-icon')).toBeVisible();
+    await expect(coach(page).locator('.coach-other')).toContainText('3. Qxf7+');
+    await expect(coach(page).locator('.coach-other .class-icon')).toBeVisible();
+    await expect(page.locator('.cg-custom-svgs [cgHash]').first()).toBeAttached();
+    const lines = coach(page).locator('.coach-line');
+    await expect(lines).toHaveCount(1);
+    await expect(lines.first()).toHaveText(TEASER);
+    const best = coach(page).locator('[data-action="showBest"]');
+    if (await best.count()) await expect(best).toHaveAttribute('data-locked', '');
+    await coach(page).getByRole('button', { name: 'Unlock to see why' }).tap();
+    await expect(paywall(page)).toBeVisible();
+    await expect(paywall(page).locator('[data-id="paywall-lead"]')).toHaveText('Find out why each move is good or bad.');
+    expect(errors).toEqual([]);
+  });
+
+  test('the explorer is part of Pro: Explore shows a lock and opens the paywall, without asking about the rating', async ({ page }) => {
+    test.setTimeout(90_000);
+    const errors = await open(page);
+    await startFrom(page, QXF7_FEN);
+    await waitForMyTurn(page);
+    const explore = page.locator('.toolbar-btn[data-id="explore"]');
+    await expect(explore.locator('.locked-icon-badge')).toBeVisible();
+    await explore.tap();
+    await expect(paywall(page)).toBeVisible();
+    await expect(paywall(page).locator('.paywall-item[data-current]')).toHaveAttribute('data-feature', 'explorer');
+    await expect(page.getByRole('dialog', { name: 'Explore this position?' })).toHaveCount(0);
+    await paywall(page).getByRole('button', { name: 'Close' }).tap();
+    await expect(paywall(page)).toBeHidden();
+    await expect(page.locator('.app[data-exploring]')).toHaveCount(0);
+    await expect(page.locator('.app-player--bottom')).not.toContainText('Unrated');
     expect(errors).toEqual([]);
   });
 });
