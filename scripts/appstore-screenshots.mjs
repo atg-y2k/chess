@@ -8,6 +8,8 @@
  *   02-coach.png     a game in progress: evaluation bar, move badge and the coach's explanation (Pro)
  *   03-hint.png      a hint: the best move as an arrow, with the reason (Pro)
  *   04-review.png    Game Review of a finished game: accuracy and move counts (both free)
+ *   05-openings.png  the Openings section: the Italian Game's main line at 3. Bc4 on its board, with
+ *                    the opening's name, the evaluation and the move's note (the note is Pro)
  *   iap-review/paywall.png  the Pro paywall, with its price: ONLY the in-app purchase's App Review
  *                    screenshot (App Store Connect > the in-app purchase > Review Information), never
  *                    a product-page screenshot (Guideline 2.3.7: no prices in screenshots)
@@ -146,8 +148,9 @@ const PRO_TAG = 'Pro · in-app purchase';
 
 /**
  * `file`: where the PNG goes in the output folder (default: the numbered product-page screenshot).
- * `proTag`: the screen shows a Pro feature, so it gets PRO_TAG.
- * @type {{ name: string; file?: string; proTag?: boolean; storage: Record<string, string>; run: (page: import('@playwright/test').Page) => Promise<void> }[]}
+ * `proTag`: the screen shows a Pro feature, so it gets PRO_TAG (true: on the coach panel; a CSS
+ * selector: on that element).
+ * @type {{ name: string; file?: string; proTag?: boolean | string; storage: Record<string, string>; run: (page: import('@playwright/test').Page) => Promise<void> }[]}
  */
 const SCREENS = [
   {
@@ -209,6 +212,24 @@ const SCREENS = [
       });
       await idle(page);
       await page.waitForTimeout(600);
+    },
+  },
+  {
+    // Openings: New game sheet > Learn openings > the Italian Game > Learn the main line, at 3. Bc4.
+    name: 'openings',
+    proTag: '.op-note-card',
+    storage: storage(),
+    async run(page) {
+      await waitForApp(page);
+      const sheet = page.getByRole('dialog', { name: 'New game' });
+      await sheet.waitFor({ state: 'visible' });
+      await sheet.locator('[data-id="learn-openings"]').tap();
+      await page.locator('.op-card[data-family="Italian Game"]').tap({ timeout: 30_000 });
+      await page.locator('[data-id="learn-main"]').tap();
+      for (let i = 0; i < 5; i++) await page.locator('[data-id="next"]').tap();
+      await page.locator('[data-id="move-note"]').waitFor({ state: 'visible' });
+      await page.locator('[data-id="eval-words"]').waitFor({ state: 'visible', timeout: 60_000 });
+      await page.waitForTimeout(800); // the bar's animation
     },
   },
   {
@@ -316,16 +337,19 @@ function deviceCss() {
 `;
 }
 
-/** Tags the coach panel with PRO_TAG (the screen shows a Pro feature). */
-async function tagPro(page) {
-  await page.evaluate((text) => {
-    const bubble = document.querySelector('.app-panel .coach-bubble');
-    if (!bubble) throw new Error('No coach panel to tag as Pro');
-    const tag = document.createElement('span');
-    tag.id = 'appstore-pro-tag';
-    tag.textContent = text;
-    bubble.append(tag);
-  }, PRO_TAG);
+/** Tags the coach panel (or the element `selector`) with PRO_TAG (the screen shows a Pro feature). */
+async function tagPro(page, selector = '.app-panel .coach-bubble') {
+  await page.evaluate(
+    ([text, sel]) => {
+      const box = document.querySelector(sel);
+      if (!box) throw new Error(`Nothing to tag as Pro (${sel})`);
+      const tag = document.createElement('span');
+      tag.id = 'appstore-pro-tag';
+      tag.textContent = text;
+      box.append(tag);
+    },
+    [PRO_TAG, selector],
+  );
 }
 
 function statusBarHtml() {
@@ -437,7 +461,7 @@ async function capture(browser, screen, number) {
   try {
     await page.goto(BASE_URL);
     await screen.run(page);
-    if (screen.proTag) await tagPro(page);
+    if (screen.proTag) await tagPro(page, typeof screen.proTag === 'string' ? screen.proTag : undefined);
     const file = outFile(screen, number);
     mkdirSync(dirname(file), { recursive: true });
     await page.screenshot({ path: file, animations: 'disabled', caret: 'hide' });

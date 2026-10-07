@@ -30,7 +30,15 @@ import {
 export type { RestoreResult };
 
 /** Features that can be sold as part of Pro. */
-export type ProFeature = 'coachExplanations' | 'hint' | 'showBest' | 'bestMoveArrows' | 'reviewDetails' | 'explorer';
+export type ProFeature =
+  | 'coachExplanations'
+  | 'hint'
+  | 'showBest'
+  | 'bestMoveArrows'
+  | 'reviewDetails'
+  | 'explorer'
+  | 'openingGuides'
+  | 'openingDrills';
 
 export type Tier = 'free' | 'pro';
 
@@ -51,6 +59,14 @@ export const FEATURE_TIERS: Readonly<Record<ProFeature, Tier>> = {
   reviewDetails: 'pro',
   /** The explorer: try moves for both sides, with the engine's eval, arrows and ratings. */
   explorer: 'pro',
+  /**
+   * The Openings section's guide text: summaries, both sides' plans, traps, key variations and the
+   * "why" of each move. Browsing, searching, the move tree, stepping through any line and playing
+   * an opening stay free (see OPENINGS_FEATURE_TIERS in src/openings/index.ts).
+   */
+  openingGuides: 'pro',
+  /** Drilling opening lines move by move, with saved progress and mastery. */
+  openingDrills: 'pro',
 };
 
 /** The purchase's name as the player sees it, e.g. "Chess Coach Pro" (follows the app's name). */
@@ -100,10 +116,29 @@ export const FEATURE_INFO: Readonly<Record<ProFeature, FeatureInfo>> = {
     detail: 'Test your ideas with the engine’s verdict',
     context: 'Try moves before you play them.',
   },
+  openingGuides: {
+    title: 'Opening lessons',
+    detail: 'Why every move is played, the plans and the traps',
+    context: 'Learn why every move is played, and drill lines until you know them.',
+  },
+  openingDrills: {
+    title: 'Opening drills',
+    detail: 'Practice lines until you know them, with your progress saved',
+    context: 'Drill lines until you know them, and learn why every move is played.',
+  },
 };
 
 /** The paywall's list order. */
-const FEATURE_ORDER: readonly ProFeature[] = ['coachExplanations', 'hint', 'showBest', 'explorer', 'bestMoveArrows', 'reviewDetails'];
+const FEATURE_ORDER: readonly ProFeature[] = [
+  'coachExplanations',
+  'hint',
+  'showBest',
+  'explorer',
+  'bestMoveArrows',
+  'reviewDetails',
+  'openingGuides',
+  'openingDrills',
+];
 
 /** The features sold as Pro, in the paywall's order. */
 export function proFeatures(tiers: Readonly<Record<ProFeature, Tier>> = FEATURE_TIERS): ProFeature[] {

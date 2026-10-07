@@ -53,6 +53,26 @@ export interface SavedGame {
    * move (the retried move itself is no longer in `moves`). Only in a game in progress.
    */
   retry?: SavedRetry;
+  /** Opening practice: the line the game follows (absent in a normal game and in older saves). */
+  opening?: SavedOpening;
+  /**
+   * The first `preplayed` moves were played before the game started (an opening line set up by
+   * opening practice): book moves, not analyzed, not counted for accuracy. Absent = 0.
+   */
+  preplayed?: number;
+}
+
+/** Opening practice (see GameController `newGame(settings, { opening })`). */
+export interface SavedOpening {
+  /** The catalog line (`OpeningLine.id`), or the id of the line saved in `moves`. */
+  lineId: string;
+  mode: 'steer' | 'skip';
+  showLineMoves: boolean;
+  /** A line from outside the catalog (an opening guide's main line): its UCI moves from the initial position. */
+  moves?: string[];
+  /** With `moves`: the name the game shows and the family. */
+  name?: string;
+  family?: string;
 }
 
 /** The "Try again" prompt after a Retry (the coach's 'retry' mode). */
@@ -197,7 +217,29 @@ export function sanitizeSavedGame(raw: unknown): SavedGame | null {
   const retry = over ? null : sanitizeRetry(raw.retry);
   if (retry) game.retry = retry;
   else delete game.retry;
+  const opening = sanitizeOpening(raw.opening);
+  if (opening) game.opening = opening;
+  else delete game.opening;
+  const preplayed = raw.preplayed;
+  if (Number.isInteger(preplayed) && (preplayed as number) > 0) game.preplayed = Math.min(preplayed as number, moves.length);
+  else delete game.preplayed;
   return game;
+}
+
+/** A saved opening-practice target, or null when it is missing or malformed. */
+function sanitizeOpening(v: unknown): SavedOpening | null {
+  if (!isObject(v)) return null;
+  const { lineId, mode, showLineMoves, moves, name, family } = v;
+  if (typeof lineId !== 'string' || !lineId || lineId.length > 200) return null;
+  if (mode !== 'steer' && mode !== 'skip') return null;
+  const out: SavedOpening = { lineId, mode, showLineMoves: showLineMoves === true };
+  const text = (t: unknown): t is string => typeof t === 'string' && t.length > 0 && t.length <= 120;
+  if (Array.isArray(moves) && moves.length > 0 && moves.length <= 60 && moves.every((m) => typeof m === 'string' && UCI_RE.test(m))) {
+    out.moves = moves as string[];
+    if (text(name)) out.name = name;
+    if (text(family)) out.family = family;
+  }
+  return out;
 }
 
 /** A saved "Try again" prompt, or null when it is missing or malformed. */

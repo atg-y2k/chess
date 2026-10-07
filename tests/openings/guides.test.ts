@@ -293,6 +293,23 @@ describe('OPENING_GUIDES: traps', () => {
     }
   });
 
+  it('mark the losing side’s mistakes, each one named with "?" in the note', () => {
+    for (const g of OPENING_GUIDES) {
+      for (const t of g.traps ?? []) {
+        const label = `${g.family} / ${t.title}`;
+        const { sans } = playUci(t.uci);
+        expect(t.mistakes.length, label).toBeGreaterThan(0);
+        for (const i of t.mistakes) {
+          expect(i, label).toBeGreaterThanOrEqual(0);
+          expect(i, label).toBeLessThan(sans.length);
+          // Played by the side that falls into the trap.
+          expect(i % 2 === 0 ? 'white' : 'black', `${label}: ply ${i}`).not.toBe(t.side);
+          expect(t.note, `${label}: ${sans[i]}`).toContain(`${sans[i]}?`);
+        }
+      }
+    }
+  });
+
   it('back up the side-line claims made in the notes', () => {
     for (const [label, line, side, outcome] of NOTE_CLAIMS) {
       const chess = playSan(line.split(' '));
@@ -317,18 +334,46 @@ describe('OPENING_GUIDES: move notes', () => {
     }
   });
 
-  it('guideMainLine: the longest annotated line, playable from the start', () => {
+  it('guideMainLine: `mainLine` when set, else the longest annotated line, playable from the start', () => {
     for (const g of OPENING_GUIDES) {
       const line = guideMainLine(g);
       expect(line.length, g.family).toBeGreaterThanOrEqual(4);
       expect(playSan(line).history(), g.family).toEqual(line);
       expect(moveNoteFor(g, line), g.family).toBeDefined();
-      const longest = Math.max(...Object.keys(g.moveNotes ?? {}).map((k) => k.split(' ').filter((t) => !/^\d+\.$/.test(t)).length));
-      expect(line.length, g.family).toBe(longest);
+      if (g.mainLine) {
+        expect(Object.hasOwn(g.moveNotes ?? {}, g.mainLine), `${g.family}: mainLine is a move-notes key`).toBe(true);
+        expect(moveNoteKey(line), g.family).toBe(g.mainLine);
+      } else {
+        const longest = Math.max(...Object.keys(g.moveNotes ?? {}).map((k) => k.split(' ').filter((t) => !/^\d+\.$/.test(t)).length));
+        expect(line.length, g.family).toBe(longest);
+      }
     }
+    // The King's Pawn Game guide annotates an early queen raid further than its main road.
+    expect(guideMainLine(guideFor("King's Pawn Game")!)).toEqual(['e4', 'e5', 'Nf3', 'Nc6']);
     // The London guide follows 1. d4 d5 2. Bf4, not the catalog's "London System" line (1. d4 Nf6 2. Nf3 g6 3. Bf4).
     expect(guideMainLine(guideFor('London System')!).slice(0, 3)).toEqual(['d4', 'd5', 'Bf4']);
     expect(guideMainLine({ ...guideFor('London System')!, moveNotes: {} })).toEqual([]);
+  });
+
+  it('guideMainLine ends in the guide’s own opening (or one of its key variations), never a side line of another', () => {
+    for (const g of OPENING_GUIDES) {
+      const line = guideMainLine(g);
+      const chess = new Chess();
+      let last: string | undefined;
+      for (const san of line) {
+        chess.move(san);
+        last = openingAt(chess.fen())?.name ?? last;
+      }
+      const family = last ? splitOpeningName(last).family : '';
+      const allowed = new Set((g.keyVariations ?? []).map((v) => splitOpeningName(v.name).family));
+      expect(guideFor(last) === g || allowed.has(family), `${g.family}: ends in "${last}"`).toBe(true);
+    }
+  });
+
+  it('has a guide of its own for every starter family', () => {
+    for (const color of ['w', 'b'] as const) {
+      for (const f of BEGINNER_FAMILIES[color]) expect(guideFor(f)?.family, f).toBe(f);
+    }
   });
 
   it('has a guide for every starter family', () => {
@@ -377,7 +422,9 @@ describe('guideFor', () => {
     expect(family('Indian Defense: London System')).toBe('London System');
     expect(family('Indian Defense: Budapest Gambit')).toBe('Indian Defense');
     expect(family('London System, with Be2')).toBe('London System');
-    expect(family('Modern Defense: Standard Defense')).toBe('Pirc Defense');
+    expect(family('Modern Defense: Standard Defense')).toBe('Modern Defense');
+    expect(family('Robatsch Defense')).toBe('Modern Defense');
+    expect(family("Bishop's Opening: Berlin Defense")).toBe("Bishop's Opening");
     expect(family('Zukertort Opening: Sicilian Invitation')).toBe('Réti Opening');
     expect(family("Queen's Indian Defense, with e3")).toBe("Queen's Indian Defense");
     expect(family('  sicilian   defense  ')).toBe('Sicilian Defense');

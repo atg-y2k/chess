@@ -2,9 +2,15 @@ import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { MoveClass } from '../analysis/types';
 import { CLASS_META, ClassIcon } from './ClassIcon';
 import { IconChevronRight } from './icons';
+import { OpeningBanner, openingBannerOf } from './OpeningBanner';
 import { IconLock } from './PaywallSheet';
 import './CoachPanel.css';
 
+/**
+ * A button of the panel. The action with id 'opening' is opening practice's banner instead: drawn
+ * at the top of the bubble (OpeningBanner), its label being the line's name, the status and the
+ * tone separated by tabs (`openingBannerOf`); `onClick` opens the line.
+ */
 export interface CoachAction {
   id: string;
   label: string;
@@ -191,6 +197,10 @@ export function CoachPanel({
   }, [text, collapsed, busy]);
 
   const tone = toneOf(cls);
+  // Opening practice: one action is the banner at the top of the bubble, not a button of the row.
+  const bannerAction = actions?.find((a) => a.id === 'opening');
+  const banner = bannerAction ? openingBannerOf(bannerAction.label) : null;
+  const buttons = actions?.filter((a) => a.id !== 'opening');
   const badge = busy ? (
     <span class="coach-spin" role="img" aria-label="Analyzing" />
   ) : cls ? (
@@ -241,11 +251,18 @@ export function CoachPanel({
   }
 
   return (
-    <section class={other ? 'coach coach--dual' : 'coach'} data-cls={cls} style={tone} aria-label="Coach">
+    <section
+      class={other || banner ? 'coach coach--dual' : 'coach'}
+      data-cls={cls}
+      data-banner={banner ? '' : undefined}
+      style={tone}
+      aria-label="Coach"
+    >
       <div class="coach-avatar" aria-hidden="true">
         {COACH_EMOJI}
       </div>
       <div class="coach-bubble">
+        {banner && <OpeningBanner {...banner} onOpen={bannerAction?.onClick} />}
         {other?.place === 'before' && <OtherRow other={other} />}
         <div class="coach-head">
           {badge}
@@ -270,9 +287,9 @@ export function CoachPanel({
             </div>
           ) : null}
         </div>
-        {actions && actions.length > 0 && (
+        {buttons && buttons.length > 0 && (
           <div class="coach-actions">
-            {actions.map((a) => (
+            {buttons.map((a) => (
               <button
                 key={a.id}
                 type="button"

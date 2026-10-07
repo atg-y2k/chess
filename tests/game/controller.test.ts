@@ -1634,7 +1634,7 @@ describe('Show best', () => {
     controller.runAction('showBest');
     const lines = store.coach.value.lines;
     expect(lines).toContain(`You played Qxf7+. ${ply.explanation!.headline}`);
-    const variations = lines.filter((l) => /^(Main line|Key line|The finish|Best line):/.test(l));
+    const variations = lines.filter((l) => /^(Engine line|Main line|Key line|The finish|Best line):/.test(l));
     expect(variations.length).toBeLessThanOrEqual(1);
     // Explained with all the engine lines of that position, like the hint.
     const call = vi.mocked(explainBestMove).mock.calls.findLast((c) => c[0] === ply.fenBefore);

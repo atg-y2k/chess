@@ -641,3 +641,132 @@
     animation-duration: 2s;
   }
 }
+
+/* ---------------------------------------------------------------- openings */
+
+/*
+ * The Openings section (src/ui/openings, lazy-loaded) slides up over the game and its sheets,
+ * full screen inside the safe areas. Over the sheets (later in the DOM, same layer), under the
+ * paywall. No transform once open: the Play sheet inside it is position: fixed.
+ */
+.openings-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  padding: var(--safe-top) 0 0;
+  background: var(--bg);
+  animation: openings-in 0.36s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.openings-shell:focus {
+  outline: none;
+}
+.openings-shell > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.openings-shell[data-state='closing'] {
+  pointer-events: none;
+  animation: openings-out 0.28s cubic-bezier(0.4, 0, 0.9, 0.6) forwards;
+}
+@keyframes openings-in {
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+}
+@keyframes openings-out {
+  to {
+    transform: translate3d(0, 100%, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .openings-shell,
+  .openings-shell[data-state='closing'] {
+    animation-duration: 0.01s;
+  }
+}
+/* As for the app: keep the status bar's band dark in the light theme of the installed app. */
+@media (display-mode: standalone) {
+  :root[data-theme='light'] .openings-shell {
+    box-shadow: inset 0 var(--safe-top) 0 0 #1d1c1a;
+  }
+}
+.openings-shell-loading {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.openings-shell-done {
+  appearance: none;
+  position: absolute;
+  top: 2px;
+  right: max(6px, var(--safe-right));
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font-size: 17px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+/* The game's opening name at the end of the move list: opens it in the Openings section. */
+.app-moves[data-opening] {
+  display: flex;
+  align-items: center;
+}
+.app-moves[data-opening] > .mlist {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.app-opening-chip {
+  appearance: none;
+  position: relative;
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 42%;
+  min-height: 32px;
+  margin: 0 10px 0 6px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--cls-book) 55%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--cls-book) 16%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.app-opening-chip::after {
+  /* 44px tap target. */
+  content: '';
+  position: absolute;
+  inset: -6px -2px;
+}
+.app-opening-chip svg {
+  flex: none;
+  color: var(--cls-book);
+}
+.app-opening-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app-opening-chip:active {
+  filter: brightness(0.92);
+}
+.app-opening-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

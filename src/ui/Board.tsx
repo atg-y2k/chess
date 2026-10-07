@@ -58,6 +58,7 @@ const ARROW_HEX: Record<ArrowBrush, string> = {
   alt: '#3f86c4',
   threat: '#d9534f',
   played: '#f0b43c',
+  line: '#c8a27a',
 };
 
 /** Stroke width in 1/64ths of a square, and opacity, per arrow kind. */
@@ -66,10 +67,12 @@ const ARROW_STYLE: Record<ArrowBrush, { lineWidth: number; opacity: number }> = 
   alt: { lineWidth: 10, opacity: 0.62 },
   threat: { lineWidth: 11, opacity: 0.8 },
   played: { lineWidth: 11, opacity: 0.8 },
+  // Opening practice's guide: light, under any engine arrow.
+  line: { lineWidth: 10, opacity: 0.6 },
 };
 
 /** Draw order: the most important arrow last, so it ends up on top. */
-const ARROW_ORDER: Record<ArrowBrush, number> = { alt: 0, played: 1, threat: 2, best: 3 };
+const ARROW_ORDER: Record<ArrowBrush, number> = { line: 0, alt: 1, played: 2, threat: 3, best: 4 };
 
 /** How long a user move may stay unanswered (fen prop unchanged) before the board snaps back. */
 const RESYNC_DELAY_MS = 40;
@@ -142,6 +145,7 @@ function makeBrushes(el: Element): DrawBrushes {
     alt: brush('alt'),
     threat: brush('threat'),
     played: brush('played'),
+    line: brush('line'),
   };
 }
 

@@ -132,6 +132,20 @@ describe('mastery', () => {
     expect(recordDrill(NAJDORF, full, { storage, now: day(4) })).toMatchObject({ attempts: 4, cleanRuns: 1, bestScore: 100, mastery: 2 });
   });
 
+  it('counts a drill from the other side than the opening’s as practice only', () => {
+    const storage = memoryStorage();
+    const ITALIAN = 'c50-italian-game'; // a White opening: Black finds only 1... e5 and 2... Nc6
+    const line = getLine(ITALIAN)!;
+    const black = drillResult(finish(createDrill(line, 'b')))!;
+    expect(black).toMatchObject({ playerColor: 'b', playerMoves: 2, clean: true });
+    for (const d of [2, 4, 6]) recordDrill(ITALIAN, black, { storage, now: day(d), side: 'w' });
+    expect(getProgress(ITALIAN, { storage })).toMatchObject({ attempts: 3, cleanRuns: 0, cleanDays: [], mastery: 1 });
+    // The opening's own side counts; without `side` every full drill does (as before).
+    const white = drillResult(finish(createDrill(line, 'w')))!;
+    expect(recordDrill(ITALIAN, white, { storage, now: day(8), side: 'w' })).toMatchObject({ cleanRuns: 1, mastery: 2 });
+    expect(recordDrill(NAJDORF, black, { storage, now: day(8) })).toMatchObject({ cleanRuns: 1, mastery: 2 });
+  });
+
   it('does not record a drill with nothing to find', () => {
     const storage = memoryStorage();
     const kpg = 'b00-kings-pawn-game'; // 1. e4: nothing for Black to find
@@ -283,5 +297,21 @@ describe('family summaries', () => {
       ['Ruy Lopez', 2],
       ['Sicilian Defense', 2],
     ]);
+  });
+});
+
+describe('lines outside the catalog', () => {
+  it('counts a line the catalog does not know (an opening guide’s own line) under the family it is given', () => {
+    const storage = memoryStorage();
+    recordDrill('guide:Italian Game', { clean: true, playerMoves: 7, score: 100 }, { storage, now: day(1), family: 'Italian Game' });
+    expect(getProgress('guide:Italian Game', { storage })).toMatchObject({ attempts: 1, mastery: 2 });
+    expect(familyProgress('Italian Game', { storage })).toMatchObject({ practiced: 1, familiar: 1 });
+    // The family is kept with the record: a later run without it still counts there.
+    recordDrill('guide:Italian Game', { clean: false }, { storage, now: day(2) });
+    expect(familyProgress('Italian Game', { storage })).toMatchObject({ practiced: 1, attempts: 2 });
+    // A catalog line's own family wins over the one given.
+    recordDrill(RUY, { clean: true }, { storage, now: day(3), family: 'Italian Game' });
+    expect(familyProgress('Ruy Lopez', { storage }).practiced).toBe(1);
+    expect(progressSummary({ storage }).map((f) => f.family).sort()).toEqual(['Italian Game', 'Ruy Lopez']);
   });
 });

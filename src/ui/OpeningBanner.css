@@ -1,0 +1,121 @@
+/* OpeningBanner: opening practice's row at the top of the coach bubble ("📖 Italian Game · Move 3 of 5 ›"). */
+
+.obanner {
+  --obanner-tone: var(--cls-book);
+  appearance: none;
+  flex: none;
+  position: relative;
+  z-index: 2;
+  display: block;
+  container: obanner / inline-size;
+  min-width: 0;
+  min-height: 30px;
+  margin: 0 0 6px;
+  padding: 0 6px 0 8px;
+  border: 1px solid color-mix(in srgb, var(--obanner-tone) 40%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--obanner-tone) 12%, var(--surface));
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.obanner[data-tone='done'] {
+  --obanner-tone: var(--accent);
+}
+.obanner[data-tone='off'] {
+  --obanner-tone: var(--text-faint);
+}
+.obanner:active {
+  background: color-mix(in srgb, var(--obanner-tone) 22%, var(--surface));
+}
+.obanner:disabled {
+  cursor: default;
+}
+/* A 44px tap target without a taller row (it reaches up, away from the coach's title below). */
+.obanner::after {
+  content: '';
+  position: absolute;
+  inset: -12px -4px -2px;
+}
+
+.obanner-in {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+
+.obanner-icon {
+  flex: none;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/*
+ * The name gives way first; the status stays whole. Within the name the variation goes first, all
+ * of it if need be ("Sicilian Defense · Najd…", "Sicilian Defense"), then the opening's name.
+ */
+.obanner-name {
+  flex: 0 1 auto;
+  display: flex;
+  column-gap: 0.22em;
+  min-width: 2em;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.obanner-family,
+.obanner-variation {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* It never shrinks (even a fraction of a pixel would cut it), only past the whole name's width. */
+.obanner-family {
+  flex: none;
+  max-width: 100%;
+}
+.obanner-variation {
+  flex: 0 1 auto;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.obanner-status {
+  flex: none;
+  margin-left: auto;
+  padding-left: 4px;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--obanner-tone) 80%, var(--text));
+  font-variant-numeric: tabular-nums;
+}
+.obanner[data-tone='off'] .obanner-status {
+  color: var(--text-dim);
+}
+
+.obanner-short {
+  display: none;
+}
+/* A narrow column (landscape): no icon, and the short status ("2 of 3"), so the name keeps its room. */
+@container obanner (max-width: 250px) {
+  .obanner-icon,
+  .obanner-long {
+    display: none;
+  }
+  .obanner-short {
+    display: inline;
+  }
+}
+
+.obanner-chevron {
+  flex: none;
+  color: var(--text-faint);
+}
+
+:root[data-theme='light'] .obanner-status {
+  color: color-mix(in srgb, var(--obanner-tone) 70%, var(--text));
+}

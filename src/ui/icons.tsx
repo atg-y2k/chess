@@ -172,3 +172,11 @@ export const IconBotRated = (p: IconProps) => (
     <path d="M20 4v7M20 14.5v.5" />
   </Svg>
 );
+
+/** Openings: an open book. */
+export const IconBook = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 6.5C10.2 5 7.6 4.5 3.5 4.8v13.4c4.1-.3 6.7.2 8.5 1.8 1.8-1.6 4.4-2.1 8.5-1.8V4.8c-4.1-.3-6.7.2-8.5 1.7Z" />
+    <path d="M12 6.5V20" />
+  </Svg>
+);

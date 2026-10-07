@@ -34,6 +34,11 @@ export interface OpeningGuideTrap {
   note: string;
   /** Who benefits. */
   side: 'white' | 'black';
+  /**
+   * The losing side's mistakes in `uci` (0-based plies, the ones the note marks "?" or "??"), so a
+   * screen can flag them: the opening book only knows some of them.
+   */
+  mistakes: number[];
 }
 
 export interface OpeningGuide {
@@ -53,18 +58,17 @@ export interface OpeningGuide {
   traps?: OpeningGuideTrap[];
   /** Short notes on the main line's moves, keyed by numbered SAN line (see `moveNoteKey`). */
   moveNotes?: Record<string, string>;
+  /**
+   * The `moveNotes` key of the main line, when it is not the longest annotated line (e.g. the
+   * King's Pawn Game guide annotates an early queen raid further than its main road 2.Nf3 Nc6).
+   */
+  mainLine?: string;
 }
 
 export const OPENING_GUIDES: OpeningGuide[] = [
   {
     family: "King's Pawn Game",
-    aka: [
-      "King's Knight Opening",
-      "King's Pawn Opening",
-      'Open Game',
-      "Bishop's Opening",
-      'Center Game',
-    ],
+    aka: ["King's Knight Opening", "King's Pawn Opening", 'Open Game', 'Center Game'],
     side: 'white',
     level: 'beginner',
     summary:
@@ -116,6 +120,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         uci: ['e2e4', 'e7e5', 'd1h5', 'b8c6', 'f1c4', 'g8f6', 'h5f7'],
         note: 'Queen and bishop both hit f7. 3...Nf6?? attacks the queen but allows Qxf7 mate. Block with 3...g6 (or defend f7 with 3...Qe7); after 3...g6 4.Qf3 Nf6 Black is comfortable.',
         side: 'white',
+        mistakes: [5],
       },
     ],
     moveNotes: {
@@ -129,6 +134,66 @@ export const OPENING_GUIDES: OpeningGuide[] = [
       '1. e4 e5 2. Qh5 Nc6 3. Bc4 g6': "Blocks the queen's path to f7 and kicks it.",
       '1. e4 e5 2. Qh5 Nc6 3. Bc4 g6 4. Qf3': 'Renews the threat on f7.',
       '1. e4 e5 2. Qh5 Nc6 3. Bc4 g6 4. Qf3 Nf6': 'Shields f7 and develops. Black is already comfortable.',
+    },
+    mainLine: '1. e4 e5 2. Nf3 Nc6',
+  },
+  {
+    family: "Bishop's Opening",
+    side: 'white',
+    level: 'beginner',
+    summary:
+      "After 1.e4 e5, 2.Bc4 develops the bishop at once and aims it at f7, Black's weakest point. White keeps the g1 knight and the f-pawn flexible, so the game can turn into an Italian Game, a Vienna Game or a quiet setup with d3. It is simple to play and hard to go badly wrong with.",
+    ideasWhite: [
+      'Develop the bishop first, then d3, Nf3 (or Nc3) and castle.',
+      'Keep an eye on f7, and on a later f2-f4 break.',
+      'If Black strikes with ...d5, retreat the bishop to b3, where it still aims at f7.',
+    ],
+    ideasBlack: [
+      '2...Nf6 attacks e4 at once and is the main answer.',
+      '...c6 and ...d5 take the center while the bishop is on c4.',
+      'Develop and castle quickly, so f7 never becomes a target.',
+    ],
+    typicalPlans: [
+      'White: Bc4, d3, Nf3, O-O, then c3 and a slow build-up, as in the Italian Game.',
+      'Black: ...Nf6, ...c6 and ...d5, or a solid ...Bc5 and ...d6.',
+    ],
+    keyVariations: [
+      {
+        name: "Bishop's Opening: Berlin Defense",
+        // 1. e4 e5 2. Bc4 Nf6
+        uci: ['e2e4', 'e7e5', 'f1c4', 'g8f6'],
+        note: 'The main answer: the knight develops and attacks e4.',
+      },
+      {
+        name: "Bishop's Opening: Paulsen Defense",
+        // 1. e4 e5 2. Bc4 Nf6 3. d3 c6
+        uci: ['e2e4', 'e7e5', 'f1c4', 'g8f6', 'd2d3', 'c7c6'],
+        note: 'Black prepares ...d5 to take the center.',
+      },
+      {
+        name: "Bishop's Opening: Boi Variation",
+        // 1. e4 e5 2. Bc4 Bc5
+        uci: ['e2e4', 'e7e5', 'f1c4', 'f8c5'],
+        note: 'Black copies the bishop move. Simple development is fine for both sides.',
+      },
+      {
+        name: "Bishop's Opening: Urusov Gambit",
+        // 1. e4 e5 2. Bc4 Nf6 3. d4 exd4 4. Nf3
+        uci: ['e2e4', 'e7e5', 'f1c4', 'g8f6', 'd2d4', 'e5d4', 'g1f3'],
+        note: 'White gives a pawn for quick development and attacking chances.',
+      },
+    ],
+    moveNotes: {
+      '1. e4': 'Grabs the center and opens lines for the queen and the f1 bishop.',
+      '1. e4 e5': 'Black claims an equal share of the center.',
+      '1. e4 e5 2. Bc4': "Develops the bishop at once and aims it at f7, the square only Black's king defends.",
+      '1. e4 e5 2. Bc4 Nf6': 'The main answer: develops and attacks the e4 pawn.',
+      '1. e4 e5 2. Bc4 Nf6 3. d3': 'Defends e4 calmly and opens the way for the c1 bishop.',
+      '1. e4 e5 2. Bc4 Nf6 3. d3 c6': 'Prepares ...d5, to take the center while the bishop is on c4.',
+      '1. e4 e5 2. Bc4 Nf6 3. d3 c6 4. Nf3': 'Develops with a threat: the knight attacks e5.',
+      '1. e4 e5 2. Bc4 Nf6 3. d3 c6 4. Nf3 d5': 'Strikes in the center and attacks the bishop.',
+      '1. e4 e5 2. Bc4 Nf6 3. d3 c6 4. Nf3 d5 5. Bb3':
+        'The bishop steps back but still aims at f7. Black usually defends e5 with ...Bd6, and both sides castle soon.',
     },
   },
   {
@@ -195,6 +260,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: "After 5.exd5, retaking with 5...Nxd5? lets White sacrifice on f7 and drag the king to e6. White's attack is worth more than the piece. Play 5...Na5 instead.",
         side: 'white',
+        mistakes: [9],
       },
       {
         title: 'Blackburne Shilling Trap',
@@ -205,6 +271,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: '3...Nd4 is a cheap trap: 4.Nxe5? Qg5! hits e5 and g2, and 5.Nxf7?? loses to a quick mate with ...Nf3. Just play 4.Nxd4 exd4 5.O-O and White is better.',
         side: 'black',
+        mistakes: [6, 8],
       },
     ],
     moveNotes: {
@@ -299,6 +366,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'After ...a6, ...b5 and ...d6, retaking on d4 with the queen (8.Qxd4??) lets ...c5 and ...c4 trap the bishop on b3. White gets only two pawns for it. 8.c3 is a normal gambit instead.',
         side: 'black',
+        mistakes: [14],
       },
     ],
     moveNotes: {
@@ -381,6 +449,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'In the Göring Gambit, the pin ...Bg4 plus 7...Ne5?? fails to 8.Nxe5! If 8...Bxd1??, Bxf7+ and Nd5 mate. Even 8...dxe5 9.Qxg4 leaves White a piece for a pawn ahead.',
         side: 'white',
+        mistakes: [13, 15],
       },
     ],
     moveNotes: {
@@ -457,6 +526,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         uci: ['e2e4', 'e7e5', 'b1c3', 'g8f6', 'f1c4', 'f6e4', 'd1h5', 'e4f6', 'h5f7'],
         note: 'After 3...Nxe4 4.Qh5 the knight must go back to d6 to cover f7. 4...Nf6?? attacks the queen but allows Qxf7 mate.',
         side: 'white',
+        mistakes: [7],
       },
     ],
     moveNotes: {
@@ -529,6 +599,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         uci: ['e2e4', 'e7e5', 'f2f4', 'f8c5', 'f4e5', 'd8h4', 'g2g3', 'h4e4', 'd1e2', 'e4h1'],
         note: 'Against 2...Bc5, grabbing 3.fxe5?? loses: 3...Qh4+ 4.g3 Qxe4+ forks king and rook (4.Ke2 Qxe4 is mate). Play 3.Nf3 instead.',
         side: 'black',
+        mistakes: [4],
       },
     ],
     moveNotes: {
@@ -661,6 +732,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'Taking back on e4 at once is the classic mistake: 3...Nxe4? 4.Qe2! and 4...Nf6?? 5.Nc6+ wins the queen with a discovered check. Play 3...d6 first.',
         side: 'white',
+        mistakes: [5, 7],
       },
       {
         title: 'Stafford Gambit mate',
@@ -671,6 +743,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'What Stafford players hope for: 6.Bg5?? Nxe4! and taking the queen allows ...Bxf2+ and ...Bg4 mate. As White, play 6.Be2 and stay a pawn up.',
         side: 'black',
+        mistakes: [10],
       },
     ],
     moveNotes: {
@@ -744,6 +817,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'After 4...g6?, 5.Nxe5! offers the queen. 5...Bxd1?? allows mate with three minor pieces, and 5...dxe5 6.Qxg4 still leaves White a pawn up.',
         side: 'white',
+        mistakes: [7, 9],
       },
     ],
     moveNotes: {
@@ -824,6 +898,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'After 8.e5, the natural 8...dxe5?? loses the queen to Bxf7+ and Qxd8. Move the knight instead, for example 8...Ng4.',
         side: 'white',
+        mistakes: [15],
       },
       {
         title: 'Siberian Trap',
@@ -834,6 +909,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'In the Smith-Morra, the routine 9.h3?? fails to 9...Nd4!: the queen is attacked and 10.Nxd4 allows ...Qh2 mate, so White loses the queen. 9.Rd1 is correct.',
         side: 'black',
+        mistakes: [16],
       },
     ],
     moveNotes: {
@@ -916,6 +992,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: "With White's bishop on d3, grabbing 7...Nxd4?? loses: 8.Nxd4 Qxd4?? 9.Bb5+ uncovers the d1 queen. Play 7...Bd7 first to cover b5.",
         side: 'white',
+        mistakes: [13, 15],
       },
     ],
     moveNotes: {
@@ -992,6 +1069,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'In the Karpov line, 5.Qe2 sets a trap: 5...Ngf6?? 6.Nd6 is smothered mate. The queen on e2 pins the e7 pawn, and the d7 knight blocks the king. Play 5...Ndf6 instead.',
         side: 'white',
+        mistakes: [9],
       },
     ],
     moveNotes: {
@@ -1079,7 +1157,6 @@ export const OPENING_GUIDES: OpeningGuide[] = [
   },
   {
     family: 'Pirc Defense',
-    aka: ['Modern Defense', 'Robatsch Defense'],
     side: 'black',
     level: 'intermediate',
     summary:
@@ -1140,6 +1217,64 @@ export const OPENING_GUIDES: OpeningGuide[] = [
       '1. e4 d6 2. d4 Nf6 3. Nc3 g6 4. Nf3 Bg7 5. Be2': 'Prepares to castle.',
       '1. e4 d6 2. d4 Nf6 3. Nc3 g6 4. Nf3 Bg7 5. Be2 O-O': "Black's king is safe; now ...c6, ...c5, ...e5 or ...Bg4 can follow.",
       '1. e4 d6 2. d4 Nf6 3. Nc3 g6 4. Nf3 Bg7 5. Be2 O-O 6. O-O Bg4': 'Pressures the f3 knight, a defender of d4, before ...Nc6 or ...e5.',
+    },
+  },
+  {
+    family: 'Modern Defense',
+    aka: ['Robatsch Defense'],
+    side: 'black',
+    level: 'intermediate',
+    summary:
+      'Black answers 1.e4 with 1...g6, lets White build a big pawn center, and then attacks it with the g7 bishop and pawn breaks such as ...c5 or ...e5. Black keeps ...Nf6 in reserve to stay flexible; played early, it turns the game into a Pirc Defense.',
+    ideasWhite: [
+      'Take the whole center with e4 and d4, and develop Nc3 and Nf3.',
+      'Be3, Qd2 and Bh6 can trade off the strong g7 bishop.',
+      'Push d5 or e5 when Black is slow to challenge the center.',
+    ],
+    ideasBlack: [
+      'Fianchetto at once: ...g6 and ...Bg7 aim at d4.',
+      'Strike at the center with ...c5, or with ...e5 after ...d6.',
+      '...c6 and ...b5 can gain space on the queenside.',
+    ],
+    typicalPlans: [
+      'Black: ...g6, ...Bg7, ...d6, then ...c6 and ...b5, or ...Nf6 and castling.',
+      'White: Nc3, Nf3 and Be2 behind a solid center, or Be3 and Qd2 for an attack.',
+    ],
+    keyVariations: [
+      {
+        name: 'Modern Defense: Standard Defense',
+        // 1. e4 g6 2. d4 Bg7 3. Nc3 d6
+        uci: ['e2e4', 'g7g6', 'd2d4', 'f8g7', 'b1c3', 'd7d6'],
+        note: 'The basic setup: ...d6 controls e5 and keeps ...Nf6 for later.',
+      },
+      {
+        name: 'Modern Defense: Modern Pterodactyl',
+        // 1. e4 g6 2. d4 Bg7 3. Nc3 c5
+        uci: ['e2e4', 'g7g6', 'd2d4', 'f8g7', 'b1c3', 'c7c5'],
+        note: 'Black hits d4 at once with ...c5, and the game gets sharp quickly.',
+      },
+      {
+        name: 'Modern Defense: Three Pawns Attack',
+        // 1. e4 g6 2. d4 Bg7 3. f4
+        uci: ['e2e4', 'g7g6', 'd2d4', 'f8g7', 'f2f4'],
+        note: 'White grabs even more space with f4; Black must hit back at the center soon.',
+      },
+      {
+        name: 'Pirc Defense',
+        // 1. e4 d6 2. d4 Nf6 3. Nc3 g6
+        uci: ['e2e4', 'd7d6', 'd2d4', 'g8f6', 'b1c3', 'g7g6'],
+        note: 'With an early ...Nf6 the game becomes a Pirc.',
+      },
+    ],
+    moveNotes: {
+      '1. e4 g6': 'Prepares ...Bg7. Black lets White take the center and plans to attack it later.',
+      '1. e4 g6 2. d4': 'White builds the ideal two-pawn center.',
+      '1. e4 g6 2. d4 Bg7': 'The bishop already aims at d4 along the long diagonal.',
+      '1. e4 g6 2. d4 Bg7 3. Nc3': 'Develops and defends e4.',
+      '1. e4 g6 2. d4 Bg7 3. Nc3 d6': 'Controls e5. Black keeps ...Nf6 in reserve: playing it now would make the game a Pirc.',
+      '1. e4 g6 2. d4 Bg7 3. Nc3 d6 4. Nf3': "Simple development, the Two Knights setup: White's center is solid.",
+      '1. e4 g6 2. d4 Bg7 3. Nc3 d6 4. Nf3 c6':
+        'Covers d5 and b5 and prepares ...b5 or ...Qb6. Then ...Nf6 (or ...Nd7) and castling follow.',
     },
   },
   {
@@ -1339,6 +1474,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'In the Albin, after 4.e3?! Bb4+ 5.Bd2 dxe3, grabbing 6.Bxb4?? loses: ...exf2+ and ...fxg1=N+! (promoting to a knight with check), then ...Bg4+ wins the queen. 4.Nf3 avoids all this.',
         side: 'black',
+        mistakes: [10],
       },
     ],
     moveNotes: {
@@ -1411,6 +1547,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: '3...b5?! tries to keep the pawn, but after 4.a4 the natural 4...c6? fails to 5.axb5 cxb5 6.Qf3!, hitting the a8 rook along the long diagonal. Let the pawn go and develop.',
         side: 'white',
+        mistakes: [7],
       },
     ],
     moveNotes: {
@@ -1490,6 +1627,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'After 4...Nbd7 5.cxd5 exd5 the f6 knight is pinned, so 6.Nxd5?? seems to win a pawn. But 6...Nxd5! 7.Bxd8 Bb4+ wins the queen back, and Black ends up a piece for a pawn ahead.',
         side: 'black',
+        mistakes: [10],
       },
     ],
     moveNotes: {
@@ -1837,6 +1975,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: "After 7...Ngxe5, 8.axb4?? allows ...Nd3 mate: the e7 queen pins the e2 pawn and White's own pieces box in the king. Play 8.Nxe5 Nxe5 9.e3, and don't take on b4 while e2 is pinned.",
         side: 'black',
+        mistakes: [14],
       },
     ],
     moveNotes: {
@@ -1846,6 +1985,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
       '1. d4 Nf6 2. c4 e6 3. Nc3': 'Prepares e4.',
       '1. d4 Nf6 2. c4 e6 3. Nc3 Bb4': 'The Nimzo-Indian pin stops e4.',
     },
+    mainLine: '1. d4 Nf6 2. c4 e6',
   },
   {
     family: "King's Indian Defense",
@@ -2281,6 +2421,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         uci: ['d2d4', 'f7f5', 'c1g5', 'h7h6', 'g5h4', 'g7g5', 'e2e3', 'g5h4', 'd1h5'],
         note: 'After ...f5, ...h6 and ...g5, the e8-h5 diagonal is wide open. 4...gxh4?? allows Qh5 mate. Play 4...Bg7 or 4...Nf6 instead.',
         side: 'white',
+        mistakes: [7],
       },
     ],
     moveNotes: {
@@ -2469,6 +2610,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'After 3...Bxd6, the natural 4.Nc3?? loses: ...Qh4+ and ...Qxg3+ lead to mate. 4.Nf3, covering h4, is the right move.',
         side: 'black',
+        mistakes: [6],
       },
     ],
     moveNotes: {
@@ -2575,6 +2717,7 @@ export const OPENING_GUIDES: OpeningGuide[] = [
         ],
         note: 'After 5...Qxb2, the calm 6.Nc3! keeps White clearly better. The natural 6.Bc3?? walks into ...Bb4 and, after 7.Qd2 Bxc3 8.Qxc3, ...Qc1 mate.',
         side: 'black',
+        mistakes: [10],
       },
     ],
     moveNotes: {
@@ -2659,15 +2802,17 @@ export function moveNoteFor(guide: OpeningGuide, sans: readonly string[]): strin
 
 /**
  * The SAN moves (from the initial position) of the guide's main line, the line its `moveNotes`
- * explain: its longest annotated line (the first one on a tie). Learn and drill modes should step
+ * explain: `mainLine` when set, else its longest annotated line (the first one on a tie). Learn and drill modes should step
  * through this line rather than the catalog's main line of the family, which can be another move
  * order or setup (the London System guide follows 1.d4 d5 2.Bf4, the catalog's "London System"
  * line is 1.d4 Nf6 2.Nf3 g6 3.Bf4). [] for a guide without notes.
  */
 export function guideMainLine(guide: OpeningGuide): string[] {
+  const sansOf = (key: string): string[] => key.split(' ').filter((t) => !/^\d+\.$/.test(t));
+  if (guide.mainLine && guide.moveNotes && Object.hasOwn(guide.moveNotes, guide.mainLine)) return sansOf(guide.mainLine);
   let best: string[] = [];
   for (const key of Object.keys(guide.moveNotes ?? {})) {
-    const sans = key.split(' ').filter((t) => !/^\d+\.$/.test(t));
+    const sans = sansOf(key);
     if (sans.length > best.length) best = sans;
   }
   return best;

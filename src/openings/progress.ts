@@ -5,13 +5,14 @@
  * Mastery: 0 New (never drilled), 1 Learning (drilled, no clean run yet), 2 Familiar (a clean run),
  * 3 Mastered (clean runs on MASTERED_DAYS different local calendar days, each counted day at least
  * MIN_CLEAN_GAP_HOURS after the previous one, so it takes 40 hours at the least). Only full drills
- * count towards it (see recordDrill). It never goes down; `isDue` says when a line is worth
+ * from the opening's own side count towards it (see recordDrill). It never goes down; `isDue` says when a line is worth
  * practicing again.
  *
  * No DOM access: storage is `localStorage` when present, or an injected stand-in. No call throws:
  * unavailable storage and quota errors give empty progress and skip saving; saved data that cannot
  * be read is never overwritten silently (see recordDrill). A Pro feature (see ./index).
  */
+import type { Color } from '../game/types';
 import { getFamily, getLine, linesOfFamily } from './catalog';
 import type { DrillResult } from './drill';
 
@@ -84,7 +85,7 @@ export interface ProgressOptions {
  * there was nothing to find (not recorded); `partial` means the drill skipped some of the player's
  * moves (practice only). Both are optional for hand-made outcomes (default: a full drill).
  */
-export type DrillOutcome = Pick<DrillResult, 'clean'> & Partial<Pick<DrillResult, 'score' | 'playerMoves' | 'partial'>>;
+export type DrillOutcome = Pick<DrillResult, 'clean'> & Partial<Pick<DrillResult, 'score' | 'playerMoves' | 'partial' | 'playerColor'>>;
 
 interface StoredLine {
   attempts: number;
@@ -237,15 +238,24 @@ export function allProgress(opts?: ProgressOptions): Record<string, LineProgress
  * clean run, clean day or best score. A drill with nothing to find (`playerMoves` 0) is not
  * recorded. Saved progress that cannot be read is not overwritten: from a newer app version or
  * unreadable storage the run is not saved; corrupt data is copied to PROGRESS_BACKUP_KEY first.
+ * `opts.family` names the family of a line the catalog does not know (e.g. an opening guide's own
+ * main line), so family summaries count it; a catalog line's own family always wins. `opts.side` is
+ * the side that plays the line's opening: a drill from the other side (`result.playerColor`, e.g.
+ * two easy Black moves of a White opening) counts as practice only, like a partial one.
  */
-export function recordDrill(lineId: string, result: DrillOutcome, opts?: ProgressOptions): LineProgress {
+export function recordDrill(
+  lineId: string,
+  result: DrillOutcome,
+  opts?: ProgressOptions & { family?: string; side?: Color },
+): LineProgress {
   const storage = storageOf(opts);
   const now = opts?.now ?? new Date();
   const read = readAll(storage);
   const prev = read.lines.get(lineId);
   if (result.playerMoves === 0 || !validId(lineId)) return toProgress(lineId, prev);
   const base = prev ?? { attempts: 0, cleanRuns: 0, lastPracticed: null, lastClean: false, bestScore: 0, cleanDays: [] };
-  const full = result.partial !== true;
+  const offSide = !!opts?.side && !!result.playerColor && result.playerColor !== opts.side;
+  const full = result.partial !== true && !offSide;
   const clean = result.clean === true;
   const counts = full && clean;
   const raw = typeof result.score === 'number' && Number.isFinite(result.score) ? result.score : clean ? 100 : 0;
@@ -264,7 +274,7 @@ export function recordDrill(lineId: string, result: DrillOutcome, opts?: Progres
   };
   const cleanDayAt = newDay ? now.toISOString() : base.cleanDayAt;
   if (cleanDayAt) next.cleanDayAt = cleanDayAt;
-  const family = getLine(lineId)?.family ?? base.family;
+  const family = getLine(lineId)?.family ?? (opts?.family || undefined) ?? base.family;
   if (family) next.family = family;
   read.lines.set(lineId, next);
   writeAll(storage, read, read.lines);

@@ -8,6 +8,8 @@
  * repeated positions, so the bot does not walk into a threefold repetition while winning; when it
  * leads to the position, the engine searches get it too (`SearchOptions.history`), so Stockfish
  * itself scores a move that repeats a position for the third time as a draw.
+ * `lineMove` plays a move the caller chose (an opening line's next move, in opening practice) the
+ * way a book move is played.
  * A human-like think delay (total, including search time) is added unless `thinkDelay: false`.
  * Everything is abortable through the AbortSignal.
  */
@@ -161,6 +163,29 @@ export class BotPlayer {
       rng,
     );
     return this.finish(choice.uci, 'engine', started, target, signal);
+  }
+
+  /**
+   * Plays a move chosen by the caller (the next move of an opening line the game follows, see
+   * GameController `newGame`'s `opening`) as a book move: with a book move's think time, and
+   * abortable like `move`. When `uci` is not legal in `fen`, the bot chooses its own move instead.
+   * Resolves null if aborted.
+   */
+  async lineMove(
+    fen: string,
+    elo: number,
+    uci: string,
+    history: string[],
+    signal?: AbortSignal,
+    startFen: string = START_FEN,
+  ): Promise<BotMove | null> {
+    if (signal?.aborted) return null;
+    const started = now();
+    const legal = legalMovesOf(fen);
+    if (!legal.some((m) => uciOf(m) === uci)) return this.move(fen, elo, history, signal, startFen);
+    const source = legal.length === 1 ? 'forced' : 'book';
+    const target = thinkTimeMs({ elo, ply: history.length, source, legalMoves: legal.length }, this.rng);
+    return this.finish(uci, source, started, target, signal);
   }
 
   private resetGame(elo: number): BookProfile {

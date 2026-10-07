@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
 import type { Color, GameSettings } from '../game/types';
-import { IconBotRated, IconChart, IconCoach, IconEye, IconSound, IconUndo } from './icons';
+import { IconBook, IconBotRated, IconChart, IconChevronRight, IconCoach, IconEye, IconSound, IconUndo } from './icons';
 import { LevelPicker, type StartingLevel } from './LevelPicker';
 import { IconLock } from './PaywallSheet';
 import { Sheet } from './Sheet';
@@ -41,6 +41,8 @@ export interface NewGameSheetProps {
    */
   arrowsLocked?: string | null;
   onUnlock?: () => void;
+  /** Opens the Openings section (a "Learn openings" row; omitted: none). */
+  onLearnOpenings?: () => void;
 }
 
 /**
@@ -181,6 +183,7 @@ export function NewGameSheet({
   onSetLevel,
   arrowsLocked,
   onUnlock,
+  onLearnOpenings,
 }: NewGameSheetProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial, bots));
   /** The player chose an opponent (card, slider or "Match my rating") since the sheet opened. */
@@ -188,6 +191,8 @@ export function NewGameSheet({
   const scrollerRef = useRef<HTMLDivElement>(null);
   const colorLabelId = useId();
   const levelLabelId = useId();
+  const openingsLabelId = useId();
+  const openingsDescId = useId();
   const rating = Math.round(playerRating);
 
   // Start from `initial` every time the sheet opens.
@@ -359,6 +364,29 @@ export function NewGameSheet({
           Play as
         </h3>
         <ColorPicker labelledBy={colorLabelId} value={draft.playerColor} onChange={(c) => set({ playerColor: c })} />
+        {onLearnOpenings && (
+          <button
+            type="button"
+            class="ngs-openings"
+            data-id="learn-openings"
+            aria-labelledby={openingsLabelId}
+            aria-describedby={openingsDescId}
+            onClick={onLearnOpenings}
+          >
+            <span class="ngs-openings-icon" aria-hidden="true">
+              <IconBook size={18} />
+            </span>
+            <span class="ngs-openings-text">
+              <span class="ngs-openings-label" id={openingsLabelId}>
+                Learn openings
+              </span>
+              <span class="ngs-openings-desc" id={openingsDescId}>
+                Good first moves, step by step. Then play them here.
+              </span>
+            </span>
+            <IconChevronRight size={18} />
+          </button>
+        )}
       </section>
 
       <section class="sheet-section">

@@ -202,6 +202,29 @@ describe('BotPlayer', () => {
     expect(Date.now() - t0).toBeLessThan(250);
   });
 
+  it('lineMove plays the given move as a book move, with its think time; abortable; its own move if illegal', async () => {
+    const engine = new FakeEngine();
+    const bot = new BotPlayer(engine, { rng: mulberry32(5) });
+    await bot.newGame(1200);
+    const after = play(START, ['e2e4']);
+    const m = (await bot.lineMove(after, 1200, 'c7c5', ['e2e4']))!;
+    expect(m).toMatchObject({ uci: 'c7c5', source: 'book' });
+    expect(m.thinkMs).toBeGreaterThanOrEqual(240);
+    expect(m.thinkMs).toBeLessThan(1500);
+    expect(engine.searches).toHaveLength(0);
+    // Aborted during the think time.
+    const ac = new AbortController();
+    const p = bot.lineMove(after, 1200, 'e7e5', ['e2e4'], ac.signal);
+    setTimeout(() => ac.abort(), 20);
+    expect(await p).toBeNull();
+    // Not legal here (a stale line): the bot's own move.
+    const quick = new BotPlayer(engine, { thinkDelay: false });
+    await quick.newGame(1200);
+    const own = (await quick.lineMove(MIDDLEGAME, 1200, 'e2e4', Array(20).fill('e2e4')))!;
+    expect(own.uci).not.toBe('e2e4');
+    expect(isLegal(MIDDLEGAME, own.uci)).toBe(true);
+  });
+
   it('waits a human-like think time including the search', async () => {
     const engine = new FakeEngine();
     const bot = new BotPlayer(engine, { rng: mulberry32(4) });

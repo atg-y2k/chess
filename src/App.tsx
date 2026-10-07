@@ -16,10 +16,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 import { BOTS } from './bot/personas';
 import { copyText } from './clipboard';
 import { rememberedEngineMode, resetEngineMode } from './engine/createEngines';
-import type { GameController } from './game/controller';
+import type { GameController, OpeningGameOptions } from './game/controller';
 import { PRO_NAME } from './game/entitlements';
 import type { ReadonlyStore, ToolbarId } from './game/store';
-import type { PromotionPiece } from './game/types';
+import type { GameSettings, PromotionPiece } from './game/types';
+import { closeOpenings, openingsOpen, openOpenings, popPage } from './openings/session';
 import type { OfflineStatus } from './pwa';
 import { STARTING_LEVELS } from './rating/rating';
 import { applyTheme, loadTheme, saveTheme, watchSystemTheme, type ThemePref } from './theme';
@@ -31,6 +32,7 @@ import { EvalGraph } from './ui/EvalGraph';
 import { ExplorerPanel } from './ui/ExplorerPanel';
 import { GameOverSheet } from './ui/GameOverSheet';
 import {
+  IconBook,
   IconBulb,
   IconChart,
   IconChevronLeft,
@@ -51,6 +53,7 @@ import { NewGameSheet } from './ui/NewGameSheet';
 import { LockedIcon, PaywallSheet } from './ui/PaywallSheet';
 import { PlayerStrip } from './ui/PlayerStrip';
 import { ReviewPanel } from './ui/ReviewPanel';
+import { trapTab, useEscapeLayer } from './ui/Sheet';
 import { Toolbar, type ToolbarItem } from './ui/Toolbar';
 import './App.css';
 
@@ -166,7 +169,7 @@ export function App({ controller: c, offline }: AppProps) {
   // Desktop / keyboard: ← → step through the moves.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || s.sheet.value) return;
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || s.sheet.value || openingsOpen.value) return;
       const el = e.target instanceof Element ? e.target : null;
       if (el?.closest('input, textarea, select, [role="slider"], [contenteditable]')) return;
       if (e.key === 'ArrowLeft') c.stepBack();
@@ -209,6 +212,7 @@ export function App({ controller: c, offline }: AppProps) {
         notify={notify}
         offlineReady={!!offline?.value}
       />
+      <Openings c={c} />
       <Paywall c={c} />
       <Splash phase={phase} download={s.engineDownload} />
       {phase === 'error' && <ErrorScreen c={c} />}
@@ -451,15 +455,38 @@ function GraphArea({ c }: { c: GameController }) {
   );
 }
 
-/** The game's moves, or the explored line while exploring. */
+/**
+ * The game's moves, or the explored line while exploring. While the game's position has an
+ * opening name, a chip at the end ("📖 Italian Game") opens that opening in the Openings section
+ * (an opening-practice game has the coach's banner for that instead).
+ */
 function Moves({ c }: { c: GameController }) {
   const s = c.store;
   const select = (i: number) => (s.explorer.value ? c.explorerGoTo(i) : c.goTo(i));
+  const exploring = !!s.explorer.value;
+  const opening = exploring || s.openingPractice.value ? null : (s.gameSummary.value?.opening ?? null);
   return (
-    <div class="app-moves" data-exploring={s.explorer.value ? '' : undefined}>
+    <div class="app-moves" data-exploring={exploring ? '' : undefined} data-opening={opening ? '' : undefined}>
       <MoveList {...s.moveList.value} onSelect={select} />
+      {opening && (
+        <button
+          type="button"
+          class="app-opening-chip"
+          data-id="opening-chip"
+          aria-label={`${opening.name}: learn this opening`}
+          onClick={() => openOpenings({ name: opening.name, eco: opening.eco })}
+        >
+          <IconBook size={15} />
+          <span class="app-opening-chip-name">{openingFamilyOf(opening.name)}</span>
+        </button>
+      )}
     </div>
   );
+}
+
+/** "Italian Game: Giuoco Piano" -> "Italian Game" (the family, as the chip shows it). */
+function openingFamilyOf(name: string): string {
+  return name.split(':')[0].split(', with ')[0].trim();
 }
 
 /**
@@ -592,6 +619,7 @@ function Sheets({
         onSetLevel={(rating) => c.setStartingRating(rating)}
         onStart={(settings) => c.newGame(settings)}
         onClose={close}
+        onLearnOpenings={() => openOpenings()}
         arrowsLocked={arrowsLocked ? `Part of ${PRO_NAME}` : null}
         onUnlock={() => pro.openPaywall('bestMoveArrows')}
       />
@@ -622,6 +650,7 @@ function Sheets({
           close();
         }}
         onNewGame={() => c.openSheet('new')}
+        onOpenings={() => openOpenings()}
         engine={{ mode: engineMode, singleUntil }}
         onRetryDualEngines={retryDualEngines}
         offlineReady={offlineReady}
@@ -658,6 +687,202 @@ function Sheets({
     </>
   );
 }
+
+// -------------------------------------------------------------------------------------------------
+// Openings
+
+type OpeningsModule = typeof import('./ui/openings/OpeningsView');
+let openingsModule: Promise<OpeningsModule> | null = null;
+
+/** The Openings section's code and styles (a lazy chunk, precached for offline use; a failed load can be retried). */
+function loadOpeningsModule(): Promise<OpeningsModule> {
+  openingsModule ??= import('./ui/openings/OpeningsView').catch((e: unknown) => {
+    openingsModule = null;
+    throw e;
+  });
+  return openingsModule;
+}
+
+/** Must match the closing animation of `.openings-shell` in App.css (plus a little slack). */
+const OPENINGS_CLOSE_MS = 300;
+
+/**
+ * The Openings section (src/ui/openings, lazy-loaded): full screen over the game and its sheets,
+ * under the paywall. It never touches the game: closing it shows the screen (and sheet) it was
+ * opened from, as it was. Back, Escape and the browser's or Android's Back button go back a page
+ * (and close it from its first page). Playing an opening starts the game and closes it.
+ */
+function Openings({ c }: { c: GameController }) {
+  const open = openingsOpen.value;
+  const [mounted, setMounted] = useState(open);
+  const [mod, setMod] = useState<OpeningsModule | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    const t = window.setTimeout(() => setMounted(false), OPENINGS_CLOSE_MS);
+    return () => window.clearTimeout(t);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || mod) return;
+    let live = true;
+    setFailed(false);
+    loadOpeningsModule().then(
+      (m) => live && setMod(m),
+      (e: unknown) => {
+        console.warn('[openings] could not load the section', e);
+        if (live) setFailed(true);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [open, mod, attempt]);
+
+  const back = () => void popPage();
+  const isTop = useEscapeLayer(open, back);
+  useBackButton(open, back);
+
+  // Focus moves into the section (screen readers and keyboards would stay on the Menu or sheet it
+  // covers) and goes back where it was when it closes.
+  const shellRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const shell = shellRef.current;
+    if (!open || !mounted || !shell) return;
+    const before = document.activeElement instanceof HTMLElement && !shell.contains(document.activeElement) ? document.activeElement : null;
+    if (!shell.contains(document.activeElement)) shell.focus({ preventScroll: true });
+    return () => {
+      const now = document.activeElement;
+      if (before?.isConnected && (!now || now === document.body || shell.contains(now))) before.focus({ preventScroll: true });
+    };
+  }, [open, mounted]);
+
+  if (!mounted) return null;
+  const s = c.store;
+  // The phase changes when the engine starts (or restarts), and the analysis service with it.
+  const phase = s.phase.value;
+  // During a rated game the section shows no engine evaluation (it would be live help on the
+  // game's positions, which only an unrated game may have: see the explorer's rule).
+  const g = s.game.value;
+  const ratedGame = phase === 'playing' && !!g && !g.assisted;
+  // Read when the Play sheet opens (so a game's every move does not re-render the section).
+  const setup = () => ({
+    settings: s.settings.peek(),
+    rating: s.profile.peek().rating,
+    bots: BOTS,
+    inProgress: s.sheets.peek().newGame.inProgress,
+  });
+  const startGame = (settings: GameSettings, opening: OpeningGameOptions) => {
+    void c.newGame(settings, { opening });
+    closeOpenings();
+  };
+  return (
+    <div
+      class="openings-shell"
+      ref={shellRef}
+      data-state={open ? 'open' : 'closing'}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Openings"
+      tabIndex={-1}
+      // Tab stays in the section (a sheet over it, such as the Play sheet, keeps its own).
+      onKeyDown={(e) => {
+        if (!(document.activeElement instanceof Element && document.activeElement.closest('.sheet'))) trapTab(e, shellRef.current, '.sheet');
+      }}
+      // The section's boards measured themselves while it was sliding up (see `boardsMoved`).
+      onAnimationEnd={(e) => {
+        if (open && e.target === e.currentTarget) window.dispatchEvent(new Event('resize'));
+      }}
+    >
+      {mod ? (
+        <mod.OpeningsView
+          entitlements={c.entitlements}
+          // The game's own analysis service (the controller keeps it private; the section only
+          // reads positions from it, see src/ui/openings/useEval.ts); none during a rated game.
+          analysis={ratedGame ? null : c['analysis']}
+          evalHidden={ratedGame}
+          setup={setup}
+          onStartGame={startGame}
+          onBack={back}
+          onClose={closeOpenings}
+          isTop={isTop}
+        />
+      ) : (
+        <div class="openings-shell-loading" role={failed ? 'alert' : 'status'}>
+          <button type="button" class="openings-shell-done" onClick={closeOpenings}>
+            Done
+          </button>
+          {failed ? (
+            <>
+              <p>Couldn’t load the openings. Check your connection and try again.</p>
+              <button type="button" class="btn btn-primary" onClick={() => setAttempt((a) => a + 1)}>
+                Try again
+              </button>
+            </>
+          ) : (
+            <>
+              <span class="app-spinner" aria-hidden="true" />
+              <p>Loading the openings…</p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * While `open`, one browser history entry belongs to the section: the browser's (or Android's)
+ * Back button, or Safari's swipe, goes back a page instead of leaving the app; the entry is taken
+ * again while the section stays open, and given back when it closes some other way.
+ */
+function useBackButton(open: boolean, onBack: () => void): void {
+  const ref = useRef(onBack);
+  ref.current = onBack;
+  useEffect(() => {
+    if (!open || typeof history === 'undefined') return;
+    const marker = `openings-${Date.now()}`;
+    const state = { chesscoach: marker };
+    let ours = false;
+    try {
+      history.pushState(state, '');
+      ours = true;
+    } catch {
+      return; // no history (sandboxed): Back buttons in the section still work
+    }
+    const onPop = () => {
+      // The entry given back when the section last closed (reopened before its popstate came).
+      if (givenBack > 0) {
+        givenBack--;
+        return;
+      }
+      ours = false;
+      ref.current();
+      if (openingsOpen.peek()) {
+        history.pushState(state, '');
+        ours = true;
+      }
+    };
+    addEventListener('popstate', onPop);
+    return () => {
+      removeEventListener('popstate', onPop);
+      if (ours && (history.state as { chesscoach?: string } | null)?.chesscoach === marker) {
+        givenBack++;
+        history.back();
+        // Its popstate normally comes at once (to no listener): forget it then.
+        window.setTimeout(() => (givenBack = Math.max(0, givenBack - 1)), 500);
+      }
+    };
+  }, [open]);
+}
+
+/** History entries the Openings section gave back whose popstate may still be on its way. */
+let givenBack = 0;
 
 /**
  * The paywall (only where Pro is sold): the price comes from the store; after a purchase or

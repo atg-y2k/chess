@@ -721,11 +721,11 @@ describe('hints that compare the engine lines (MultiPV)', () => {
   const bf4 = (score: number) => pvLine(cp(score), ['c1f4', 'g8f6', 'e2e3', 'f8e7', 'c2c4', 'f6h5']);
 
   it('a quiet move with alternatives about as good: what it keeps, and which moves are as good', () => {
-    expect(text(hintOf(LASKER4, c4.score, c4.pv))).toEqual(['c4 improves the position.', 'Main line: c4 Nf6 g3 Be7 Bg2.']);
+    expect(text(hintOf(LASKER4, c4.score, c4.pv))).toEqual(['c4 improves the position.', 'Engine line: 3. c4 Nf6 4. g3 Be7 5. Bg2.']);
     expect(text(hintWith(LASKER4, set(c4, g3(53), bf4(44))))).toEqual([
       'c4 keeps a small edge.',
       'g3 and Bf4 are about as good.',
-      'Main line: c4 Nf6 g3 Be7 Bg2.',
+      'Engine line: 3. c4 Nf6 4. g3 Be7 5. Bg2.',
     ]);
   });
 
@@ -733,13 +733,13 @@ describe('hints that compare the engine lines (MultiPV)', () => {
     expect(text(hintWith(LASKER4, set(c4, g3(20), bf4(10))))).toEqual([
       'c4 keeps a small edge.',
       'It is more precise than g3.',
-      'Main line: c4 Nf6 g3 Be7 Bg2.',
+      'Engine line: 3. c4 Nf6 4. g3 Be7 5. Bg2.',
     ]);
     const only = hintWith(LASKER4, set(c4, g3(-150), bf4(-160)));
     expect(text(only)).toEqual([
       'c4 is the only move that keeps the balance.',
       'Anything else gives Black the better game.',
-      'Main line: c4 Nf6 g3 Be7 Bg2.',
+      'Engine line: 3. c4 Nf6 4. g3 Be7 5. Bg2.',
     ]);
     expect(only.motifs).toContain('onlyGoodMove');
     const neutral = hintWith(LASKER4, set(pvLine(cp(250), c4.pv), g3(20)), { perspective: 'neutral' });
@@ -1196,6 +1196,8 @@ describe('temporary material', () => {
     expect(hintOf(PANOV, c4.score, c4.pv).headline).not.toMatch(/wins|prepares/);
     const book = explainWith(PANOV, 'c2c4', 'book', [c4, pvLine(cp(40), ['d2d4', 'd7d5'], 2)], [pvLine(cp(-43), c4.pv.slice(1))], [0.54, 0.54]);
     expect(book.headline).toBe('c4 is a known opening move.');
+    // No engine line after a book move: the opening's own moves are what comes next.
+    expect(book.details.some((d) => /line:/i.test(d))).toBe(false);
     const cxd5 = hintOf(fenOf('e4 c6 c4 d5'), cp(16), ['c4d5', 'c6d5', 'e4d5', 'g8f6', 'f1b5', 'c8d7', 'b5c4', 'b7b5']);
     expect(cxd5.headline).toBe('cxd5 trades pawns.');
   });

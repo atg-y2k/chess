@@ -10,10 +10,10 @@ import { batch } from '@preact/signals';
 import { Chess, type Move } from 'chess.js';
 import { classifyMove } from '../analysis/classify';
 import { explainBestMove, explainMove, type PrevMove } from '../analysis/explain';
-import type { Explanation } from '../analysis/types';
+import type { Classification, Explanation } from '../analysis/types';
 import { resultScore } from '../analysis/winprob';
 import { BotPlayer } from '../bot/BotPlayer';
-import { currentOpening, isBookMove, loadOpenings } from '../bot/book';
+import { currentOpening, isBookMove, loadOpenings, openingsLoaded } from '../bot/book';
 import { customPersona, personaById } from '../bot/personas';
 import { hashSeed, mulberry32 } from '../bot/strength';
 import type { BotMove } from '../bot/types';
@@ -24,6 +24,9 @@ import { EngineLoadError, engineFailureKind } from '../engine/errors';
 import { inspectPosition } from '../engine/StockfishEngine';
 import type { AnalysisResult, ChessEngine, Score } from '../engine/types';
 import { engineSupported } from '../engine/workerTransport';
+import { catalogLoaded, getLine } from '../openings/catalog';
+import { openingsOpen, openOpenings } from '../openings/session';
+import { loadExplorer } from '../openings/tree';
 import {
   applyGameResult,
   loadProfile,
@@ -62,6 +65,7 @@ import {
   type SavedGame,
   type SavedResult,
 } from './persistence';
+import { lineProgress, studyOpeningLine, type OpeningTarget } from './opening';
 import { buildPgn, type PgnPlayer } from './pgn';
 import { emptyCounts, summarizeGame } from './review';
 import { playSound, setSoundEnabled, soundForSan, type SoundKind } from './sound';
@@ -124,6 +128,11 @@ export interface BotLike {
    * position), so the bot can use its opening book and see repetitions.
    */
   move(fen: string, elo: number, history: string[], signal?: AbortSignal, startFen?: string): Promise<BotMove | null>;
+  /**
+   * Plays `uci` (an opening line's next move, see `NewGameOptions.opening`) like a book move, with
+   * its think time; null if aborted. Optional: without it the controller plays the move at once.
+   */
+  lineMove?(fen: string, elo: number, uci: string, history: string[], signal?: AbortSignal, startFen?: string): Promise<BotMove | null>;
 }
 
 /** What the controller passes to the engine factory. */
@@ -166,21 +175,85 @@ export interface ControllerDeps {
   entitlements?: Entitlements;
 }
 
+/**
+ * Play an opening (see `NewGameOptions.opening`): a game against the bot that follows a named
+ * line from the openings catalog (src/openings/catalog.ts).
+ */
+export interface OpeningGameOptions {
+  /**
+   * The line: a catalog id (`OpeningLine.id`), or the id of a line given by `moves`. An unknown
+   * catalog id without `moves` starts a normal game (with a warning).
+   */
+  lineId: string;
+  /**
+   * 'steer': start from the initial position; while the game is on the line, the bot plays the
+   * line's next move. 'skip': start with the line's moves already played (as book plies); a line
+   * that ends the game (a mate line) stops before that, on the human's turn.
+   */
+  mode: 'steer' | 'skip';
+  /** Steer only: show the line's next move (a light arrow + a coach line) on the human's turn. */
+  showLineMoves?: boolean;
+  /**
+   * The line's own moves, for a line that is not in the catalog (an opening guide's annotated main
+   * line, "guide:London System"): UCI from the initial position, all legal (else a normal game
+   * starts, with a warning). The game follows exactly these and saves them. Ignored when `lineId`
+   * is a catalog id.
+   */
+  moves?: readonly string[];
+  /** With `moves`: the opening's name as the game shows it ("London System"; default: `family`). */
+  name?: string;
+  /** With `moves`: its family. */
+  family?: string;
+}
+
 export interface NewGameOptions {
   /** Start from this position instead of the initial one (must be legal). */
   startFen?: string;
+  /** Practice an opening (ignores `startFen`); the game is unrated. */
+  opening?: OpeningGameOptions;
 }
 
 type AnnotateResult = 'done' | 'stale' | 'failed';
 
 const isAnnotated = (p: Ply): boolean => !!(p.classification && p.explanation && p.evalWhite);
+/** Plies the game started with (opening practice 'skip'): never analyzed, taken back or counted. */
+const preplayedOf = (g: Pick<GameInfo, 'preplayed'> | null | undefined): number => g?.preplayed ?? 0;
+/** A ply that needs no more analysis: annotated, or played before the game started. */
+const isSettled = (p: Ply, preplayed: number): boolean => p.index < preplayed || isAnnotated(p);
+/** The classification of a line move played before the game started: book, with nothing lost. */
+const bookClassification = (san: string): Classification => ({
+  cls: 'book',
+  winBefore: 0.5,
+  winAfter: 0.5,
+  winLoss: 0,
+  accuracy: 100,
+  bestMoveUci: null,
+  bestMoveSan: null,
+  playedMoveSan: san,
+});
 const uciOf = (m: Pick<Move, 'from' | 'to' | 'promotion'>): string => m.from + m.to + (m.promotion ?? '');
-/** Explanation details that spell out a variation ("Main line: …"); "Show best" has its own. */
-const LINE_DETAIL = /^(Main line|Key line|The finish):/;
+/** Explanation details that spell out a variation ("Engine line: …"); "Show best" has its own. */
+const LINE_DETAIL = /^(Engine line|Main line|Key line|The finish):/;
 const prevMoveOf = (p: Pick<Ply, 'uci' | 'captured'>): PrevMove => ({
   to: p.uci.slice(2, 4),
   ...(p.captured ? { captured: p.captured } : {}),
 });
+
+/**
+ * The opening a game follows, from `NewGameOptions.opening` or a save: the catalog line `lineId`,
+ * else the line given by its moves (see `OpeningGameOptions.moves`); null when neither is usable.
+ */
+function openingTarget(
+  o: Pick<OpeningGameOptions, 'lineId' | 'mode' | 'showLineMoves' | 'moves' | 'name' | 'family'>,
+): OpeningTarget | null {
+  const mode = o.mode === 'skip' ? 'skip' : 'steer';
+  const showLineMoves = mode === 'steer' && o.showLineMoves === true;
+  const known = getLine(o.lineId);
+  if (known) return { line: known, mode, showLineMoves };
+  const family = o.family ?? o.name ?? '';
+  const line = o.moves?.length ? studyOpeningLine(o.lineId, o.moves, o.name ?? family, family) : null;
+  return line ? { line, mode, showLineMoves, custom: true } : null;
+}
 
 async function defaultCreateEngines(request: CreateEnginesRequest): Promise<EngineSet> {
   if (!engineSupported()) throw new EngineLoadError('Web Workers or WebAssembly SIMD are not available.', 'unsupported');
@@ -233,8 +306,8 @@ function monitorEngine(engine: ChessEngine, onFatal: (e: unknown) => void): Ches
  * move being discussed (the last ply, or followed only by the bot's reply), as in live play.
  * (A saved "Try again" prompt after a Retry takes precedence, see `restore`.)
  */
-function restoredCoachMode(plies: readonly Ply[], playerColor: Color): CoachMode {
-  for (let i = plies.length - 1; i >= 0 && i >= plies.length - 2; i--) {
+function restoredCoachMode(plies: readonly Ply[], playerColor: Color, preplayed = 0): CoachMode {
+  for (let i = plies.length - 1; i >= preplayed && i >= plies.length - 2; i--) {
     if (plies[i].color === playerColor) return { kind: 'feedback', index: i };
   }
   return { kind: 'idle' };
@@ -305,8 +378,15 @@ export class GameController {
   private explorerReplyTask: { session: number; task: Promise<void> } | null = null;
   /** Withdraws the open explorer's analysis requests when it closes (see `dropExplorer`). */
   private explorerAbort: AbortController | null = null;
-  /** The game ended while exploring: the game-over sheet opens when the explorer closes. */
+  /**
+   * The game ended while exploring or while the Openings section was open: the game-over sheet
+   * opens when it closes.
+   */
   private deferredGameOver = false;
+  /** Stops following the Openings section (see `onOpeningsClosed`). */
+  private unwatchOpenings: () => void;
+  /** Bumped by every game start, so an opening game still waiting for its data never replaces a newer game. */
+  private startTicket = 0;
 
   constructor(deps: ControllerDeps = {}) {
     this.storage = deps.storage;
@@ -330,6 +410,20 @@ export class GameController {
     );
     this.store = this.s;
     this.unwatchLocks = this.entitlements.locked.subscribe((locked) => this.onLocksChanged(locked));
+    this.unwatchOpenings = openingsOpen.subscribe((open) => {
+      if (!open) this.onOpeningsClosed();
+    });
+  }
+
+  /**
+   * The Openings section closed: a game that ended while it was open (by the bot's move) shows its
+   * game-over sheet now, over whatever sheet the section was opened from.
+   */
+  private onOpeningsClosed(): void {
+    const s = this.s;
+    if (!this.deferredGameOver || s.explorer.value) return;
+    this.deferredGameOver = false;
+    if (s.outcome.value && s.phase.value === 'over') s.sheet.value = 'gameOver';
   }
 
   /**
@@ -377,6 +471,7 @@ export class GameController {
   dispose(): void {
     this.cancelOnlineRetry();
     this.unwatchLocks();
+    this.unwatchOpenings();
     this.teardown();
   }
 
@@ -434,6 +529,14 @@ export class GameController {
       } catch {
         clearGame(this.storage);
         saved = null;
+      }
+    }
+    if (saved?.opening) {
+      // An opening-practice game needs its line (the catalog) to go on steering.
+      try {
+        await loadExplorer();
+      } catch (e) {
+        console.warn('[game] the opening data could not load; the game goes on without its line', e);
       }
     }
     if (saved) this.restore(saved);
@@ -543,6 +646,10 @@ export class GameController {
         adaptive: settings.adaptive && persona.id === 'custom',
       },
     };
+    const target = saved.opening ? openingTarget(saved.opening) : null;
+    if (saved.opening && !target) console.warn('[game] the saved opening line is unknown; the game goes on without it', saved.opening.lineId);
+    if (target) game.opening = target;
+    if (saved.preplayed) game.preplayed = Math.min(saved.preplayed, plies.length);
     const startEval = (saved as SavedGame & { startEval?: unknown }).startEval;
     const over = saved.over ?? null;
     this.chess = chess;
@@ -565,7 +672,7 @@ export class GameController {
         ? { kind: 'idle' }
         : saved.retry && chess.turn() === game.playerColor
           ? { kind: 'retry', ...saved.retry }
-          : restoredCoachMode(plies, game.playerColor);
+          : restoredCoachMode(plies, game.playerColor, preplayedOf(game));
       s.coachCollapsed.value = null;
       s.coachFocus.value = null;
       s.live.value = null;
@@ -596,19 +703,51 @@ export class GameController {
    * Starts a new game with these settings (persisted as the new defaults): resolves a 'random'
    * colour, the opponent (persona, custom Elo, or the adaptive "match my rating" Elo), seeds the
    * bot from the game id, and lets the bot move first when the human plays Black.
+   *
+   * With `opening` (opening practice) the game follows a line of the openings catalog and is
+   * unrated from the start: 'steer' starts from the initial position, and while the game is on the
+   * line (transpositions count) the bot plays the line's next move; 'skip' starts with the line's
+   * moves already played (as book moves). The catalog and the book load first when needed (the
+   * game then starts a moment later; the returned promise resolves once it has). An unknown line
+   * starts a normal game, with a warning.
    */
-  newGame(settings: GameSettings, opts: NewGameOptions = {}): void {
+  newGame(settings: GameSettings, opts: NewGameOptions = {}): Promise<void> {
     const next = { ...settings };
     if (next.showBestMoves && !this.entitlements.isAllowed('bestMoveArrows')) next.showBestMoves = false;
-    this.s.settings.value = next;
-    saveSettings(next, this.storage);
+    // Opening practice picks its own side and opponent (the Openings section's Play sheet): the
+    // player's New game choices (colour, opponent, Match my rating) stay the defaults.
+    const prev = this.s.settings.value;
+    const defaults = opts.opening
+      ? { ...next, playerColor: prev.playerColor, botId: prev.botId, botElo: prev.botElo, adaptive: prev.adaptive }
+      : next;
+    this.s.settings.value = defaults;
+    saveSettings(defaults, this.storage);
     this.sound.setEnabled(next.sound);
+    if (opts.opening) return this.startOpening(next, opts.opening);
     this.startGame(next, opts.startFen);
+    return Promise.resolve();
+  }
+
+  /** Starts an opening-practice game once the catalog and the book are loaded (see `newGame`). */
+  private async startOpening(settings: GameSettings, o: OpeningGameOptions): Promise<void> {
+    const ticket = ++this.startTicket;
+    if (!catalogLoaded() || !openingsLoaded()) {
+      try {
+        await loadExplorer();
+      } catch (e) {
+        console.warn('[game] the opening data could not load; starting a normal game', e);
+      }
+      if (ticket !== this.startTicket) return; // another game started meanwhile
+    }
+    const target = openingTarget(o);
+    if (!target) console.warn('[game] unknown opening line; starting a normal game', o.lineId);
+    this.startGame(settings, START_FEN, target ?? undefined);
   }
 
   /**
-   * Same opponent and colour (adaptive games re-match the new rating). The other options, such as
-   * best-move arrows (which decide whether the game is rated), are the current settings.
+   * Same opponent and colour (adaptive games re-match the new rating), and the same opening in
+   * opening practice. The other options, such as best-move arrows (which decide whether the game is
+   * rated), are the current settings.
    */
   rematch(): void {
     const s = this.s;
@@ -626,6 +765,7 @@ export class GameController {
         playerColor: g.playerColor,
       },
       g.startFen,
+      g.opening,
     );
   }
 
@@ -642,8 +782,10 @@ export class GameController {
     s.profile.value = profile;
   }
 
-  private startGame(settings: GameSettings, startFen = START_FEN): void {
+  private startGame(settings: GameSettings, startFen = START_FEN, opening?: OpeningTarget): void {
     if (!this.analysis || !this.engines) return;
+    this.startTicket++;
+    if (opening) startFen = START_FEN; // catalog lines start from the initial position
     let chess: Chess;
     try {
       inspectPosition(startFen); // chess.js validity plus "the side not to move is not in check"
@@ -676,16 +818,45 @@ export class GameController {
       bot,
       botElo: bot.elo,
       startedAt: new Date(this.now()).toISOString(),
-      // Best-move arrows and the opponent's move ratings are live help: unrated from the start.
-      assisted: (settings.showBestMoves && this.entitlements.isAllowed('bestMoveArrows')) || settings.rateOpponent,
+      // Best-move arrows and the opponent's move ratings are live help, and in opening practice the
+      // computer's first moves are scripted: unrated from the start.
+      assisted:
+        (settings.showBestMoves && this.entitlements.isAllowed('bestMoveArrows')) || settings.rateOpponent || !!opening,
       settings: { ...settings },
+      ...(opening ? { opening } : {}),
     };
+    // Opening practice 'skip': the line's moves are on the board from the start, as book moves.
+    const plies: Ply[] = [];
+    if (opening?.mode === 'skip') {
+      let ended = false;
+      for (const uci of opening.line.uci) {
+        let mv: Move;
+        try {
+          mv = chess.move(parseUci(uci));
+        } catch {
+          break;
+        }
+        if (chess.isGameOver()) {
+          // A line that ends the game (the Fool's Mate): never a game over before the player moves.
+          chess.undo();
+          ended = true;
+          break;
+        }
+        plies.push({ ...this.plyFromMove(mv, plies), isBook: true, classification: bookClassification(mv.san) });
+      }
+      // ...and the player moves first from there, so the bot cannot finish it either.
+      if (ended && plies.length && chess.turn() !== playerColor) {
+        chess.undo();
+        plies.pop();
+      }
+      if (plies.length) game.preplayed = plies.length;
+    }
     this.chess = chess;
     this.bot = this.makeBot(id);
     this.botReady = this.bot.newGame(bot.elo).catch((e: unknown) => console.warn('[game] bot newGame failed', e));
     batch(() => {
       s.game.value = game;
-      s.plies.value = [];
+      s.plies.value = plies;
       s.startEval.value = null;
       s.viewIndex.value = null;
       s.flipped.value = false;
@@ -715,9 +886,15 @@ export class GameController {
     const s = this.s;
     const g = s.game.value;
     if (!g || s.phase.value !== 'playing' || s.outcome.value) return;
-    if (!s.plies.value.some((p) => p.color === g.playerColor)) return;
+    if (!this.humanMoved(g)) return;
     const winner = otherColor(g.playerColor);
     this.recordResult(g, { result: winner === 'w' ? '1-0' : '0-1', winner, reason: 'Abandoned' }, !g.assisted);
+  }
+
+  /** The human has made a move in this game (the moves played before it started do not count). */
+  private humanMoved(g: GameInfo): boolean {
+    const pre = preplayedOf(g);
+    return this.s.plies.value.some((p) => p.index >= pre && p.color === g.playerColor);
   }
 
   private makeBot(gameId: string): BotLike {
@@ -806,6 +983,8 @@ export class GameController {
     const bot = this.bot;
     const fen = this.chess.fen();
     const history = s.plies.value.map((p) => p.uci);
+    // Opening practice ('steer'): on the line, the bot plays the line's next move.
+    const lineUci = this.steeredMove(g);
     const stillCurrent = () =>
       !ctl.signal.aborted &&
       this.epoch === epoch &&
@@ -817,7 +996,11 @@ export class GameController {
       try {
         await this.botReady;
         if (!stillCurrent()) return;
-        const move = await bot.move(fen, g.botElo, history, ctl.signal, g.startFen);
+        const move = lineUci
+          ? bot.lineMove
+            ? await bot.lineMove(fen, g.botElo, lineUci, history, ctl.signal, g.startFen)
+            : { uci: lineUci, source: 'book' as const, thinkMs: 0 }
+          : await bot.move(fen, g.botElo, history, ctl.signal, g.startFen);
         if (this.botCtl === ctl) {
           this.botCtl = null;
           s.botThinking.value = false;
@@ -837,6 +1020,17 @@ export class GameController {
     void task.then(() => {
       if (this.botTask === task) this.botTask = null;
     });
+  }
+
+  /**
+   * Opening practice ('steer'): the line's next move while the live game is on the line and has
+   * not completed it yet (transpositions count), else null (the bot plays its own moves).
+   */
+  private steeredMove(g: GameInfo): string | null {
+    const o = g.opening;
+    if (!o || o.mode !== 'steer') return null;
+    const p = lineProgress(o.line, g.startFen, this.s.plies.value);
+    return p.status === 'on-line' && p.next && p.next.color !== g.playerColor ? p.next.uci : null;
   }
 
   private applyBotMove(uci: string): void {
@@ -887,15 +1081,15 @@ export class GameController {
     this.abortBot();
     this.epoch++;
     const record = this.recordResult(g, outcome, (opts.rated ?? true) && !g.assisted);
-    // Ended by the bot's move while the player explores: the explorer says so, and the game-over
-    // sheet waits until it closes.
-    const exploring = !!s.explorer.value;
-    if (exploring) this.deferredGameOver = true;
+    // Ended by the bot's move while the player explores (the explorer says so) or while the
+    // Openings section covers the game: the game-over sheet waits until it closes.
+    const deferred = !!s.explorer.value || openingsOpen.peek();
+    if (deferred) this.deferredGameOver = true;
     batch(() => {
       s.outcome.value = outcome;
       s.ratingChange.value = { before: record.ratingBefore, after: record.ratingAfter, rated: record.rated };
       s.phase.value = 'over';
-      if (!exploring) s.sheet.value = 'gameOver';
+      if (!deferred) s.sheet.value = 'gameOver';
       s.viewIndex.value = null;
       s.coachMode.value = { kind: 'idle' };
       s.pendingAssist.value = null;
@@ -954,9 +1148,11 @@ export class GameController {
     const g = s.game.value;
     if (!g || s.phase.value !== 'playing' || s.outcome.value || !s.settings.value.allowTakebacks) return null;
     const ps = s.plies.value;
+    // Never into the moves the game started with (opening practice).
+    const floor = preplayedOf(g);
     let target = ps.length;
-    while (target > 0 && ps[target - 1].color !== g.playerColor) target--;
-    return target === 0 ? null : target - 1;
+    while (target > floor && ps[target - 1].color !== g.playerColor) target--;
+    return target <= floor ? null : target - 1;
   }
 
   private canRetry(index: number): boolean {
@@ -967,6 +1163,7 @@ export class GameController {
       !!g &&
       !!ply &&
       ply.color === g.playerColor &&
+      index >= preplayedOf(g) &&
       s.phase.value === 'playing' &&
       !s.outcome.value &&
       s.settings.value.allowTakebacks
@@ -1017,7 +1214,7 @@ export class GameController {
     if (!g || s.phase.value !== 'playing' || s.outcome.value) return;
     this.exitExplorer();
     const winner = otherColor(g.playerColor);
-    const moved = s.plies.value.some((p) => p.color === g.playerColor);
+    const moved = this.humanMoved(g);
     this.finish({ result: winner === 'w' ? '1-0' : '0-1', winner, reason: 'Resignation' }, { rated: moved });
   }
 
@@ -1149,7 +1346,8 @@ export class GameController {
 
   /**
    * Runs a coach-panel action by id (the ids in `store.coach.value.actions`). A locked Pro action
-   * (Show best) opens the paywall instead; 'unlock' opens it for the panel's locked feature.
+   * (Show best) opens the paywall instead; 'unlock' opens it for the panel's locked feature;
+   * 'opening' (opening practice's banner) opens the game's line in the Openings section.
    */
   runAction(id: CoachActionId): void {
     const s = this.s;
@@ -1196,6 +1394,16 @@ export class GameController {
       case 'retryBoot':
         void this.retry();
         return;
+      case 'opening': {
+        // Opening practice's banner: the line in the Openings section (the game stays as it is), at
+        // the game's place on it (where the game left it, or its end once complete).
+        const g = s.game.value;
+        const o = g?.opening;
+        if (!g || !o) return;
+        const p = lineProgress(o.line, g.startFen, s.plies.value);
+        openOpenings({ lineId: o.line.id, ply: p.status === 'complete' ? o.line.plies : p.reached });
+        return;
+      }
     }
   }
 
@@ -1549,8 +1757,12 @@ export class GameController {
     if (!s.explorer.value) return;
     const v = this.explorerView;
     const ended = !!s.outcome.value && s.outcome.value !== v?.outcome;
-    const gameOver = this.deferredGameOver && !!s.outcome.value;
+    // Under the Openings section, the game-over sheet waits for it too (see `onOpeningsClosed`).
+    const covered = openingsOpen.peek();
+    const gameOver = this.deferredGameOver && !!s.outcome.value && !covered;
+    const stillDeferred = this.deferredGameOver && covered;
     this.dropExplorer();
+    this.deferredGameOver = stillDeferred;
     batch(() => {
       if (v) {
         s.flipped.value = v.flipped;
@@ -1891,11 +2103,11 @@ export class GameController {
       this.kickAnnotations();
       while (this.annotating) await this.annotating;
       if (!alive()) return;
-      if (s.plies.value.every(isAnnotated)) break;
+      if (s.plies.value.every((p) => isSettled(p, preplayedOf(g)))) break;
       this.clearFailed(); // one more try for plies whose analysis failed
     }
     if (!alive()) return;
-    const summary = summarizeGame(g.startFen, s.startEval.value, s.plies.value);
+    const summary = this.summary(g);
     s.reviewState.value = { ...summary, progress: null };
     this.save(); // the review's annotations survive a restart
     const acc = summary.accuracy[g.playerColor];
@@ -1908,12 +2120,24 @@ export class GameController {
     }
   }
 
+  /**
+   * The review's summary. In opening practice the moves played before the game started are left
+   * out: accuracy and counts start from the position after them (with its eval, see `annotate`).
+   */
+  private summary(g: GameInfo): ReturnType<typeof summarizeGame> {
+    const ps = this.s.plies.value;
+    const pre = Math.min(preplayedOf(g), ps.length);
+    if (!pre) return summarizeGame(g.startFen, this.s.startEval.value, ps);
+    return summarizeGame(ps[pre - 1].fenAfter, ps[pre - 1].evalWhite ?? null, ps.slice(pre));
+  }
+
   private updateReviewProgress(): void {
     const s = this.s;
     const r = s.reviewState.value;
     if (s.phase.value !== 'review' || !r || r.progress === null) return;
     const ps = s.plies.value;
-    const done = ps.filter(isAnnotated).length + (s.startEval.value ? 1 : 0);
+    const pre = preplayedOf(s.game.value);
+    const done = ps.filter((p) => isSettled(p, pre)).length + (s.startEval.value ? 1 : 0);
     const progress = Math.min(0.99, done / (ps.length + 1));
     if (progress !== r.progress) s.reviewState.value = { ...r, progress };
   }
@@ -1936,7 +2160,8 @@ export class GameController {
       const g = this.s.game.value;
       if (!g || !this.analysis) return;
       const failed = this.s.failedAnnotations.value;
-      const ply = this.s.plies.value.find((p) => !isAnnotated(p) && !failed.has(annotationKey(g.id, p)));
+      const pre = preplayedOf(g);
+      const ply = this.s.plies.value.find((p) => !isSettled(p, pre) && !failed.has(annotationKey(g.id, p)));
       if (!ply) return;
       const res = await this.annotate(g.id, ply);
       if (res === 'failed') this.markFailed(annotationKey(g.id, ply));
@@ -2034,6 +2259,12 @@ export class GameController {
       explanation,
       isBook,
     };
+    // The first move after the ones the game started with (opening practice): the position before
+    // it gets its eval (the graph's point, and the review's accuracy starts there).
+    if (index > 0 && index === preplayedOf(g) && !plies[index - 1].evalWhite) {
+      const sb = whiteScore(before);
+      if (sb) next[index - 1] = { ...plies[index - 1], evalWhite: sb, evalDepth: before.depth };
+    }
     batch(() => {
       s.plies.value = next;
       if (index === 0) {
@@ -2125,8 +2356,8 @@ export class GameController {
    * 'over', same result, rating and history), unless a sheet is open over it, such as the
    * game-over sheet the player may be reading: then only while the app is in the background
    * (`hidden`). Never while playing or reviewing, which a reload would interrupt, nor while the
-   * paywall is open or a purchase is on its way, nor while exploring (the explorer is not saved).
-   * When it stays no, the new service worker is active anyway and the next launch runs the new
+   * paywall is open or a purchase is on its way, nor while exploring or while the Openings section
+   * is open (neither is saved). When it stays no, the new service worker is active anyway and the next launch runs the new
    * version.
    */
   canReloadNow(opts: { hidden?: boolean } = {}): boolean {
@@ -2135,6 +2366,8 @@ export class GameController {
     const pro = this.entitlements;
     if (pro.paywall.value.open || pro.status.value === 'buying' || pro.status.value === 'restoring') return false;
     if (s.explorer.value) return false;
+    // The Openings section's pages (a drill in progress, the line on the board) are not saved.
+    if (openingsOpen.peek()) return false;
     if (p === 'setup' || p === 'error') return true;
     if (p === 'over') return s.sheet.value === null || opts.hidden === true;
     return false;
@@ -2156,7 +2389,9 @@ export class GameController {
     const human: PgnPlayer = { name: 'You', elo: rc ? rc.before : s.profile.value.rating };
     const bot: PgnPlayer = { name: g.bot.name, elo: g.botElo };
     const opening = [...s.plies.value].reverse().find((p) => p.opening)?.opening ?? null;
+    const practice = g.opening?.line.name;
     return buildPgn({
+      ...(practice ? { event: `Opening practice: ${practice}` } : {}),
       startFen: g.startFen,
       plies: s.plies.value,
       white: g.playerColor === 'w' ? human : bot,
@@ -2201,6 +2436,13 @@ export class GameController {
       startedAt: g.startedAt,
       annotations,
     };
+    if (g.opening) {
+      const { line, mode, showLineMoves, custom } = g.opening;
+      saved.opening = { lineId: line.id, mode, showLineMoves };
+      // A line from outside the catalog is saved with its moves (a restore needs no lookup).
+      if (custom) saved.opening = { ...saved.opening, moves: [...line.uci], name: line.name, family: line.family };
+    }
+    if (g.preplayed) saved.preplayed = g.preplayed;
     if (s.startEval.value) saved.startEval = s.startEval.value;
     // The "Try again" prompt after a Retry (also under a hint asked for meanwhile): the retried
     // move is gone from `moves`, so a restore could not rebuild it.

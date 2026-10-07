@@ -10,7 +10,7 @@
  */
 import { Chess, type Color, type Move, type PieceSymbol, type Square } from 'chess.js';
 import type { AnalysisResult, PvLine, Score } from '../engine/types';
-import { PIECE_NAMES, pvToSan, sideToMove, uciToSan } from '../chess/utils';
+import { formatLine, PIECE_NAMES, pvToSan, sideToMove, uciToSan } from '../chess/utils';
 import type { Arrow, ArrowBrush, Classification, Explanation, MoveClass } from './types';
 import { detectSacrifice } from './sacrifice';
 import { scoreToWin } from './winprob';
@@ -55,6 +55,9 @@ import {
   type Principle,
   type Threat,
 } from './motifs';
+
+/** A book move's reason when nothing more specific is found ("Nf3 is a known opening move."). */
+export const BOOK_REASON = 'is a known opening move';
 
 /** Who the text addresses: 'you' = the mover is the user ("your knight"); 'neutral' = White/Black. */
 export type Perspective = 'you' | 'neutral';
@@ -723,10 +726,12 @@ function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove, opts: L
   }
   if (givenUp) return res(givenUp.title, givenUp.reason, keyLine, { motifs: givenUp.motifs, targets: took });
   // Not a line whose reply was a tie-break that gives material away for nothing (see `unforced`).
+  // The engine's continuation, numbered ("Engine line: 3. c4 Nf6 4. g3"): not a "main line", which
+  // the Openings section uses for the most studied way an opening goes.
   const main = unforced ? [] : playLine(fen, line.pv, 5).sans;
-  const mainLine = main.length > 1 ? [`Main line: ${main.join(' ')}.`] : [];
-  if (checks) return res('Check', 'gives check', mainLine, { fallback: true, motifs: ['check'] });
-  return res('Positional', 'improves the position', mainLine, { fallback: true });
+  const engineLine = main.length > 1 ? [`Engine line: ${formatLine(fen, main)}.`] : [];
+  if (checks) return res('Check', 'gives check', engineLine, { fallback: true, motifs: ['check'] });
+  return res('Positional', 'improves the position', engineLine, { fallback: true });
 }
 
 /**
@@ -1408,7 +1413,8 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     else if (cl.cls === 'great' && onlyMove && !headline.includes('the only move')) {
       details.push('It was the only good move here.');
     }
-    if (r?.fallback && details.length === 0) details.push(cmp?.detail, ...r.details);
+    // A book move needs no engine line after it (the opening's own moves are what comes next).
+    if (r?.fallback && details.length === 0 && cl.cls !== 'book') details.push(cmp?.detail, ...r.details);
     return done(headline, details, r?.title ?? 'Good move', [...(r?.motifs ?? []), ...(cmp?.motifs ?? [])]);
 
     /** What kind of move it is when nothing specific was found, instead of "improves the position". */
@@ -1416,7 +1422,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
       const sacked = cl.cls === 'brilliant' ? sacrificedPiece(fenBefore, moveUci, fenAfter, me, true) : null;
       if (sacked) return `sacrifices ${theOn(sacked, v.own)}`;
       if (onlyMove && bestLine?.score) return onlyMoveReason(bestLine.score);
-      if (cl.cls === 'book') return 'is a known opening move';
+      if (cl.cls === 'book') return BOOK_REASON;
       if (isBest) return cmp?.reason ?? fallback;
       if (cl.winAfter <= 1 - WINNING) return 'is a reasonable try in a difficult position';
       if (cl.winAfter >= WINNING) return `keeps ${v.own} winning position`;

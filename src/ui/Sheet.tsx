@@ -20,8 +20,41 @@ export interface SheetProps {
 
 type Phase = 'closed' | 'entering' | 'open' | 'closing';
 
-/** The open sheets, oldest first: Escape closes only the last (e.g. the paywall over the Menu). */
+/**
+ * The open sheets and other overlays (the Openings section), oldest first: Escape closes only the
+ * last (e.g. the paywall over the Menu).
+ */
 const openSheets: symbol[] = [];
+
+/**
+ * Makes an overlay a layer of the Escape stack while `active`: Escape runs `onEscape` only when
+ * this layer was opened last (sheets use it; so does the full-screen Openings section, whose
+ * Escape goes back a page). Returns whether the layer is on top now (e.g. for arrow keys).
+ */
+export function useEscapeLayer(active: boolean, onEscape: () => void): () => boolean {
+  const onEscapeRef = useRef(onEscape);
+  onEscapeRef.current = onEscape;
+  const tokenRef = useRef<symbol | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    const token = Symbol('layer');
+    tokenRef.current = token;
+    openSheets.push(token);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || openSheets[openSheets.length - 1] !== token) return;
+      e.preventDefault();
+      onEscapeRef.current();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      const i = openSheets.indexOf(token);
+      if (i >= 0) openSheets.splice(i, 1);
+      if (tokenRef.current === token) tokenRef.current = null;
+    };
+  }, [active]);
+  return () => tokenRef.current !== null && openSheets[openSheets.length - 1] === tokenRef.current;
+}
 
 /** Must match the closing transition in Sheet.css (plus a little slack). */
 const CLOSE_MS = 300;
@@ -32,6 +65,29 @@ const DISMISS_VELOCITY = 0.5;
 
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Keeps Tab inside `root` (a modal layer): from its last focusable element Tab goes to the first,
+ * and Shift+Tab from the first (or from `root` itself) to the last. `skip` leaves out elements
+ * that belong to another layer inside it (e.g. a sheet with its own trap).
+ */
+export function trapTab(e: KeyboardEvent, root: HTMLElement | null, skip?: string): void {
+  if (e.key !== 'Tab' || e.defaultPrevented || !root) return;
+  const items = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+    (el) => el.offsetParent !== null && !(skip && el.closest(skip)),
+  );
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement;
+  if (e.shiftKey && (active === first || active === root)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
 
 interface DragState {
   startY: number;
@@ -93,22 +149,7 @@ export function Sheet({ open, onClose, title, children, footer, hideTitle = fals
   }, [phase]);
 
   // Escape closes the topmost open sheet (the one opened last), not the ones under it.
-  useEffect(() => {
-    if (!open) return;
-    const token = Symbol('sheet');
-    openSheets.push(token);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || openSheets[openSheets.length - 1] !== token) return;
-      e.preventDefault();
-      onCloseRef.current();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      const i = openSheets.indexOf(token);
-      if (i >= 0) openSheets.splice(i, 1);
-    };
-  }, [open]);
+  useEscapeLayer(open, () => onCloseRef.current());
 
   function dragStart(y: number) {
     const panel = panelRef.current;
@@ -214,23 +255,7 @@ export function Sheet({ open, onClose, title, children, footer, hideTitle = fals
     if (drag.current) dragMove(e.clientY);
   };
 
-  const onPanelKeyDown = (e: KeyboardEvent) => {
-    if (e.key !== 'Tab') return;
-    const panel = panelRef.current;
-    if (!panel) return;
-    const items = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.offsetParent !== null);
-    if (!items.length) return;
-    const first = items[0];
-    const last = items[items.length - 1];
-    const active = document.activeElement;
-    if (e.shiftKey && (active === first || active === panel)) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && active === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
+  const onPanelKeyDown = (e: KeyboardEvent) => trapTab(e, panelRef.current);
 
   // Hairline under the header once content scrolls beneath it (set directly: no re-render per scroll).
   const onBodyScroll = (e: Event) => {

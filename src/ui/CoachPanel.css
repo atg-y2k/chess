@@ -345,7 +345,8 @@
  * Your move and the opponent's are both rated: the other one is a compact row inside the bubble,
  * above the expanded feedback ("You", first) or below it (the opponent). The bubble keeps its
  * height, so tapping the row only swaps the contents. A little tighter spacing leaves room for
- * two lines of text on a phone.
+ * two lines of text on a phone. (Opening practice's banner, OpeningBanner at the top of the
+ * bubble, is such a row too: `coach--dual` with `data-banner`.)
  */
 .coach--dual .coach-bubble {
   padding-top: 7px;
@@ -442,6 +443,10 @@
 }
 .coach-other[data-place='before']::after {
   inset: -16px -4px 0;
+}
+/* Under the opening banner: the banner keeps its own tap target. */
+.coach[data-banner] .coach-other[data-place='before']::after {
+  inset: -3px -4px 0;
 }
 .coach--dual .coach-toggle {
   position: relative;

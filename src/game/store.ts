@@ -7,6 +7,7 @@
  */
 import { computed, signal, type ReadonlySignal, type Signal } from '@preact/signals';
 import { Chess } from 'chess.js';
+import { BOOK_REASON } from '../analysis/explain';
 import type { Arrow, Explanation, MoveClass } from '../analysis/types';
 import { formatScore, resultScore, whiteBarFraction } from '../analysis/winprob';
 import { personaById, customPersona, BOTS } from '../bot/personas';
@@ -49,6 +50,7 @@ import {
 } from './coach';
 import type { ProFeature } from './entitlements';
 import { currentMove, drawReason, explorerFen, type DrawReason, type Explorer, type ExplorerBase, type ExplorerMove } from './explorer';
+import { lineMoveNumber, lineMoves, lineProgress, type LineMove, type LineStatus, type OpeningTarget } from './opening';
 import type { ReviewSummary } from './review';
 import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings, type Ply } from './types';
 
@@ -112,6 +114,14 @@ export interface GameInfo {
    * the assistance options come from the current settings.
    */
   settings: GameSettings;
+  /** Opening practice: the line this game follows (see game/opening.ts). A rematch keeps it. */
+  opening?: OpeningTarget;
+  /**
+   * The first `preplayed` plies were played before the game started (opening practice 'skip'):
+   * book moves (classification 'book'), not analyzed by the engine, not counted for accuracy, and
+   * never taken back. Absent = 0.
+   */
+  preplayed?: number;
 }
 
 export interface RatingChange {
@@ -239,7 +249,14 @@ export type CoachActionId =
   | 'retryBoot'
   | 'retryAnalysis'
   /** Opens the paywall for the action's `feature` (the coach's text is locked). */
-  | 'unlock';
+  | 'unlock'
+  /**
+   * Opening practice: not a button of the actions row but the banner at the top of the panel
+   * ("Italian Game · Move 3 of 5"); its label is the line's name, the status and the tone ('on',
+   * 'done', 'off'), separated by tabs (ui/OpeningBanner.tsx `openingBannerOf`). Opens the line in
+   * the Openings section.
+   */
+  | 'opening';
 
 export interface CoachActionView {
   id: CoachActionId;
@@ -272,9 +289,10 @@ export interface CoachView extends Omit<CoachPanelProps, 'actions' | 'onToggleCo
   /** Your move and the opponent's are both rated: the one not expanded, as a compact row. */
   other?: CoachOtherView;
   /**
-   * The game rates both your moves and the opponent's (coach and `rateOpponent` on), so the panel
-   * shows two of them from the opponent's first move on: the app gives it a little more height
-   * before it collapses to one row, whether or not `other` is there yet.
+   * The panel has a row more than the coach alone: the game rates both your moves and the
+   * opponent's (coach and `rateOpponent` on), so it shows two of them from the opponent's first move
+   * on (whether or not `other` is there yet), or it is an opening-practice game with its banner. The
+   * app gives it a little more height before it collapses to one row.
    */
   paired: boolean;
 }
@@ -334,6 +352,8 @@ export interface SheetsView {
     botColor: string;
     botElo: number;
     ratingChange?: RatingChange;
+    /** Opening practice: the line's name ("Opening practice: Italian Game" on the sheet). */
+    practice?: string;
   } | null;
 }
 
@@ -386,6 +406,34 @@ export interface PositionInfo {
   dests: Map<string, string[]>;
 }
 
+/** Opening practice (`store.openingPractice`): the line the game follows and where the game stands on it. */
+export interface OpeningPracticeView {
+  lineId: string;
+  /** The line's full name ("Italian Game: Two Knights Defense"). */
+  name: string;
+  /** Its family ("Italian Game"). */
+  family: string;
+  eco: string;
+  mode: OpeningTarget['mode'];
+  showLineMoves: boolean;
+  /** Of the live game (not the move being viewed). */
+  status: LineStatus;
+  /** The line's length in moves (a move = White's and Black's: "1. e4 e5" is move 1). */
+  moves: number;
+  /** The line's move the game is at (1-based; `moves` once complete). */
+  move: number;
+  /** On the line: its next move ("3. Bc4"), whoever plays it. */
+  nextMove?: LineMove;
+  /** The game left the line: the move that left it ("3. Nc3"), who played it, and the line's move there. */
+  leftAt?: { index: number; label: string; by: 'you' | 'opponent'; expected: LineMove };
+  /** Complete: the index of the ply that reached the line's end. */
+  completedAt?: number;
+  /** The banner's status: "Move 3 of 5", "Line complete", "Left at 3. Nc3". */
+  statusText: string;
+  /** The same as one sentence: "Opening practice: Italian Game — on the line (move 3 of 5)". */
+  summary: string;
+}
+
 export interface GameSummaryView {
   id: string;
   playerColor: Color;
@@ -434,6 +482,8 @@ export interface Store extends AppState {
   explorerPlayable: ReadonlySignal<ExplorerMove | null>;
   /** The explorer panel (in the coach panel's place) while exploring, else null. */
   explorerPanel: ReadonlySignal<ExplorerPanelView | null>;
+  /** Opening practice: the line the game follows and the game's place on it; null in a normal game. */
+  openingPractice: ReadonlySignal<OpeningPracticeView | null>;
 }
 
 /** The store as the UI should see it: every signal read-only. */
@@ -455,6 +505,8 @@ interface KnownEval {
 const NO_DESTS: Map<string, string[]> = new Map();
 const NO_ARROWS: Arrow[] = [];
 const NONE_LOCKED: ReadonlySet<ProFeature> = new Set();
+/** What "book" means, for a beginner (opening practice says it once). */
+const BOOK_MEANING = 'A “book” move is a well-known opening move that players have studied for years.';
 /** Your move's classes that keep its feedback expanded when the opponent's is rated too. */
 const ATTENTION_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['inaccuracy', 'mistake', 'miss', 'blunder']);
 
@@ -641,12 +693,120 @@ export function createStore(state: AppState): Store {
    */
   const ratesOpponent = computed(() => settings.value.rateOpponent && !!game.value?.assisted);
 
+  /** Plies the game started with (opening practice 'skip': played before it, never analyzed). */
+  const preplayed = computed(() => game.value?.preplayed ?? 0);
+
+  /** The human has moved in this game (the moves it started with do not count). */
+  const humanMoved = computed(() => {
+    const g = game.value;
+    const pre = preplayed.value;
+    return !!g && plies.value.some((p) => p.index >= pre && p.color === g.playerColor);
+  });
+
   /** The opponent's most recent move in the game (null before it has moved). */
   const lastBotPly = computed<Ply | null>(() => {
     const g = game.value;
     const ps = plies.value;
-    for (let i = ps.length - 1; i >= 0 && i >= ps.length - 2; i--) if (g && ps[i].color !== g.playerColor) return ps[i];
+    const pre = preplayed.value;
+    for (let i = ps.length - 1; i >= pre && i >= ps.length - 2; i--) if (g && ps[i].color !== g.playerColor) return ps[i];
     return null;
+  });
+
+  // --- opening practice --------------------------------------------------------------------------
+  const openingPractice = computed<OpeningPracticeView | null>(() => {
+    const g = game.value;
+    const o = g?.opening;
+    if (!g || !o) return null;
+    const { line } = o;
+    const ps = plies.value;
+    const p = lineProgress(line, g.startFen, ps);
+    const moves = lineMoves(line);
+    const move = p.status === 'complete' ? moves : lineMoveNumber(p.reached);
+    const view: OpeningPracticeView = {
+      lineId: line.id,
+      name: line.name,
+      family: line.family,
+      eco: line.eco,
+      mode: o.mode,
+      showLineMoves: o.showLineMoves,
+      status: p.status,
+      moves,
+      move,
+      statusText: '',
+      summary: '',
+    };
+    if (p.next) view.nextMove = p.next;
+    if (p.completedAt !== null) view.completedAt = p.completedAt;
+    const leftPly = p.left ? ps[p.left.index] : undefined;
+    if (p.left && leftPly) {
+      const by = leftPly.color === g.playerColor ? 'you' : 'opponent';
+      view.leftAt = { index: p.left.index, label: moveLabel(leftPly), by, expected: p.left.expected };
+    }
+    if (p.status === 'on-line') {
+      view.statusText = `Move ${move} of ${moves}`;
+      view.summary = `Opening practice: ${line.name} — on the line (move ${move} of ${moves})`;
+    } else if (p.status === 'complete') {
+      view.statusText = 'Line complete';
+      view.summary = `Opening practice: ${line.name} — line complete, you’re on your own now`;
+    } else {
+      const where = view.leftAt?.label;
+      view.statusText = where ? `Left at ${where}` : 'Off the line';
+      view.summary = `Opening practice: ${line.name} — ${where ? `left the line at ${where}` : 'off the line'}`;
+    }
+    return view;
+  });
+
+  /**
+   * What the coach says about the opening during play, each said once (until your next move): the
+   * line's next move on your turn (`showLineMoves`), who left the line and where, that the line is
+   * complete (or set up, 'skip'), and at the start that the bot follows the line.
+   */
+  const practiceNotes = computed<string[]>(() => {
+    const v = openingPractice.value;
+    const g = game.value;
+    if (!v || !g || phase.value !== 'playing' || outcome.value) return [];
+    const ps = plies.value;
+    const pre = preplayed.value;
+    // News until the human's next move.
+    const news = (index: number): boolean => !ps.some((p) => p.index > index && p.index >= pre && p.color === g.playerColor);
+    const notes: string[] = [];
+    // A move label never breaks after its number ("2.\u00a0Nf3").
+    const move = (label: string): string => label.replace(' ', '\u00a0');
+    if (v.status === 'left' && v.leftAt && news(v.leftAt.index)) {
+      const who = v.leftAt.by === 'you' ? 'You' : g.bot.name;
+      notes.push(
+        `${who} left the line at ${move(v.leftAt.label)} (the line continues ${move(v.leftAt.expected.label)}) — the game goes on normally.`,
+      );
+    } else if (v.status === 'complete' && v.completedAt !== undefined && news(v.completedAt)) {
+      notes.push(
+        v.completedAt < pre
+          ? `The moves of the ${v.name} line are on the board. You’re on your own from here!`
+          : `Line complete: that was the last move of the ${v.name} line. You’re on your own now!`,
+      );
+    } else if (v.status === 'on-line') {
+      const yours = v.nextMove?.color === g.playerColor;
+      if (v.showLineMoves && v.nextMove && yours) {
+        const warn = v.nextMove.dubious ? ' (a known mistake: this line shows how it gets punished)' : '';
+        notes.push(`Line move: ${move(v.nextMove.label)} — ${v.family}${warn}`);
+      }
+      // Only 'steer' follows the line ('skip' set it up; a mate line stops short, see the controller).
+      if (!humanMoved.value && v.mode === 'steer') {
+        notes.push(
+          v.showLineMoves
+            ? `The arrow shows the line’s next move. ${g.bot.name} follows the line as long as you do.`
+            : `${g.bot.name} follows the ${v.family} line as long as you do.`,
+        );
+      }
+    }
+    return notes;
+  });
+
+  /** On your turn on the line (`showLineMoves`): the line's next move as a light arrow. */
+  const lineGuide = computed<Arrow[]>(() => {
+    const v = openingPractice.value;
+    const g = game.value;
+    if (!v?.showLineMoves || v.status !== 'on-line' || !v.nextMove || v.nextMove.color !== g?.playerColor) return NO_ARROWS;
+    return uciArrow(v.nextMove.uci, 'line');
   });
 
   // --- explorer ----------------------------------------------------------------------------------
@@ -699,11 +859,13 @@ export function createStore(state: AppState): Store {
       if (ply && cl && offersShowBest(cl, ply.uci) && !locked('reviewDetails')) return uciArrow(cl.bestMoveUci, 'best');
       return NO_ARROWS;
     }
+    // Opening practice: the line's next move, under the best-move arrows when they are on.
+    const guide = phase.value === 'playing' && humanToMove.value && isLive.value ? lineGuide.value : NO_ARROWS;
     if (settings.value.showBestMoves && !locked('bestMoveArrows') && humanToMove.value && isLive.value) {
       const r = liveForDisplayed.value;
-      return r ? lineArrows(r) : NO_ARROWS;
+      return r ? [...guide, ...lineArrows(r)] : guide;
     }
-    return NO_ARROWS;
+    return guide;
   });
 
   /** During play, a move's rating shows when it is yours with the coach on, or the opponent's while they are rated. */
@@ -972,8 +1134,20 @@ export function createStore(state: AppState): Store {
   const coach = computed<CoachView>(() => {
     const view = coachContent();
     const auto = view.kind === 'minimal';
-    const paired = phase.value === 'playing' && settings.value.coach && ratesOpponent.value;
-    return { ...view, collapsed: state.coachCollapsed.value ?? auto, paired };
+    // Opening practice: the banner at the top of the panel, during the game and after it.
+    const v = openingPractice.value;
+    const tone = v?.status === 'complete' ? 'done' : v?.status === 'left' ? 'off' : 'on';
+    const banner: CoachActionView | null =
+      v && (phase.value === 'playing' || phase.value === 'over')
+        ? { id: 'opening', label: [v.name, v.statusText, tone].join('\t') }
+        : null;
+    const paired = (phase.value === 'playing' && settings.value.coach && ratesOpponent.value) || !!banner;
+    return {
+      ...view,
+      ...(banner ? { actions: [banner, ...view.actions] } : {}),
+      collapsed: state.coachCollapsed.value ?? auto,
+      paired,
+    };
   });
 
   function coachContent(): CoachContent {
@@ -1087,6 +1261,7 @@ export function createStore(state: AppState): Store {
         actions: [],
       };
     }
+    if (ply.index < preplayed.value) return { kind: 'review', ...preplayedView(ply), actions: [] };
     const cl = ply.classification;
     if (!cl) {
       if (analysisFailed(ply)) {
@@ -1139,11 +1314,23 @@ export function createStore(state: AppState): Store {
     if (s.coach && m.kind === 'retry') {
       const lines = [`Find a better move than ${m.san}.`];
       if (m.headline && !locked('coachExplanations')) lines.push(m.headline);
+      // Opening practice: back on the line, its move (`showLineMoves`) after the prompt.
+      lines.push(...practiceNotes.value);
       return { kind: 'coach', title: 'Try again', lines, busy: false, actions: [] };
     }
     // The verdict on your last move (the coach) and on the opponent's (while its moves are rated).
-    const mine = s.coach && m.kind === 'feedback' ? (plies.value[m.index] ?? null) : null;
+    const fb = s.coach && m.kind === 'feedback' ? (plies.value[m.index] ?? null) : null;
+    const mine = fb && fb.index >= preplayed.value ? fb : null;
     const theirs = ratesOpponent.value ? lastBotPly.value : null;
+    // Opening practice: what the coach says about the line comes first (see `practiceNotes`).
+    const notes = practiceNotes.value;
+    const withNotes = (c: CoachContent): CoachContent => {
+      // Opening practice: the first "book move" verdict on your moves says what "book" means.
+      const firstBook =
+        !!openingPractice.value && c.subject === 'you' && mine?.classification?.cls === 'book' && isFirstHumanPly(mine);
+      const lines = firstBook && !c.lines.includes(BOOK_MEANING) ? [...c.lines, BOOK_MEANING] : c.lines;
+      return notes.length || firstBook ? { ...c, lines: [...notes, ...lines] } : c;
+    };
     if (mine && theirs) {
       // Both: one expanded (the one the player picked, until the next move), the other as a row.
       // Your move stays expanded while it has something to fix (an inaccuracy or worse, something
@@ -1151,13 +1338,15 @@ export function createStore(state: AppState): Store {
       // checked too, so the panel does not swap back and forth on every move).
       const cf = state.coachFocus.value;
       const focus: CoachSubject = cf && cf.at === plies.value.length ? cf.subject : needsAttention(mine) ? 'you' : 'opponent';
-      return focus === 'you'
-        ? { ...ownFeedback(mine), other: feedbackRow(theirs, 'opponent') }
-        : { ...opponentFeedback(theirs), other: feedbackRow(mine, 'you') };
+      return withNotes(
+        focus === 'you'
+          ? { ...ownFeedback(mine), other: feedbackRow(theirs, 'opponent') }
+          : { ...opponentFeedback(theirs), other: feedbackRow(mine, 'you') },
+      );
     }
-    if (mine) return ownFeedback(mine);
-    if (theirs) return opponentFeedback(theirs);
-    return s.coach ? idleCoach() : minimalCoach();
+    if (mine) return withNotes(ownFeedback(mine));
+    if (theirs) return withNotes(opponentFeedback(theirs));
+    return s.coach ? idleCoach(notes) : withNotes(minimalCoach());
   }
 
   /** Browsing earlier moves during the game (a hint on the live position waits until you are back). */
@@ -1165,6 +1354,7 @@ export function createStore(state: AppState): Store {
     const g = game.value!;
     const ply = displayedPly.value;
     const back: CoachActionView[] = [{ id: 'backToGame', label: 'Back to game', primary: true }];
+    if (ply && ply.index < preplayed.value) return { kind: 'coach', ...preplayedView(ply), actions: back };
     if (ply && ply.classification && ratedDuringPlay(ply)) {
       const cl = ply.classification;
       const human = ply.color === g.playerColor;
@@ -1310,20 +1500,26 @@ export function createStore(state: AppState): Store {
     };
   }
 
-  function idleCoach(): CoachContent {
+  /**
+   * Waiting for a move (no feedback to show). Opening practice `notes` (see `practiceNotes`) come
+   * first and replace the general tip.
+   */
+  function idleCoach(notes: readonly string[] = []): CoachContent {
     const g = game.value!;
     const ps = plies.value;
+    const first = ps.length === preplayed.value;
     if (!humanTurnLive()) {
       return {
         kind: 'coach',
         title: `${g.bot.name} is thinking…`,
-        lines: ps.length === 0 ? [`“${g.bot.greeting}”`] : [],
+        lines: notes.length ? [...notes] : first ? [`“${g.bot.greeting}”`] : [],
         busy: false,
         actions: [],
       };
     }
+    if (notes.length) return { kind: 'coach', title: 'Your move', lines: [...notes], busy: false, actions: [] };
     const lines: string[] = [];
-    if (ps.length === 0) lines.push(`${g.bot.name}: “${g.bot.greeting}”`);
+    if (first) lines.push(`${g.bot.name}: “${g.bot.greeting}”`);
     const last = ps.at(-1);
     const o = last?.opening;
     if (o) lines.push(`Opening: ${o.name}`);
@@ -1342,6 +1538,28 @@ export function createStore(state: AppState): Store {
     const title = o ? o.name : humanTurnLive() ? 'Your move' : `${g.bot.name} is thinking…`;
     const lines = last ? [`${last.color === g.playerColor ? 'You' : g.bot.name} played ${moveLabel(last)}.`] : [];
     return { kind: 'minimal', title, lines, busy: false, actions: [] };
+  }
+
+  /** `ply` is the human's first move of the game (after the moves it started with). */
+  function isFirstHumanPly(ply: Ply): boolean {
+    const g = game.value;
+    const pre = preplayed.value;
+    return !!g && !plies.value.some((p) => p.index >= pre && p.index < ply.index && p.color === g.playerColor);
+  }
+
+  /** A move the game started with (opening practice 'skip'): a book move, played for you. */
+  function preplayedView(ply: Ply): Pick<CoachContent, 'title' | 'titleMove' | 'cls' | 'lines' | 'busy' | 'index'> {
+    const name = game.value?.opening?.line.name;
+    return {
+      ...verdictTitle(ply),
+      titleMove: moveLabel(ply),
+      lines: [
+        `This move was played for you before the game started${name ? `: it is part of the ${name} line` : ''}.`,
+        BOOK_MEANING,
+      ],
+      busy: false,
+      index: ply.index,
+    };
   }
 
   function analysisFailed(ply: Ply): boolean {
@@ -1393,7 +1611,7 @@ export function createStore(state: AppState): Store {
     const booting = p === 'boot' || p === 'error';
     const playing = p === 'playing' && !outcome.value;
     const g = game.value;
-    const hasHumanPly = !!g && plies.value.some((x) => x.color === g.playerColor);
+    const hasHumanPly = humanMoved.value;
     const m = coachMode.value;
     const x = explorer.value;
     if (x) {
@@ -1448,10 +1666,7 @@ export function createStore(state: AppState): Store {
     const g = game.value;
     const o = outcome.value;
     const rc = state.ratingChange.value;
-    const inProgress =
-      g && phase.value === 'playing' && !o && plies.value.some((p) => p.color === g.playerColor)
-        ? { rated: !g.assisted }
-        : null;
+    const inProgress = g && phase.value === 'playing' && !o && humanMoved.value ? { rated: !g.assisted } : null;
     const pending = state.pendingAssist.value;
     return {
       open: state.sheet.value,
@@ -1478,6 +1693,7 @@ export function createStore(state: AppState): Store {
               botColor: g.bot.color,
               botElo: g.botElo,
               ...(rc ? { ratingChange: rc } : {}),
+              ...(g.opening ? { practice: g.opening.line.name } : {}),
             }
           : null,
     };
@@ -1628,6 +1844,7 @@ export function createStore(state: AppState): Store {
     explorerDraw,
     explorerPlayable,
     explorerPanel,
+    openingPractice,
   };
 }
 
@@ -1636,10 +1853,14 @@ export function createStore(state: AppState): Store {
  * already names X as a move ("X was needed", "X was better", "You missed X, …").
  */
 export function explanationLines(e: Explanation | undefined | null, bestSan?: string | null): string[] {
-  const lines = e ? [e.headline, ...e.details] : [];
+  // "Nf3 is a known opening move." only repeats the verdict ("Nf3 is a book move"): say what "book" means instead.
+  const lines = e ? [e.headline, ...e.details].map((l) => (BOOK_ECHO.test(l) ? BOOK_MEANING : l)) : [];
   if (bestSan && !lines.some((l) => mentionsMove(l, bestSan))) lines.push(`Best was ${bestSan}.`);
   return lines;
 }
+
+/** A book move's plain reason, which repeats its verdict (see `explanationLines`). */
+const BOOK_ECHO = new RegExp(`^\\S+ ${BOOK_REASON}\\.$`);
 
 function stripClass(p: Ply): Ply {
   if (!p.classification) return p;
