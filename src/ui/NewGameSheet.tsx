@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
 import type { Color, GameSettings } from '../game/types';
-import { IconChart, IconCoach, IconEye, IconSound, IconUndo } from './icons';
+import { IconBook, IconBotRated, IconChart, IconChevronRight, IconCoach, IconEye, IconSound, IconUndo } from './icons';
 import { LevelPicker, type StartingLevel } from './LevelPicker';
 import { IconLock } from './PaywallSheet';
 import { Sheet } from './Sheet';
@@ -41,6 +41,33 @@ export interface NewGameSheetProps {
    */
   arrowsLocked?: string | null;
   onUnlock?: () => void;
+  /** Opens the Openings section (a "Learn openings" row; omitted: none). */
+  onLearnOpenings?: () => void;
+}
+
+/**
+ * The New game sheet's line on rating the opponent's moves (its note says the game will be
+ * unrated). It promises no explanations: those are Pro where Pro is sold.
+ */
+export const RATE_OPPONENT_DESCRIPTION = 'See whether the computer found the best move, rated like your moves';
+/** The Menu's line on it: as for best-move arrows, what it does to the rating (the next games too). */
+export const RATE_OPPONENT_MENU_DESCRIPTION = 'Makes your games unrated while it’s on';
+
+/**
+ * The note under the options: what makes a game unrated, or that this one will be (best-move
+ * arrows or the opponent's move ratings are on).
+ */
+export function unratedNote(o: { arrows: boolean; rateOpponent: boolean }): { text: string; warn: boolean } {
+  if (o.arrows && o.rateOpponent) {
+    return { text: 'Best-move arrows and your opponent’s move ratings are on, so this game won’t count for your rating.', warn: true };
+  }
+  if (o.arrows) return { text: 'Best-move arrows are on, so this game won’t count for your rating.', warn: true };
+  if (o.rateOpponent) return { text: 'Your opponent’s moves are rated, so this game won’t count for your rating.', warn: true };
+  return {
+    text:
+      'The coach and evaluation bar are fine in rated games; takebacks, hints, Retry, the explorer, best-move arrows and rating your opponent’s moves make a game unrated.',
+    warn: false,
+  };
 }
 
 /** What starting a new game does to the game in progress (null when there is none). */
@@ -129,6 +156,7 @@ export function settingsFromDraft(
     coach: d.coach ?? initial.coach,
     showEvalBar: d.showEvalBar ?? initial.showEvalBar,
     showBestMoves: d.showBestMoves ?? initial.showBestMoves,
+    rateOpponent: d.rateOpponent ?? initial.rateOpponent,
     sound: d.sound ?? initial.sound,
     allowTakebacks: d.allowTakebacks ?? initial.allowTakebacks,
   };
@@ -155,6 +183,7 @@ export function NewGameSheet({
   onSetLevel,
   arrowsLocked,
   onUnlock,
+  onLearnOpenings,
 }: NewGameSheetProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial, bots));
   /** The player chose an opponent (card, slider or "Match my rating") since the sheet opened. */
@@ -162,6 +191,8 @@ export function NewGameSheet({
   const scrollerRef = useRef<HTMLDivElement>(null);
   const colorLabelId = useId();
   const levelLabelId = useId();
+  const openingsLabelId = useId();
+  const openingsDescId = useId();
   const rating = Math.round(playerRating);
 
   // Start from `initial` every time the sheet opens.
@@ -219,6 +250,7 @@ export function NewGameSheet({
   const arrowsOn = draft.showBestMoves && !arrowsLocked;
   const start = () => onStart(settingsFromDraft(initial, { ...draft, showBestMoves: arrowsOn }, bots, rating));
   const abandon = abandonNote(inProgress);
+  const note = unratedNote({ arrows: arrowsOn, rateOpponent: draft.rateOpponent });
 
   const hero = draft.adaptive
     ? {
@@ -332,6 +364,29 @@ export function NewGameSheet({
           Play as
         </h3>
         <ColorPicker labelledBy={colorLabelId} value={draft.playerColor} onChange={(c) => set({ playerColor: c })} />
+        {onLearnOpenings && (
+          <button
+            type="button"
+            class="ngs-openings"
+            data-id="learn-openings"
+            aria-labelledby={openingsLabelId}
+            aria-describedby={openingsDescId}
+            onClick={onLearnOpenings}
+          >
+            <span class="ngs-openings-icon" aria-hidden="true">
+              <IconBook size={18} />
+            </span>
+            <span class="ngs-openings-text">
+              <span class="ngs-openings-label" id={openingsLabelId}>
+                Learn openings
+              </span>
+              <span class="ngs-openings-desc" id={openingsDescId}>
+                Good first moves, step by step. Then play them here.
+              </span>
+            </span>
+            <IconChevronRight size={18} />
+          </button>
+        )}
       </section>
 
       <section class="sheet-section">
@@ -358,11 +413,20 @@ export function NewGameSheet({
           <Toggle
             id="showBestMoves"
             label="Best-move arrows"
-            description={arrowsLocked || "Shows the engine's top moves"}
+            description={arrowsLocked || 'Shows the engine’s top moves'}
             checked={arrowsOn}
             onChange={arrowsLocked ? () => onUnlock?.() : (v) => set({ showBestMoves: v })}
             icon={arrowsLocked ? <IconLock /> : <IconEye />}
             iconColor={arrowsLocked ? 'var(--warning)' : 'var(--cls-brilliant)'}
+          />
+          <Toggle
+            id="rateOpponent"
+            label="Rate opponent’s moves"
+            description={RATE_OPPONENT_DESCRIPTION}
+            checked={draft.rateOpponent}
+            onChange={(v) => set({ rateOpponent: v })}
+            icon={<IconBotRated />}
+            iconColor="var(--cls-inaccuracy)"
           />
           <Toggle
             id="allowTakebacks"
@@ -382,13 +446,9 @@ export function NewGameSheet({
             iconColor="var(--cls-miss)"
           />
         </div>
-        <p class="sheet-note" data-warn={arrowsOn ? '' : undefined}>
+        <p class="sheet-note" data-id="unrated-note" data-warn={note.warn ? '' : undefined}>
           <InfoGlyph />
-          <span>
-            {arrowsOn
-              ? 'Best-move arrows are on, so this game won’t count for your rating.'
-              : 'The coach and evaluation bar are fine in rated games; takebacks, hints, Retry and best-move arrows make a game unrated.'}
-          </span>
+          <span>{note.text}</span>
         </p>
       </section>
     </Sheet>

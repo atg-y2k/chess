@@ -1,0 +1,344 @@
+/* ExplorerPanel: the explorer's card in the coach's place (blue, like the explorer's board frame). */
+
+.xpanel {
+  --xpanel-bg: color-mix(in srgb, var(--explore) 9%, var(--surface));
+  --xpanel-border: color-mix(in srgb, var(--explore) 55%, var(--border));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 92px;
+  max-height: var(--coach-max-height, 196px);
+  margin: 0 var(--gap);
+  padding: 8px 12px 9px;
+  border: 1px solid var(--xpanel-border);
+  border-radius: var(--radius-lg);
+  background: var(--xpanel-bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.xpanel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+}
+
+.xpanel-tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  border-radius: 11px;
+  background: var(--explore);
+  color: var(--explore-text);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.xpanel-tag svg {
+  stroke-width: 2.4;
+}
+.xpanel-tag--icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+.xpanel-from {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+.xpanel-toggle {
+  appearance: none;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: -12px -12px -12px auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.xpanel-chevron {
+  flex: none;
+  transform: rotate(90deg);
+}
+.xpanel-chevron--up {
+  transform: rotate(-90deg);
+}
+
+.xpanel-move {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 26px;
+  margin-top: 6px;
+}
+
+.xpanel-title {
+  flex: none;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.xpanel-verdict {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--xpanel-tone-text, var(--text-dim));
+}
+.xpanel[data-cls] {
+  --xpanel-tone-text: var(--xpanel-tone);
+}
+:root[data-theme='light'] .xpanel[data-cls] {
+  --xpanel-tone-text: color-mix(in srgb, var(--xpanel-tone) 72%, var(--text));
+}
+
+.xpanel-eval {
+  flex: none;
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Only as tall as its text (scrolling when short of room), so "Best here" follows it. */
+.xpanel-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin-top: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.xpanel-body::-webkit-scrollbar {
+  display: none;
+}
+.xpanel-body[data-more] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+}
+
+.xpanel-line {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.42;
+  color: var(--text-dim);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.xpanel-line + .xpanel-line {
+  margin-top: 3px;
+}
+.xpanel-line--lead {
+  color: var(--text);
+  font-weight: 500;
+}
+/* What to play next: always in view, under the (scrolling) explanation. */
+.xpanel-best {
+  flex: none;
+  margin: 4px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.xpanel-notice {
+  flex: none;
+  margin: 6px 0 0;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 16%, var(--surface-2));
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.xpanel-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 7px;
+}
+
+.xpanel .xpanel-action {
+  position: relative;
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1;
+  white-space: nowrap;
+}
+/* Extend the tap target to 44px without making the pill taller. */
+.xpanel .xpanel-action::after {
+  content: '';
+  position: absolute;
+  inset: -6px -4px;
+}
+/* The arrows toggle ("Arrows on" / "Arrows off"): outlined in the explorer's color while on. */
+.xpanel-action[data-pressed] {
+  box-shadow: inset 0 0 0 1.5px var(--explore);
+  color: var(--explore);
+}
+.xpanel-action[data-action='arrows'] {
+  margin-right: auto;
+}
+
+.xpanel-spin {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2.5px solid var(--surface-3);
+  border-top-color: var(--explore);
+  animation: xpanel-rot 0.8s linear infinite;
+}
+@keyframes xpanel-rot {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The bot still thinking in the real game. */
+.xpanel-notice-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--warning);
+  animation: xpanel-pulse 1.1s ease-in-out infinite alternate;
+}
+@keyframes xpanel-pulse {
+  to {
+    opacity: 0.3;
+  }
+}
+
+/* Collapsed (short phones): one 44px row, with the main action beside it, and the news from the game under it. */
+.xpanel--collapsed {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-height: 0;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.xpanel-row {
+  appearance: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 8px 0 7px;
+  border: 1px solid var(--xpanel-border);
+  border-radius: 22px;
+  background: var(--xpanel-bg);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.xpanel-row:disabled {
+  cursor: default;
+}
+.xpanel-row .xpanel-title {
+  font-size: 14px;
+}
+.xpanel-row .xpanel-verdict {
+  font-size: 13.5px;
+}
+.xpanel-row .xpanel-eval {
+  font-size: 12px;
+}
+.xpanel-row .xpanel-chevron {
+  color: var(--text-faint);
+  margin-left: 2px;
+}
+.xpanel-row:not(:has(.xpanel-eval)) .xpanel-chevron {
+  margin-left: auto;
+}
+.xpanel-row-action {
+  flex: none;
+}
+/* The row shrinks beside the action rather than pushing it onto the next line (the notice's). */
+.xpanel--collapsed > .xpanel-row {
+  flex-basis: 0;
+}
+.xpanel-notice--row {
+  flex: 1 0 100%;
+  margin: 0;
+  padding: 3px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+/* A narrow row with the main action beside it: the class icon says the verdict. */
+@container panel (max-width: 420px) {
+  .xpanel--collapsed:has(> .xpanel-row-action) .xpanel-row .xpanel-verdict {
+    display: none;
+  }
+  .xpanel--collapsed:has(> .xpanel-row-action) .xpanel-row .xpanel-eval {
+    margin-left: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xpanel-spin {
+    animation-duration: 2s;
+  }
+  .xpanel-notice-dot {
+    animation: none;
+  }
+}

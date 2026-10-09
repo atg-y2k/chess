@@ -43,7 +43,8 @@ export interface Classification {
   playedMoveSan: string;
 }
 
-export type ArrowBrush = 'best' | 'alt' | 'threat' | 'played';
+/** Arrow kinds; 'line' is opening practice's next move of the line (a light guide, not engine advice). */
+export type ArrowBrush = 'best' | 'alt' | 'threat' | 'played' | 'line';
 
 export interface Arrow {
   from: string; // e.g. "e2"

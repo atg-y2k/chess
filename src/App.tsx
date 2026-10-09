@@ -16,10 +16,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 import { BOTS } from './bot/personas';
 import { copyText } from './clipboard';
 import { rememberedEngineMode, resetEngineMode } from './engine/createEngines';
-import type { GameController } from './game/controller';
+import type { GameController, OpeningGameOptions } from './game/controller';
 import { PRO_NAME } from './game/entitlements';
 import type { ReadonlyStore, ToolbarId } from './game/store';
-import type { PromotionPiece } from './game/types';
+import type { GameSettings, PromotionPiece } from './game/types';
+import { closeOpenings, openingsOpen, openOpenings, popPage } from './openings/session';
 import type { OfflineStatus } from './pwa';
 import { STARTING_LEVELS } from './rating/rating';
 import { applyTheme, loadTheme, saveTheme, watchSystemTheme, type ThemePref } from './theme';
@@ -28,17 +29,22 @@ import { CoachPanel } from './ui/CoachPanel';
 import { ConfirmSheet, assistPrompt } from './ui/ConfirmSheet';
 import { EvalBar } from './ui/EvalBar';
 import { EvalGraph } from './ui/EvalGraph';
+import { ExplorerPanel } from './ui/ExplorerPanel';
 import { GameOverSheet } from './ui/GameOverSheet';
 import {
+  IconBook,
   IconBulb,
   IconChart,
   IconChevronLeft,
   IconChevronRight,
   IconClose,
   IconCoach,
+  IconCpu,
+  IconExplore,
   IconFlip,
   IconMenu,
   IconPlus,
+  IconReset,
   IconUndo,
 } from './ui/icons';
 import { MenuSheet } from './ui/MenuSheet';
@@ -47,6 +53,7 @@ import { NewGameSheet } from './ui/NewGameSheet';
 import { LockedIcon, PaywallSheet } from './ui/PaywallSheet';
 import { PlayerStrip } from './ui/PlayerStrip';
 import { ReviewPanel } from './ui/ReviewPanel';
+import { trapTab, useEscapeLayer } from './ui/Sheet';
 import { Toolbar, type ToolbarItem } from './ui/Toolbar';
 import './App.css';
 
@@ -66,6 +73,19 @@ export interface AppProps {
  * so the panel does not flip between the two forms from one move to the next.)
  */
 export const COACH_TIGHT_PX = 144;
+/**
+ * The same when the game rates both your moves and the opponent's: the other move's compact row
+ * (≈ 37 px, less some spacing) must fit as well, so the text keeps about two lines (with a
+ * one-line title: see `PANEL_MIN_TEXT_PX` for the rest).
+ */
+export const COACH_TIGHT_PAIRED_PX = 164;
+/**
+ * The coach with both moves rated, and the explorer, have more fixed rows than the coach alone (the
+ * other move, a title over two lines in a narrow column; the explored move, "Best here", news from
+ * the game): when the expanded panel leaves its text less than this (CSS px, two lines) and the
+ * text does not fit, it collapses to one row as on a short phone, until the slot changes size.
+ */
+export const PANEL_MIN_TEXT_PX = 38;
 /** Below this slot height the review summary floats over the board instead of squeezing into the slot. */
 export const REVIEW_FLOAT_PX = 300;
 /** How long a toast stays up (ms). */
@@ -85,6 +105,7 @@ export function App({ controller: c, offline }: AppProps) {
   const phase = s.phase.value;
   const evalVisible = useComputed(() => s.evalBar.value.visible).value;
   const graphVisible = useComputed(() => s.evalGraph.value.visible).value;
+  const exploring = useComputed(() => !!s.explorer.value).value;
   const [theme, setTheme] = useState<ThemePref>(loadTheme);
   const themeRef = useRef(theme);
   themeRef.current = theme;
@@ -148,11 +169,12 @@ export function App({ controller: c, offline }: AppProps) {
   // Desktop / keyboard: ← → step through the moves.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || s.sheet.value) return;
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || s.sheet.value || openingsOpen.value) return;
       const el = e.target instanceof Element ? e.target : null;
       if (el?.closest('input, textarea, select, [role="slider"], [contenteditable]')) return;
       if (e.key === 'ArrowLeft') c.stepBack();
       else if (e.key === 'ArrowRight') c.stepForward();
+      else if (e.key === 'Escape' && s.explorer.value) c.exitExplorer();
       else return;
       e.preventDefault();
     };
@@ -167,9 +189,12 @@ export function App({ controller: c, offline }: AppProps) {
         data-phase={phase}
         data-evalbar={evalVisible ? '' : undefined}
         data-graph={graphVisible ? '' : undefined}
+        data-exploring={exploring ? '' : undefined}
         aria-hidden={phase === 'boot' || phase === 'error' ? 'true' : undefined}
       >
-        <Player store={s} which="top" />
+        <Player store={s} which="top">
+          {exploring && <ExploringTag onExit={() => c.exitExplorer()} />}
+        </Player>
         <BoardArea c={c} />
         <Player store={s} which="bottom">
           <BackChip c={c} />
@@ -187,6 +212,7 @@ export function App({ controller: c, offline }: AppProps) {
         notify={notify}
         offlineReady={!!offline?.value}
       />
+      <Openings c={c} />
       <Paywall c={c} />
       <Splash phase={phase} download={s.engineDownload} />
       {phase === 'error' && <ErrorScreen c={c} />}
@@ -233,7 +259,26 @@ function BackChip({ c }: { c: GameController }) {
 /** Browsing earlier moves of a game in progress (or finished, outside the review). */
 function backChipShown(s: ReadonlyStore): boolean {
   const phase = s.phase.value;
-  return !s.isLive.value && (phase === 'playing' || phase === 'over') && s.coachMode.value.kind !== 'showBest';
+  return (
+    !s.isLive.value &&
+    (phase === 'playing' || phase === 'over') &&
+    s.coachMode.value.kind !== 'showBest' &&
+    !s.explorer.value
+  );
+}
+
+/**
+ * "Exploring ✕" on the top player strip, with the frame around the board (App.css): not the real
+ * game. Tapping it goes back to the game, like the toolbar's Exit.
+ */
+function ExploringTag({ onExit }: { onExit: () => void }) {
+  return (
+    <button type="button" class="app-explore-tag" data-id="exploring" aria-label="Exploring. Back to the game" onClick={onExit}>
+      <IconExplore size={15} />
+      Exploring
+      <IconClose size={14} class="app-explore-tag-x" />
+    </button>
+  );
 }
 
 /** [eval bar | board]. */
@@ -241,7 +286,8 @@ function BoardArea({ c }: { c: GameController }) {
   const s = c.store;
   const board = s.board.value;
   const onMove = (from: string, to: string, promotion?: PromotionPiece) => {
-    c.playerMove(from, to, promotion);
+    if (s.explorer.value) c.explorerMove(from, to, promotion);
+    else c.playerMove(from, to, promotion);
   };
   return (
     <div class="app-board">
@@ -268,16 +314,28 @@ function EvalBarSlot({ store }: { store: ReadonlyStore }) {
 function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean> }) {
   const s = c.store;
   const ref = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState(0);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const height = size.height;
   const [peek, setPeek] = useState(false);
-  const fen = s.displayedFen.value;
-  const review = summary.value ? s.review.value : null;
-  const tight = height > 0 && height < COACH_TIGHT_PX;
+  /** The slot (kind and size) in which the expanded panel was too short for its text. */
+  const [squeezed, setSqueezed] = useState<string | null>(null);
+  const explorer = s.explorerPanel.value;
+  const fen = s.explorerPosition.value?.fen ?? s.displayedFen.value;
+  const review = summary.value && !explorer ? s.review.value : null;
+  const paired = !explorer && s.coach.value.paired;
+  const kind = explorer ? 'explorer' : paired ? 'paired' : 'coach';
+  const slot = `${kind} ${size.width}x${height}`;
+  const tight =
+    height > 0 && (height < (paired ? COACH_TIGHT_PAIRED_PX : COACH_TIGHT_PX) || (kind !== 'coach' && squeezed === slot));
 
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const measure = () => setHeight(el.clientHeight);
+    const measure = () => {
+      const width = el.clientWidth;
+      const height = el.clientHeight;
+      setSize((o) => (o.width === width && o.height === height ? o : { width, height }));
+    };
     measure();
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(measure);
@@ -285,11 +343,34 @@ function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean>
     return () => ro.disconnect();
   }, []);
 
+  // Too little room for the expanded panel's text (see PANEL_MIN_TEXT_PX): one row instead, for as
+  // long as the slot keeps this size (so it does not switch back and forth from move to move).
+  useLayoutEffect(() => {
+    if (kind === 'coach' || tight || review || height === 0) return;
+    const body = ref.current?.querySelector<HTMLElement>('.coach-body, .xpanel-body');
+    if (body && body.clientHeight < PANEL_MIN_TEXT_PX && body.scrollHeight > body.clientHeight + 2) setSqueezed(slot);
+  });
+
   // A floated coach bubble closes when the position changes (a move was made or browsed).
   useEffect(() => setPeek(false), [fen, tight]);
 
   let content: ComponentChild;
-  if (review) {
+  if (explorer) {
+    content = (
+      <ExplorerPanel
+        {...explorer}
+        collapsed={tight && !peek}
+        onToggleCollapsed={tight ? () => setPeek((p) => !p) : undefined}
+        actions={explorer.actions.map((a) => ({
+          ...a,
+          onClick: () => {
+            if (a.id !== 'arrows') setPeek(false);
+            c.runExplorerAction(a.id);
+          },
+        }))}
+      />
+    );
+  } else if (review) {
     const select = (i: number) => {
       summary.value = false;
       c.goTo(i);
@@ -307,6 +388,14 @@ function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean>
     const collapsed = tight ? !peek : coach.collapsed;
     // The "Back to game" chip already offers this while browsing.
     const actions = backChipShown(s) ? coach.actions.filter((a) => a.id !== 'backToGame') : coach.actions;
+    // Both moves rated: the other one's row expands it (and opens a collapsed panel).
+    const other = coach.other;
+    const selectOther = (): void => {
+      if (!other) return;
+      c.selectCoachFeedback(other.subject);
+      if (tight) setPeek(true);
+      else if (collapsed) c.toggleCoachCollapsed();
+    };
     content = (
       <CoachPanel
         cls={coach.cls}
@@ -316,6 +405,9 @@ function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean>
         busy={coach.busy}
         collapsed={collapsed}
         onToggleCollapsed={tight ? () => setPeek((p) => !p) : () => c.toggleCoachCollapsed()}
+        other={other ? { ...other, onSelect: selectOther } : undefined}
+        who={coach.who}
+        verdict={coach.verdict}
         actions={actions.map((a) => ({
           id: a.id,
           label: a.label,
@@ -347,13 +439,15 @@ function GraphArea({ c }: { c: GameController }) {
   const s = c.store;
   const g = s.evalGraph.value;
   const playing = s.phase.value === 'playing';
+  // The game's graph stays while exploring, dimmed and not tappable (the explorer has its own line).
+  const exploring = !!s.explorer.value;
   return (
-    <div class="app-graph">
+    <div class="app-graph" data-dim={exploring ? '' : undefined}>
       <EvalGraph
         points={g.points}
         current={g.current}
         markers={g.markers}
-        onSelect={(i) => c.goTo(i)}
+        onSelect={exploring ? undefined : (i) => c.goTo(i)}
         height={GRAPH_HEIGHT}
         minSpan={playing ? GRAPH_MIN_SPAN : 0}
       />
@@ -361,17 +455,44 @@ function GraphArea({ c }: { c: GameController }) {
   );
 }
 
+/**
+ * The game's moves, or the explored line while exploring. While the game's position has an
+ * opening name, a chip at the end ("📖 Italian Game") opens that opening in the Openings section
+ * (an opening-practice game has the coach's banner for that instead).
+ */
 function Moves({ c }: { c: GameController }) {
+  const s = c.store;
+  const select = (i: number) => (s.explorer.value ? c.explorerGoTo(i) : c.goTo(i));
+  const exploring = !!s.explorer.value;
+  const opening = exploring || s.openingPractice.value ? null : (s.gameSummary.value?.opening ?? null);
   return (
-    <div class="app-moves">
-      <MoveList {...c.store.moveList.value} onSelect={(i) => c.goTo(i)} />
+    <div class="app-moves" data-exploring={exploring ? '' : undefined} data-opening={opening ? '' : undefined}>
+      <MoveList {...s.moveList.value} onSelect={select} />
+      {opening && (
+        <button
+          type="button"
+          class="app-opening-chip"
+          data-id="opening-chip"
+          aria-label={`${opening.name}: learn this opening`}
+          onClick={() => openOpenings({ name: opening.name, eco: opening.eco })}
+        >
+          <IconBook size={15} />
+          <span class="app-opening-chip-name">{openingFamilyOf(opening.name)}</span>
+        </button>
+      )}
     </div>
   );
 }
 
+/** "Italian Game: Giuoco Piano" -> "Italian Game" (the family, as the chip shows it). */
+function openingFamilyOf(name: string): string {
+  return name.split(':')[0].split(', with ')[0].trim();
+}
+
 /**
- * Toolbar per phase. Playing: New, Undo, Hint, Flip, Coach, Menu. Finished: New, Flip, ‹, ›, Menu,
- * Review. Review: Report (the summary), Flip, ‹, ›, Menu, Close.
+ * Toolbar per phase. Playing: New, Undo, Hint, Explore, Flip, Coach, Menu. Finished: New, Flip, ‹,
+ * ›, Explore, Menu, Review. Review: Report (the summary), Flip, ‹, ›, Explore, Menu, Close.
+ * Exploring: Reset, Flip, Back, Forward, Engine reply, Exit.
  */
 function Tools({ c, summary }: { c: GameController; summary: Signal<boolean> }) {
   const s = c.store;
@@ -390,8 +511,19 @@ function Tools({ c, summary }: { c: GameController; summary: Signal<boolean> }) 
   const menu = item('menu', 'Menu', <IconMenu />, () => c.openSheet('menu'));
   const prev = item('prev', 'Prev', <IconChevronLeft />, () => c.stepBack());
   const next = item('next', 'Next', <IconChevronRight />, () => c.stepForward());
+  const exploreIcon = t.explore.locked ? <LockedIcon><IconExplore /></LockedIcon> : <IconExplore />;
+  const explore = item('explore', 'Explore', exploreIcon, () => c.requestExplore());
   let items: ToolbarItem[];
-  if (phase === 'review') {
+  if (s.explorer.value) {
+    items = [
+      item('explorerReset', 'Reset', <IconReset />, () => c.explorerReset()),
+      flip,
+      { ...prev, label: 'Back' },
+      { ...next, label: 'Forward' },
+      item('explorerReply', 'Reply', <IconCpu />, () => void c.explorerReply()),
+      item('explorerExit', 'Exit', <IconClose />, () => c.exitExplorer()),
+    ];
+  } else if (phase === 'review') {
     const shown = summary.value;
     items = [
       {
@@ -404,24 +536,28 @@ function Tools({ c, summary }: { c: GameController; summary: Signal<boolean> }) 
       flip,
       prev,
       next,
+      explore,
       menu,
       { ...item('review', 'Close', <IconClose />, () => c.exitReview()), active: undefined },
     ];
   } else if (phase === 'over') {
-    items = [newGame, flip, prev, next, menu, item('review', 'Review', <IconChart />, () => void c.startReview())];
+    const review = item('review', 'Review', <IconChart />, () => void c.startReview());
+    items = [newGame, flip, prev, next, explore, menu, review];
   } else {
     items = [
       newGame,
       item('undo', 'Undo', <IconUndo />, () => c.requestUndo()),
       item('hint', 'Hint', t.hint.locked ? <LockedIcon><IconBulb /></LockedIcon> : <IconBulb />, () => c.requestHint()),
+      explore,
       flip,
       item('coach', 'Coach', <IconCoach />, () => c.toggleCoach()),
       menu,
     ];
   }
+  const label = s.explorer.value ? 'Explorer controls' : phase === 'review' ? 'Review controls' : 'Game controls';
   return (
     <div class="app-tools">
-      <Toolbar items={items} label={phase === 'review' ? 'Review controls' : 'Game controls'} />
+      <Toolbar items={items} label={label} />
     </div>
   );
 }
@@ -483,6 +619,7 @@ function Sheets({
         onSetLevel={(rating) => c.setStartingRating(rating)}
         onStart={(settings) => c.newGame(settings)}
         onClose={close}
+        onLearnOpenings={() => openOpenings()}
         arrowsLocked={arrowsLocked ? `Part of ${PRO_NAME}` : null}
         onUnlock={() => pro.openPaywall('bestMoveArrows')}
       />
@@ -513,6 +650,7 @@ function Sheets({
           close();
         }}
         onNewGame={() => c.openSheet('new')}
+        onOpenings={() => openOpenings()}
         engine={{ mode: engineMode, singleUntil }}
         onRetryDualEngines={retryDualEngines}
         offlineReady={offlineReady}
@@ -549,6 +687,202 @@ function Sheets({
     </>
   );
 }
+
+// -------------------------------------------------------------------------------------------------
+// Openings
+
+type OpeningsModule = typeof import('./ui/openings/OpeningsView');
+let openingsModule: Promise<OpeningsModule> | null = null;
+
+/** The Openings section's code and styles (a lazy chunk, precached for offline use; a failed load can be retried). */
+function loadOpeningsModule(): Promise<OpeningsModule> {
+  openingsModule ??= import('./ui/openings/OpeningsView').catch((e: unknown) => {
+    openingsModule = null;
+    throw e;
+  });
+  return openingsModule;
+}
+
+/** Must match the closing animation of `.openings-shell` in App.css (plus a little slack). */
+const OPENINGS_CLOSE_MS = 300;
+
+/**
+ * The Openings section (src/ui/openings, lazy-loaded): full screen over the game and its sheets,
+ * under the paywall. It never touches the game: closing it shows the screen (and sheet) it was
+ * opened from, as it was. Back, Escape and the browser's or Android's Back button go back a page
+ * (and close it from its first page). Playing an opening starts the game and closes it.
+ */
+function Openings({ c }: { c: GameController }) {
+  const open = openingsOpen.value;
+  const [mounted, setMounted] = useState(open);
+  const [mod, setMod] = useState<OpeningsModule | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    const t = window.setTimeout(() => setMounted(false), OPENINGS_CLOSE_MS);
+    return () => window.clearTimeout(t);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || mod) return;
+    let live = true;
+    setFailed(false);
+    loadOpeningsModule().then(
+      (m) => live && setMod(m),
+      (e: unknown) => {
+        console.warn('[openings] could not load the section', e);
+        if (live) setFailed(true);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [open, mod, attempt]);
+
+  const back = () => void popPage();
+  const isTop = useEscapeLayer(open, back);
+  useBackButton(open, back);
+
+  // Focus moves into the section (screen readers and keyboards would stay on the Menu or sheet it
+  // covers) and goes back where it was when it closes.
+  const shellRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const shell = shellRef.current;
+    if (!open || !mounted || !shell) return;
+    const before = document.activeElement instanceof HTMLElement && !shell.contains(document.activeElement) ? document.activeElement : null;
+    if (!shell.contains(document.activeElement)) shell.focus({ preventScroll: true });
+    return () => {
+      const now = document.activeElement;
+      if (before?.isConnected && (!now || now === document.body || shell.contains(now))) before.focus({ preventScroll: true });
+    };
+  }, [open, mounted]);
+
+  if (!mounted) return null;
+  const s = c.store;
+  // The phase changes when the engine starts (or restarts), and the analysis service with it.
+  const phase = s.phase.value;
+  // During a rated game the section shows no engine evaluation (it would be live help on the
+  // game's positions, which only an unrated game may have: see the explorer's rule).
+  const g = s.game.value;
+  const ratedGame = phase === 'playing' && !!g && !g.assisted;
+  // Read when the Play sheet opens (so a game's every move does not re-render the section).
+  const setup = () => ({
+    settings: s.settings.peek(),
+    rating: s.profile.peek().rating,
+    bots: BOTS,
+    inProgress: s.sheets.peek().newGame.inProgress,
+  });
+  const startGame = (settings: GameSettings, opening: OpeningGameOptions) => {
+    void c.newGame(settings, { opening });
+    closeOpenings();
+  };
+  return (
+    <div
+      class="openings-shell"
+      ref={shellRef}
+      data-state={open ? 'open' : 'closing'}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Openings"
+      tabIndex={-1}
+      // Tab stays in the section (a sheet over it, such as the Play sheet, keeps its own).
+      onKeyDown={(e) => {
+        if (!(document.activeElement instanceof Element && document.activeElement.closest('.sheet'))) trapTab(e, shellRef.current, '.sheet');
+      }}
+      // The section's boards measured themselves while it was sliding up (see `boardsMoved`).
+      onAnimationEnd={(e) => {
+        if (open && e.target === e.currentTarget) window.dispatchEvent(new Event('resize'));
+      }}
+    >
+      {mod ? (
+        <mod.OpeningsView
+          entitlements={c.entitlements}
+          // The game's own analysis service (the controller keeps it private; the section only
+          // reads positions from it, see src/ui/openings/useEval.ts); none during a rated game.
+          analysis={ratedGame ? null : c['analysis']}
+          evalHidden={ratedGame}
+          setup={setup}
+          onStartGame={startGame}
+          onBack={back}
+          onClose={closeOpenings}
+          isTop={isTop}
+        />
+      ) : (
+        <div class="openings-shell-loading" role={failed ? 'alert' : 'status'}>
+          <button type="button" class="openings-shell-done" onClick={closeOpenings}>
+            Done
+          </button>
+          {failed ? (
+            <>
+              <p>Couldn’t load the openings. Check your connection and try again.</p>
+              <button type="button" class="btn btn-primary" onClick={() => setAttempt((a) => a + 1)}>
+                Try again
+              </button>
+            </>
+          ) : (
+            <>
+              <span class="app-spinner" aria-hidden="true" />
+              <p>Loading the openings…</p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * While `open`, one browser history entry belongs to the section: the browser's (or Android's)
+ * Back button, or Safari's swipe, goes back a page instead of leaving the app; the entry is taken
+ * again while the section stays open, and given back when it closes some other way.
+ */
+function useBackButton(open: boolean, onBack: () => void): void {
+  const ref = useRef(onBack);
+  ref.current = onBack;
+  useEffect(() => {
+    if (!open || typeof history === 'undefined') return;
+    const marker = `openings-${Date.now()}`;
+    const state = { chesscoach: marker };
+    let ours = false;
+    try {
+      history.pushState(state, '');
+      ours = true;
+    } catch {
+      return; // no history (sandboxed): Back buttons in the section still work
+    }
+    const onPop = () => {
+      // The entry given back when the section last closed (reopened before its popstate came).
+      if (givenBack > 0) {
+        givenBack--;
+        return;
+      }
+      ours = false;
+      ref.current();
+      if (openingsOpen.peek()) {
+        history.pushState(state, '');
+        ours = true;
+      }
+    };
+    addEventListener('popstate', onPop);
+    return () => {
+      removeEventListener('popstate', onPop);
+      if (ours && (history.state as { chesscoach?: string } | null)?.chesscoach === marker) {
+        givenBack++;
+        history.back();
+        // Its popstate normally comes at once (to no listener): forget it then.
+        window.setTimeout(() => (givenBack = Math.max(0, givenBack - 1)), 500);
+      }
+    };
+  }, [open]);
+}
+
+/** History entries the Openings section gave back whose popstate may still be on its way. */
+let givenBack = 0;
 
 /**
  * The paywall (only where Pro is sold): the price comes from the store; after a purchase or

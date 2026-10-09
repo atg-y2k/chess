@@ -13,8 +13,8 @@ export interface ConfirmSheetProps {
   onClose: () => void;
 }
 
-/** Help that makes a rated game unrated (hint, takeback, Retry). */
-export type AssistPromptKind = 'hint' | 'undo' | 'retry';
+/** Help that makes a rated game unrated (hint, takeback, Retry, the explorer, rating the opponent's moves). */
+export type AssistPromptKind = 'hint' | 'undo' | 'retry' | 'explore' | 'rateOpponent';
 
 const UNRATED = 'makes this game unrated: win or lose, your rating stays the same.';
 
@@ -27,6 +27,19 @@ export function assistPrompt(kind: AssistPromptKind): Pick<ConfirmSheetProps, 't
       return { title: 'Take back your move?', message: `Taking a move back ${UNRATED}`, confirmLabel: 'Take back' };
     case 'retry':
       return { title: 'Retry this move?', message: `Retry takes your move back, which ${UNRATED}`, confirmLabel: 'Retry' };
+    case 'explore':
+      return {
+        title: 'Explore this position?',
+        message: `Exploring uses the engine, so it ${UNRATED}`,
+        confirmLabel: 'Explore',
+      };
+    case 'rateOpponent':
+      return {
+        title: 'Rate your opponent’s moves?',
+        // The setting stays on (it is saved): say so, as the next games are unrated too.
+        message: `Seeing when your opponent goes wrong is a big help, so it ${UNRATED} It stays on for your next games until you switch it off.`,
+        confirmLabel: 'Turn on',
+      };
   }
 }
 

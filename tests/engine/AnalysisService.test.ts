@@ -556,3 +556,62 @@ describe('AnalysisService node budgets', () => {
     expect(eng.calls).toHaveLength(2);
   });
 });
+
+describe('AnalysisService: withdrawn requests (EnsureOptions.signal)', () => {
+  it('a queued request is dropped, the running one gives way, and another request on it keeps it', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    const ctl = new AbortController();
+    const running = svc.ensure(FENS.italian, { minDepth: 14, multiPv: 3, signal: ctl.signal });
+    const queued = svc.ensure(FENS.qgd, { minDepth: 14, multiPv: 3, signal: ctl.signal });
+    let game: AnalysisResult | null = null;
+    void svc.ensure(FENS.sicilian, { minDepth: 14, multiPv: 3 }).then((r) => (game = r));
+    expect(eng.calls.map((c) => c.fen)).toEqual([FENS.italian]);
+    eng.calls[0].opts.onInfo?.({ ...partial(6), fen: FENS.italian });
+
+    ctl.abort();
+    expect(await running).toMatchObject({ aborted: true, depth: 6 });
+    expect(await queued).toMatchObject({ aborted: true, depth: 0 });
+    // The withdrawn search stopped, and the next request (not the withdrawn one) runs at once.
+    expect(eng.calls[0].ended).toBe(true);
+    await tickle();
+    expect(eng.calls.map((c) => c.fen)).toEqual([FENS.italian, FENS.sicilian]);
+    eng.calls[1].end({ depth: 14, lines: lines(14), bestMove: 'e2e4', done: true });
+    await tickle();
+    expect(game).toMatchObject({ depth: 14, done: true });
+
+    // Two requests share a search: withdrawing one leaves the other's.
+    const mine = new AbortController();
+    const a = svc.ensure(FENS.middle, { minDepth: 14, multiPv: 3, signal: mine.signal });
+    let b: AnalysisResult | null = null;
+    void svc.ensure(FENS.middle, { minDepth: 14, multiPv: 3 }).then((r) => (b = r));
+    expect(eng.calls).toHaveLength(3);
+    mine.abort();
+    expect(await a).toMatchObject({ aborted: true });
+    expect(eng.calls[2].ended).toBe(false);
+    eng.calls[2].end({ depth: 14, lines: lines(14), bestMove: 'e2e4', done: true });
+    await tickle();
+    expect(b).toMatchObject({ depth: 14, done: true });
+    // Already aborted: answered at once, with no search.
+    expect(await svc.ensure(FENS.endgame, { minDepth: 14, signal: mine.signal })).toMatchObject({ aborted: true });
+    expect(eng.calls).toHaveLength(3);
+  });
+
+  it('a withdrawn search of the watched position goes on as its live analysis', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng, { liveDepth: 18, liveMultiPv: 3 });
+    const ctl = new AbortController();
+    const p = svc.ensure(FENS.italian, { minDepth: 14, multiPv: 3, signal: ctl.signal });
+    svc.watch(FENS.italian); // the ensure search covers it for now
+    expect(eng.calls).toHaveLength(1);
+    ctl.abort();
+    expect(await p).toMatchObject({ aborted: true });
+    expect(eng.calls[0].ended).toBe(false); // still searching, now for the eval bar
+    const updates: AnalysisResult[] = [];
+    svc.subscribe((r) => updates.push(r));
+    eng.calls[0].end({ depth: 14, lines: lines(14), bestMove: 'e2e4', done: true });
+    await tickle();
+    expect(updates.at(-1)).toMatchObject({ depth: 14 });
+    svc.watch(null);
+  });
+});

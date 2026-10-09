@@ -66,12 +66,24 @@ src/
                            the recapture tip, which actions a classification offers, answer-free text while
                            Retry is offered, neutral verdicts for praised moves that give something away)
     review.ts              game summary (accuracy, counts, key moments)
+    explorer.ts            the explorer's pure state: base position, explored line, cursor, moves, ratings
+    opening.ts             opening practice: where a game stands on the line it follows (on it / left / complete)
     pgn.ts                 PGN export with [%eval] comments and NAGs
     persistence.ts         save/restore the current (or just finished) game + settings
     sound.ts               synthesized move sounds (Web Audio, unlocked on first tap)
   ui/                      presentational components; each has its own CSS file next to it
                            (SelfTestPage.tsx is the ?enginetest page)
   dev/                     component gallery pages (dev only: /gallery.html?g=<board|panels|sheets|engine>)
+  openings/                the Openings section's data and logic (no DOM; see "Openings section"):
+    catalog.ts             every named line (lazy src/data/opening-lines.json), families, search, starter lists
+    tree.ts                book moves from a position with names and shares, a line's positions, steering a game
+    drill.ts               drilling a line move by move (pure state machine; Pro)
+    progress.ts            saved drill progress and mastery (localStorage 'chesscoach.openings'; Pro)
+    session.ts             the section's UI state: open or not, its page stack and each page's state (main bundle)
+  data/opening-guides.ts   plain-English guides for 39 openings (summary, plans, traps with their mistakes, move notes,
+                           the main line; lazy; Pro text)
+  ui/openings/             the Openings section's screens (lazy chunk): OpeningsView (navigation, Play sheet),
+                           Home, Family, Line (learn), Tree, Drill pages, PlaySheet, OpeningBoard, model.ts (view logic)
   game/entitlements.ts     Pro: FEATURE_TIERS (the free / Pro split), the entitlement state and the paywall's state
   native/                  the App Store app (see "Native iOS app"): platform.ts (build / runtime flags, the only
                            Capacitor imports), purchases.ts (StoreKit plugin / mock store / always unlocked),
@@ -123,9 +135,12 @@ scripts/appstore-screenshots.mjs                App Store screenshots (Playwrigh
   (history included). A bot search that follows analysis first sends `ucinewgame`, so the bot never
   profits from the analysis hash table (its calibration assumes an engine of its own).
 - `AnalysisService`:
-  - `ensure(fen, {minDepth, multiPv, maxNodes})`: high priority, cached by `fenKey`. It pre-empts
-    live analysis, then live analysis resumes. A search cut short by an engine restart is retried
-    (up to twice) before its waiters get the best result so far.
+  - `ensure(fen, {minDepth, multiPv, maxNodes, signal})`: high priority, cached by `fenKey`. It
+    pre-empts live analysis, then live analysis resumes. A search cut short by an engine restart is
+    retried (up to twice) before its waiters get the best result so far. A request whose `signal`
+    aborts is withdrawn: it resolves at once with the best so far (`aborted: true`), a queued search
+    nobody else waits for is dropped, and the running one goes on only as live analysis (replaced
+    unless it is the watched position). The explorer withdraws its requests when it closes.
   - `watch(fen)`: live analysis of the current position (depth 18, MultiPV 3, at most `LIVE_NODES`
     = 5M nodes, about 10 s on an iPhone), with streaming updates to subscribers.
   - **Node budgets.** Every search is limited by depth and by nodes (`go depth D nodes N`), never
@@ -214,7 +229,7 @@ export class AnalysisService {
   /** High-priority analysis to minDepth within maxNodes (default defaultEnsureNodes(multiPv): 1.2M for MultiPV 3),
    *  cached by fenKey; pre-empts live analysis, which resumes afterwards. A result that ran out of nodes below
    *  minDepth is final (not aborted) and answers later requests with the same or a smaller budget. */
-  ensure(fen: string, opts: { minDepth: number; multiPv?: number; maxNodes?: number /*Infinity = none*/ }): Promise<AnalysisResult>;
+  ensure(fen: string, opts: { minDepth: number; multiPv?: number; maxNodes?: number /*Infinity = none*/; signal?: AbortSignal /*withdraws it*/ }): Promise<AnalysisResult>;
   /** Live analysis target (null = none). Streams updates to subscribers; stops at liveDepth or liveNodes. */
   watch(fen: string | null): void;
   subscribe(cb: (r: AnalysisResult) => void): () => void;
@@ -240,6 +255,9 @@ export class BotPlayer {
    *  only turns the repetition guard off. null if aborted or no legal move; never rejects for
    *  engine failures (heuristic fallback move). */
   move(fen: string, elo: number, history: string[], signal?: AbortSignal, startFen?: string): Promise<BotMove | null>;
+  /** Plays the caller's move (opening practice: the line's next move) as a book move, with a book move's think
+   *  time; its own `move` when `uci` is not legal in `fen`. null if aborted. */
+  lineMove(fen: string, elo: number, uci: string, history: string[], signal?: AbortSignal, startFen?: string): Promise<BotMove | null>;
 }
 // bot/strength.ts (pure)
 export function planForElo(elo: number): BotPlan;  // 100..1319 'custom', 1320..3199 'skill', 3200 'full'
@@ -352,6 +370,10 @@ export interface SavedGame {
   over?: { outcome: GameOutcome; ratingChange: { before: number; after: number; rated: boolean } };
   /** The coach's "Try again" prompt after a Retry (game in progress only), also saved while a hint is open over it. */
   retry?: { san: string; cls: MoveClass; headline: string | null };
+  /** Opening practice: the line the game follows (absent in a normal game and in older saves). */
+  opening?: { lineId: string; mode: 'steer' | 'skip'; showLineMoves: boolean };
+  /** The first `preplayed` moves were played before the game started ('skip'): book moves, never analyzed. */
+  preplayed?: number;
 }   // unknown extra fields survive sanitizing (the controller also stores `startEval`); an explanation's `concedes`
     // must be 'material' or 'mate', else it is dropped
 export function saveGame(g: SavedGame): boolean; export function loadGame(): SavedGame | null; export function clearGame(): void;
@@ -373,6 +395,27 @@ export function verdictTitle(ply: Pick<Ply, 'fenBefore' | 'san' | 'color' | 'ind
 /** The idle tip after the opponent's capture when a legal recapture on that square holds its own (analysis/see.ts
  *  `see` >= 0): "Rocco just took your bishop on c1. Can you recapture?"; else null (then `coachTip`; the in-check tip first). */
 export function recaptureTip(fen: string, last: Pick<Ply, 'uci' | 'color' | 'captured'> | null | undefined, opponent: string): string | null;
+// game/explorer.ts (pure: no engine, DOM or signals; the controller keeps one in store.explorer)
+export interface ExplorerRating { classification; explanation; evalWhite: Score; evalDepth: number; isBook: boolean }
+export interface ExplorerMove { uci; san; color; fenBefore; fenAfter; captured?; rating?: ExplorerRating; failed?: true }
+export interface ExplorerBase { baseFen: string; baseIndex: number /* game plies on the board */; fromLive: boolean; gamePlies: number /* game length then */ }
+export interface Explorer extends ExplorerBase {
+  moves: readonly ExplorerMove[]; cursor: number /* explored moves on the board */;
+  session?: number;  // one opening of the explorer (the board's `session`, see Board)
+}
+export function startExplorer(o: ExplorerBase & { session? }): Explorer;
+/** 'Insufficient material' | 'Threefold repetition' (counting the game's positions up to the base) | '50-move rule'
+ *  for the explorer's position, else null (checkmate and stalemate are `positionInfo`'s). */
+export function drawReason(x, startFen, gamePlies): DrawReason | null;
+export function explorerFen(x): string; export function currentMove(x): ExplorerMove | null;
+/** Either side's move (a pawn on the last rank without `promotion` becomes a queen); null if illegal. The move that
+ *  already follows in the line keeps the line (and its ratings); another one replaces the rest. */
+export function playMove(x, from, to, promotion?): Explorer | null;
+export function back(x): Explorer; export function forward(x): Explorer; export function goTo(x, n): Explorer;
+export function reset(x): Explorer;           // back to the base position with the line cleared (Forward has nothing after it)
+export function legalDests(fen): Map<string, string[]>;
+export function movePath(x, index): string;   // the UCI line up to move `index`: a late rating must still match it
+export function setRating(x, index, path, r: { rating } | { failed: true }): Explorer; export function clearFailed(x): Explorer;
 // game/store.ts
 export function explanationLines(e: Explanation | undefined | null, bestSan?: string | null): string[]; // adds "Best was X." unless a line already names X
 // game/sound.ts
@@ -425,6 +468,10 @@ interface BoardProps {
   check?: boolean;
   arrows?: Arrow[];                          // from analysis/types.ts
   badge?: { square: string; cls: MoveClass }; // classification icon at a square (like chess.com); none for a concession
+  extraBadges?: { square: string; cls: MoveClass }[]; // more icons without the last-move tint (your move's, while the
+                                             // opponent's rated reply has `badge`)
+  session?: string;                          // 'game' or 'explorer:<n>': a change drops a selected piece, a drag or an
+                                             // open promotion picker, even on the same position (never finishes in the other)
   /** A user move. Accept it by passing the new `fen` in the same task (e.g. synchronously from a store
    *  update); if `fen` is unchanged shortly afterwards, the board snaps back. Pawn moves to the last
    *  rank first show the promotion picker. */
@@ -476,13 +523,16 @@ interface MoveListProps {
   onSelect: (current: number) => void;
   showClassIcons: boolean;
   iconSet?: 'notable' | 'all';  // default 'notable' (brilliant, great, inaccuracy, mistake, miss, blunder); 'all' in review
+  lead?: string;                // a chip before the moves (the explorer's "From 15… Nf6"): current at 0, selects 0
+  emptyText?: string;           // default "No moves yet"
 }
 ```
 A horizontally scrolling list of move numbers and SAN, with small class icons. It keeps the current move in view,
 also when the set of moves with an icon changes (a review starting), and when the row's own width changes (a
 `ResizeObserver`: rotating the phone, a resized window); a mere re-annotation does not move a row the user has
-swiped. The store strips the class from the plies it passes where it must not show: the bot's moves
-during play, and concessions (which get no badge on the board either).
+swiped. The store strips the class from the plies it passes where it must not show: during play your moves
+with the coach off and the bot's moves unless they are rated (`rateOpponent`), and concessions (which get no
+badge on the board either).
 
 ### CoachPanel.tsx
 ```ts
@@ -493,8 +543,16 @@ interface CoachPanelProps {
   lines: string[];            // explanation sentences
   busy?: boolean;             // analyzing spinner
   actions?: { id: string; label: string; onClick: () => void; primary?: boolean; locked?: boolean }[]; // locked: a Pro lock badge
+                              // id 'opening' is opening practice's banner (OpeningBanner) at the top of the bubble, not a
+                              // button: label "<name>\t<status>\t<tone>" ("Italian Game\tMove 3 of 5\ton"), tap = open the line
   collapsed?: boolean;        // one-row summary
   onToggleCollapsed?: () => void;
+  /** Your move and the opponent's are both rated (`rateOpponent` + coach): the other one as a compact row
+   *  ("You ★ 12. Nf3 Best") above ('before', yours) or below ('after', the opponent's) the expanded one, so the
+   *  two keep their order; tapping it expands it. Collapsed, both show as one row of two halves ("You ★ Best |
+   *  Pip ? Mistake"), each a button. */
+  other?: { who: string; move: string; verdict: string; cls?: MoveClass; busy?: boolean; place: 'before' | 'after'; onSelect: () => void };
+  who?: string; verdict?: string;  // with `other`: whose move the expanded one is and its short verdict (the halves)
 }
 ```
 
@@ -510,20 +568,21 @@ interface PlayerStripProps {
   materialDiff: number;       // show "+N" when > 0
   active: boolean;            // side to move
   thinking?: boolean;         // bot thinking indicator
-  unrated?: boolean;          // "Unrated" pill: takebacks, hints, Retry or arrows were used
+  unrated?: boolean;          // "Unrated" pill: takebacks, hints, Retry, the explorer, arrows or opponent ratings were used
 }
 ```
 
 ### Toolbar.tsx + icons.tsx
 `Toolbar({ items: { id, label, icon: preact.ComponentChild, onClick, disabled?, active? }[], label? })` is the bottom bar with 44px+ tap targets.
-`icons.tsx` exports simple inline SVG icons: `IconPlus, IconUndo, IconBulb, IconFlip, IconCoach, IconMenu, IconChart, IconClose, IconChevronLeft, IconChevronRight, IconShare, IconFlag, IconEye, IconSound, IconCpu, IconGauge, IconCheckCircle`.
+`icons.tsx` exports simple inline SVG icons: `IconPlus, IconUndo, IconBulb, IconFlip, IconCoach, IconMenu, IconChart, IconClose, IconChevronLeft, IconChevronRight, IconShare, IconFlag, IconEye, IconSound, IconCpu, IconGauge, IconCheckCircle, IconExplore` (a branching line), `IconReset`.
 `Toggle({ label, description?, checked, onChange, disabled?, icon?, iconColor?, id? })` is the switch row used by the sheets.
 
 ### Sheet.tsx (base) and sheets
-`Sheet({ open, onClose, title, children, footer?, hideTitle?, class? })` is a bottom sheet with backdrop, safe-area padding, and swipe/tap-outside/Escape to close (Escape closes only the sheet opened last, e.g. the paywall over the Menu, through a module-level stack of open sheets).
+`Sheet({ open, onClose, title, children, footer?, hideTitle?, class? })` is a bottom sheet with backdrop, safe-area padding, and swipe/tap-outside/Escape to close (Escape closes only the sheet opened last, e.g. the paywall over the Menu, through a module-level stack of open sheets). `useEscapeLayer(active, onEscape)` puts any overlay on that stack (the Openings section uses it: Escape goes back a page, under a sheet or the paywall opened over it) and returns `isTop()`.
 - `NewGameSheet({ open, initial: GameSettings, playerRating: number, bots: BotPersona[], onStart(settings), onClose, inProgress?, newPlayer?, levels?, onSetLevel? })`:
   bot picker grid, custom Elo slider 100..3200 (step 50), color choice (white / random / black), toggles (coach, eval bar,
-  best-move arrows, takebacks, sound), and "Match my rating" (adaptive).
+  best-move arrows, rate opponent's moves, takebacks, sound), and "Match my rating" (adaptive). The note under the
+  options (`unratedNote`) lists what makes a game unrated, or says that this one will be (arrows or opponent ratings on).
   - `inProgress: { rated } | null`: a game the player has moved in is still going. The sheet warns that it ends as a loss
     (rated unless already unrated) and the button reads "Resign & play".
   - `newPlayer` with `levels` + `onSetLevel`: a "Your level" LevelPicker at the top sets the starting rating before the first game.
@@ -531,12 +590,16 @@ interface PlayerStripProps {
     the toggle in the sheet.
   - `arrowsLocked?: string | null` + `onUnlock?`: best-move arrows are part of Pro and locked; the toggle shows the line and a
     lock, stays off, and calls `onUnlock` (the paywall).
+  - `onLearnOpenings?`: a "Learn openings" row under the color choice (opens the Openings section).
 - `LevelPicker({ levels, value: number | null, onChange(rating), labelledBy?, id? })`: five-way segmented control over
   `STARTING_LEVELS` with a caption describing the selected level (`LEVEL_BLURB`).
 - `MenuSheet({ open, settings, profile, canResign, onChange(partial), onResign, onExportPgn, onFlip, onNewGame, onClose, bots?, theme?, onThemeChange?, engine?, onRetryDualEngines?, selfTestHref?, offlineReady?, levels?, onSetLevel? })`:
-  action tiles (flip, export, new game, resign with an inline confirmation), in-game toggles, the Appearance picker
+  action tiles (flip, export, new game, resign with an inline confirmation), in-game toggles (coach, eval bar, best-move
+  arrows, rate opponent's moves, sound), the Appearance picker
   (with `theme` + `onThemeChange`), profile stats with "Set my level" (LevelPicker + confirmation, with `levels` + `onSetLevel`),
   recent games, the Engine section and About. Its callbacks do not close the sheet; App does.
+  - `onOpenings?`: an "Openings" row under the action tiles (the Openings section opens over the Menu, which stays open
+    under it).
   - `pro?: { name; unlocked; pending?; restoring? }` + `onUnlock?(feature?)` + `onRestore?` + `arrowsLocked?`: where Pro is
     sold, a Pro section (Unlock, or "Unlocked ✓" / "Waiting for approval") with Restore Purchases; locked best-move
     arrows open the paywall.
@@ -544,12 +607,15 @@ interface PlayerStripProps {
     "1 worker (compatibility mode, until Oct 14)"; in single mode a "Try two engines again" row (`onRetryDualEngines`) and a
     note; with `offlineReady` an "Available offline" row; always a "Run engine self-test" link (`selfTestHref`, default
     `?enginetest`).
-- `GameOverSheet({ open, outcome: GameOutcome, playerColor, botName, ratingChange?: { before: number; after: number; rated: boolean }, onReview, onRematch, onNewGame, onClose, botEmoji?, botColor?, botElo? })`.
+- `GameOverSheet({ open, outcome: GameOutcome, playerColor, botName, ratingChange?: { before: number; after: number; rated: boolean }, onReview, onRematch, onNewGame, onClose, botEmoji?, botColor?, botElo?, practice? })`.
+  `practice` (opening practice, the line's name) replaces "Unrated game" with "Opening practice: Italian Game".
   White is on the left and Black on the right (each labeled with its color), with the result between them as chess
   players write it, from White's side: `gameOverScore(outcome)` gives "1–0" / "0–1" / "½–½" and "White won" /
   "Black won" / "Draw" (a per-player "You 0 – 1 Robot" read as a Black win after a win as Black).
 - `ConfirmSheet({ open, title, message, confirmLabel, cancelLabel?, onConfirm, onClose })`: a small confirmation sheet.
-  `assistPrompt(kind: 'hint' | 'undo' | 'retry')` gives its wording for "this makes the game unrated".
+  `assistPrompt(kind: 'hint' | 'undo' | 'retry' | 'explore' | 'rateOpponent')` gives its wording for "this makes the game unrated"
+  ('explore': "Exploring uses the engine, so it makes this game unrated: win or lose, your rating stays the same.";
+  'rateOpponent' adds that it stays on for the next games until switched off, as the setting is saved).
 - `About()` (in the Menu): the GPL notice with the no-warranty line, the Source code link (`SOURCE_URL` =
   `VITE_SOURCE_URL` or `https://github.com/atg-y2k/chess`; the exact commit or build tag in the App Store app), where Pro
   is sold (`SHOW_LEGAL_LINKS`) the Privacy Policy, Terms of Use and Support links (`LEGAL_URLS`, so they stay reachable
@@ -561,6 +627,25 @@ interface PlayerStripProps {
 - `PaywallSheet({ open, feature, price, unavailable?, status, onBuy, onRestore, onClose, features? })`: the Pro paywall
   (see "Entitlements and the paywall"). It also exports `IconLock` and `LockedIcon` (the toolbar's locked Hint).
 - `SelfTestPage({ run?, copy? })`: the `?enginetest` page (live log, PASS / FAIL, Copy log, Run again).
+
+### ExplorerPanel.tsx
+```ts
+interface ExplorerPanelProps {
+  from: string | null;        // the game's move before the starting position ("15… Nf6"); null = the start position
+  title: string;              // the explored move on the board ("16. Nf3"), or "White to move" at the start
+  verdict: string | null;     // "Excellent", "Checking…", "Couldn’t check this move"
+  cls?: MoveClass; evalLabel: string | null /* "+0.4" */; busy?: boolean;
+  lines: string[];            // the move's explanation (coach explanations: Pro), or an instruction
+  best: string | null;        // "Best here: Bd3 (+0.6)" (always in view), or "Checkmate: White wins."
+  notice: string | null;      // news from the real game ("Pip played 15… Nf6 in your game.")
+  noticeShort?: string | null; noticeBusy?: boolean;     // its one-line form for the collapsed row; the bot still thinking
+  actions: { id; label; onClick; primary?; pressed? }[];  // "Arrows on" / "Arrows off" (a toggle), Play 16. Nf3, Try again
+  collapsed?: boolean; onToggleCollapsed?: () => void;    // one row (short phones), with the primary action beside it
+}
+```
+The coach panel's place while exploring, in the explorer's color (`--explore`), with an "Exploring" tag.
+Collapsed, the news from the real game is a line under the row (`noticeShort`: "Pip played 2… Nc6 in your
+game", "Pip is thinking in your game…" with a pulsing dot, "…: game over"), so a short phone shows it too.
 
 ### ReviewPanel.tsx
 ```ts
@@ -586,6 +671,7 @@ A key moment with `concedes` shows a neutral grey marker and the label "Gives up
 (`bindPageLifecycle`), and (in the web app; the App Store app has none, see
 [Native iOS app](#native-ios-app-app-store)) registers the service worker with
 `canReloadNow: () => controller.canReloadNow({ hidden: document.visibilityState === 'hidden' })`:
+- false while the Openings section is open (its pages, such as a drill in progress, are not saved);
 - true in the `setup` and `error` phases;
 - in `over` (a finished game), true when no sheet is open; with a sheet open over it (such as the
   game-over sheet the player may be reading), only while the page is hidden. The finished game is
@@ -611,23 +697,28 @@ component (`board`, `evalBar`, `evalGraph`, `moveList`, `coach`, `topPlayer`, `b
 
 | Component | Props from | Callbacks to |
 |---|---|---|
-| Board | `store.board` | `onMove = playerMove` (updates `plies` synchronously, as Board requires) |
+| Board | `store.board` (the explorer's board while exploring) | `onMove = playerMove` (updates `plies` synchronously, as Board requires); `explorerMove` while exploring |
 | EvalBar / EvalGraph | `store.evalBar` / `store.evalGraph` (`visible` hides them) | graph `onSelect = goTo` |
-| MoveList | `store.moveList` | `onSelect = goTo` |
-| CoachPanel | `store.coach` | actions -> `runAction(id)`, `onToggleCollapsed = toggleCoachCollapsed` |
+| MoveList | `store.moveList` (the explored line while exploring) | `onSelect = goTo` (`explorerGoTo` while exploring) |
+| CoachPanel | `store.coach` (`other`, `paired`) | actions -> `runAction(id)`, `onToggleCollapsed = toggleCoachCollapsed`, `other.onSelect = selectCoachFeedback(subject)` |
+| ExplorerPanel (instead of the coach while exploring) | `store.explorerPanel` | actions -> `runExplorerAction(id)` |
 | ReviewPanel | `store.review` | `onSelectPly = goTo`, `onClose = exitReview` |
 | PlayerStrip | `store.topPlayer` / `store.bottomPlayer` (incl. `unrated`) | — |
-| Toolbar | `store.toolbar` (disabled / active per button) | `openSheet`, `requestUndo`, `requestHint`, `flip`, `toggleCoach`, `stepBack`, `stepForward`, `startReview`, `exitReview` |
+| Toolbar | `store.toolbar` (disabled / active per button) | `openSheet`, `requestUndo`, `requestHint`, `requestExplore`, `flip`, `toggleCoach`, `stepBack`, `stepForward`, `startReview`, `exitReview`; exploring: `explorerReset`, `flip`, `stepBack`, `stepForward`, `explorerReply`, `exitExplorer` |
 | NewGameSheet | `store.sheets.newGame` (`inProgress`, `newPlayer`) + `STARTING_LEVELS` | `newGame`, `setStartingRating`, `closeSheet` |
 | ConfirmSheet | `store.sheets.assist` (`assistPrompt(kind)`) | `confirmAssist`, `closeSheet` (cancel) |
 | MenuSheet | `store.sheets.menu`, `store.engineMode`, `rememberedEngineMode()` | `setSettings`, `resign`, `flip`, `openSheet('new')`, `setStartingRating`, `resetEngineMode()` + reload |
 | GameOverSheet | `store.sheets.gameOver` | `startReview`, `rematch`, `openSheet('new')`, `closeSheet` |
+| Openings section (lazy, see "Openings section") | `openingsOpen` / pages (src/openings/session.ts), `store.settings` / `profile` / `sheets.newGame.inProgress`, the analysis service | `newGame(settings, { opening })`, `entitlements.requirePro` |
 
 **Controller API** (besides the table): `boot()`, `retry()` (the error screen's *Try again*),
-`dispose()`, `newGame(settings, { startFen? })`, `rematch()`, `setStartingRating(rating)` (applies a
+`dispose()`, `newGame(settings, { startFen?, opening? })` (a promise: an opening game may wait for its data; see
+"Opening practice"), `rematch()`, `setStartingRating(rating)` (applies a
 starting level and saves the profile), `playerMove(from, to, promotion?)`, `undo()`, `hint()`,
 `resign()`, `goTo(index | null)`, `backToLive()`, `canReloadNow({ hidden? })`, `exportPgn()`,
-`onVisibilityChange(hidden)` and `idle()` (tests). `engineStartAdvice(e)` picks the error screen's
+`onVisibilityChange(hidden)`, `selectCoachFeedback(subject)` (the coach panel's other row) and `idle()` (tests); the explorer's `requestExplore()`, `explore()`, `exitExplorer()`,
+`explorerMove(from, to, promotion?)`, `explorerBack()`, `explorerForward()`, `explorerGoTo(n)`, `explorerReset()`,
+`explorerReply()`, `explorerPlay()` and `runExplorerAction(id)` (see "Explorer" below). `engineStartAdvice(e)` picks the error screen's
 advice by `engineFailureKind`. Dependencies are injectable (`ControllerDeps`): `createEngines(request:
 { onProgress })` (a zero-argument factory also type-checks), `onlineEvents` (where `online` comes
 from, for the download retry), `storage`, `rng`, `sound`, `now`, `thinkDelay`, `createBot`,
@@ -643,10 +734,37 @@ for confirmation in a rated game, the bot's reply is stopped and held: confirmin
 and cancelling (closing the sheet, or opening another one) lets the bot reply. Otherwise a reply that
 ended the game would drop the takeback and record the rated loss the player was taking back.
 Switching best-move arrows on marks the game unrated immediately (a game started with them on is
-unrated from the start). Starting a new game after the player has moved records the old one as a
+unrated from the start). Rating the opponent's moves (`GameSettings.rateOpponent`) reveals the
+computer's mistakes, so a game started with it on is unrated from the start, and `setSettings({
+rateOpponent: true })` in a rated game in progress asks first (`requestAssist({ kind: 'rateOpponent'
+})`; the bot is not held); `confirmAssist()` marks the game assisted and switches it on. After the
+game, or in a game that is already unrated, it switches on at once. The setting is saved, so it stays
+on for the next games (a rematch too, unrated again): the question says so, and the Menu's switch reads
+"Makes your games unrated while it’s on". The store shows the opponent's
+ratings only while the game is assisted, so a rated game can never show them. Starting a new game after the player has moved records the old one as a
 loss by "Abandoned" (rated unless already unrated); with Match my rating the new opponent is chosen
 before that loss is recorded, so it is the Elo the sheet showed. Before the first move the old game is
 discarded. Resigning is a rated loss (unless already unrated), except before the first move.
+
+**Opponent ratings (`rateOpponent`).** The bot's plies are annotated anyway (neutral explanations); the
+setting only makes the view models show them during play (`ratesOpponent` = the setting and an assisted
+game): the badge on the bot's move while it is the last ply (the board's `badge`, tinting it; your
+feedback badge moves to `extraBadges`), its class in the move list (the same 'notable' icons), its key
+moments on the graph, and the coach's verdict in the third person ("Pip’s 12… Nf6 is a mistake",
+`titleMove` "Pip’s 12… Nf6") with the neutral explanation and *Show best* (the position before its move,
+`runAction('showBest')` takes the ply from `store.coach.index`). Browsing back to a bot move shows its
+verdict too. With the coach on as well, `store.coach` has both: one expanded (`subject` 'you' |
+'opponent') and the other as `other` (a compact row, "You" always above). Your move stays expanded while
+it has something to fix (an inaccuracy or worse, something given away, Retry, a failed check: the
+store's `needsAttention`); otherwise the opponent's latest move is, also while your move is still being
+checked, so the rows do not swap on every move. The player can pick the other with
+`selectCoachFeedback`, which holds until the next ply or a takeback (`store.coachFocus`, keyed by the
+ply count; `truncate()` clears it). `paired` (coach and opponent ratings on during play) gives the
+panel a larger threshold before it collapses (`COACH_TIGHT_PAIRED_PX`, and `PANEL_MIN_TEXT_PX`, see
+"Layout"). Its title keeps the verdict whole on two lines at most ("Professo… 4… Be7 / is the best
+move": the name gives way first, then the move). With the coach off, only the bot's verdict shows. Pro: the verdicts,
+icons and badges are free; the explanation (`coachExplanations`: `lockedTeaser`, "Unlock to see why") and
+*Show best* (`showBest`) are locked as for your moves. The finished game and the review are unchanged.
 
 **Coach flow.** Every ply is annotated in the background (`ensure` depth 14, MultiPV 3, within
 `ANNOTATE_NODES` = 1.2M nodes, before and after the move; `classifyMove` gets `prevFenBefore` from
@@ -671,6 +789,97 @@ button is not highlighted meanwhile). A move whose explanation has `concedes` (a
 move that gives something away) gets `verdictTitle`'s neutral title and no class icon in the coach,
 on the board or in the move list. A move that ends the game by threefold repetition is classified and
 explained as a draw.
+
+**Opening practice.** `newGame(settings, { opening: { lineId, mode: 'steer' | 'skip', showLineMoves?, moves?, name?,
+family? } })` (the Openings section's *Play*) starts a game against the bot that follows a line: a line of the
+openings catalog by its id, or any other line by its own moves (`moves`, UCI from the initial position, validated
+with chess.js by `studyOpeningLine`; e.g. an opening guide's annotated main line, `lineId` "guide:London System",
+shown under its opening's `name`), so a game plays exactly the line the section taught (`OpeningGameOptions`; it
+first awaits `loadExplorer()` when the catalog or the book is not loaded, and a game started meanwhile wins; an
+unknown line id without moves, or illegal moves, start a normal game with a warning). The game's side and opponent
+are not saved as the New game defaults (the player's colour, opponent and Match my rating stay; the toggles are
+saved). `GameInfo.opening` holds the resolved `OpeningLine`, the mode, `showLineMoves` and `custom` (a line with its
+own moves, saved with them); `game/opening.ts` `lineProgress(line, startFen, plies)` says
+where the game stands: 'on-line' (the position is one of the line's, whatever the move order, as `nextLineMove`
+compares them: board, side to move, castling), 'complete' (the game reached the line's last position, sticky), or
+'left' (with the latest ply that went off the line and the line's move there).
+- 'steer': from the initial position. On the bot's turn on the line, `requestBotMove` asks `bot.lineMove(...)`
+  for the line's next move (a book move with a book move's think time; a bot without it plays the move at once)
+  instead of `bot.move`, through the same abort / epoch / visibility guards, so pause, undo and new game work as
+  before. Off the line or once it is complete, the bot plays its own moves (its book may go on). A takeback that
+  goes back onto the line resumes steering.
+- 'skip': the line's moves are played into the game before it starts (`startFen` stays the initial position, so
+  the move list, opening names and PGN are normal; a line that would end the game, such as the Fool's Mate, stops
+  before that move, and one more if needed so the human moves first) as book plies (`isBook`, a 'book' classification with nothing
+  lost) and counted in `GameInfo.preplayed`: the annotation queue skips them (`annotate` gives the position after
+  them its eval when the first real ply is annotated), undo / Retry never reach them, they do not make a game
+  "moved in" (abandon, resign, `inProgress`), the review's summary starts after them (accuracy and counts), and the
+  coach describes them as played for you. The bot replies at once when it is its turn.
+- Opening games are unrated from the start (`assisted`; the computer's first moves are scripted). The target is
+  saved (`SavedGame.opening`, with `moves`, `name` and `family` for a line from outside the catalog, `preplayed`;
+  older saves load as normal games); `boot()` loads the catalog before
+  restoring such a game. `rematch()` keeps the opening; `newGame()` without one clears it. The PGN's Event tag is
+  "Opening practice: <name>".
+- `store.openingPractice` (`OpeningPracticeView`: line id, name, family, mode, status, `move` of `moves`, next move,
+  `leftAt`, `completedAt`, `statusText` "Move 3 of 5" / "Line complete" / "Left at 3. Nc3", `summary`). The coach
+  view gets the banner as an action with id 'opening' (playing and over; `runAction('opening')` calls
+  `openOpenings({ lineId, ply })` from src/openings/session.ts, at the game's place on the line: the ply reached,
+  where it left the line, or the end) and `paired`, for the extra row. The banner shows the opening's name whole;
+  a long variation gives way first. During play the coach's
+  live views start with what is new about the line, said once (until your next move): "Line move: 3. Bc4 — Italian
+  Game" on your turn (`showLineMoves`; a move the book flags as a mistake, `LineMove.dubious`, adds "(a known
+  mistake: this line shows how it gets punished)"), "You left the line at 3. Nc3 (the line continues 3. Bc4) — the game goes on
+  normally.", that the line is complete or set up, and at the start ('steer') that the bot follows the line; your
+  first "book" verdict says what "book" means. With `showLineMoves` the board shows the line's next move on your turn as
+  an arrow with its own light brush ('line', under any engine arrow). `sheets.gameOver.practice` names the line.
+
+**Explorer.** `requestExplore()` (toolbar *Explore*) opens it on the displayed position (`explore()`):
+the live one (`fromLive`) or a browsed earlier one, while playing (either side to move), after the
+game and in the review. It is Pro (`requirePro('explorer')` opens the paywall instead). In a rated game
+in progress it asks first (`requestAssist({ kind: 'explore', base })`, the 'assist' sheet; the bot is not
+held meanwhile) and marks the game assisted. `base` is the position asked about: when the bot moves
+before the answer, the explorer still opens there, with the "Pip played …" news and no *Play*, as when
+opened on the bot's turn. A game in progress that is already unrated, a finished
+game and the review open it at once, with no rating effect. State: `store.explorer` (game/explorer.ts,
+ephemeral: not saved, `canReloadNow()` is false while exploring), `explorerArrows` (the panel's toggle,
+default on) and `explorerReplying`.
+- The game is never modified: the board (`store.board`) shows the explorer's position with both colors
+  movable, its last move and check, and a blue frame (`.app[data-exploring]`) plus an "Exploring ✕" tag
+  on the top strip (tapping it exits); `playerMove` and `goTo` are refused; the toolbar's ‹ › (and ← →,
+  Escape to exit) work on the explored line. The players' strips show the explored position's material
+  and side to move. The board's `session` ('game', or `explorer:<n>` per opening) changes on the way in
+  and out, so a piece selected or a promotion picker opened in one never finishes as a move in the
+  other, even on the same position.
+- A position the game would end in is final there too: checkmate and stalemate (`positionInfo`), and
+  `store.explorerDraw` (`drawReason`: too little material, a third repetition counting the game's
+  positions up to the base, the 50-move rule). Then no side moves, *Reply* is off, no arrows, the eval
+  bar is exactly 0.0 and the panel says "Threefold repetition: a draw." in place of "Best here".
+- `updateWatch()` watches the explorer's position, so the eval bar (shown even when off for the game),
+  the arrows (`lineArrows`: best + alt) and "Best here" follow it; the game's graph stays, dimmed and not
+  tappable. `exitExplorer()` points the watch back at the game.
+- Each explored move is rated like a game ply (`rateExplored`: `ensure` before and after with the
+  annotations' request, `classifyMove` with the previous move, explored or the game's, its `winLoss`,
+  the book and the threefold over the game's positions plus the line, `explainMove` with perspective
+  'you' for the human's color, else 'neutral'). The ratings run one at a time in line order
+  (`kickExplorerRatings`), so the explorer has at most one rating search in the `ensure` FIFO (plus a
+  pending *Reply*) and the game's annotations keep their turn (the bot has its own engine); results are
+  cached by position, so stepping through the line or replaying a move asks for nothing new. A result
+  is dropped unless the move's path (`movePath`) and the explorer session still match; a failed rating
+  offers *Try again*. The explorer's requests carry its session's `AbortSignal`: closing it (Exit,
+  *Play*, a new game) withdraws them, so the game's own analysis comes next at once.
+- *Reply* (`explorerReply`) plays the engine's best move for the side to move: from the analysis at hand
+  when it reached depth 12, else an `ensure` with the annotations' request (which the next rating
+  reuses). A reply still pending from an explorer since closed never stands in for a new one.
+- *Play 16. Nf3* (`explorerPlay`, offered by `store.explorerPlayable`): when the explorer started from the
+  live position, nothing was played in the game since and it is the human's turn, it exits and plays the
+  line's first move through `playerMove` (coach, annotation, bot reply).
+- The bot goes on playing meanwhile (exploring from its turn): the panel says "Pip is thinking about its
+  move in your game…", then "Pip played 15… Nf6 in your game." and drops *Play* (collapsed, on a short
+  phone, as a line under its row). A game that ends meanwhile keeps its game-over sheet until the
+  explorer closes.
+- `exitExplorer()` restores the view it left (`viewIndex`, unless the game ended meanwhile, and the flip)
+  with no sheet open. A new game, a restore, an engine failure, a refund (`onLocksChanged`) or `resign()`
+  close it.
 
 **Boot, errors and the splash.** `boot()` starts the engines first and only then loads the opening
 book (0.9 MB, only a game needs it), so the book never competes with the engine download. While
@@ -711,6 +920,75 @@ move (toolbar ‹ ›, move list, graph, a key moment) swaps it for the coach's 
 (`store.coach` in review mode, with *Show best*). The toolbar's *Report* button toggles back. When
 the panel slot is under 300 px tall (phones), the summary floats over the board as a card.
 
+## Openings section
+
+A full-screen section for learning openings (README "Openings"), opened with `openOpenings(target?)` from
+src/openings/session.ts: the Menu's **Openings** row (`MenuSheet` `onOpenings`), the New game sheet's **Learn
+openings** (`NewGameSheet` `onLearnOpenings`), the move list's opening chip (App's `Moves`: the displayed
+position's name, `store.gameSummary.opening`, as `{ name, eco }`, resolved to its line once the data has loaded)
+and opening practice's coach banner (`runAction('opening')`, `{ lineId, ply }`: the line at the game's move).
+
+- **State (session.ts, main bundle, no data).** `openingsOpen`, the page stack `openingsPages` (`home` { query,
+  allStarters }, `families` { side }, `family` { showAll }, `line` { lineId, ply, offBook, moreOthers }, `tree` { path }, `drill` { lineId, color, acceptAlternatives, the
+  DrillState, feedback, hint, a wrong move on show, the mastery recorded }) with `pushPage` / `popPage` (closes at
+  Home) / `replacePage` / `updatePage(kind, change)` (keeps the page's key) and `rememberScroll`, and the pure step
+  reducers (`goToPly`, `stepLine`, `leaveBook`, `treeAdvance`, `treeTo`). A target replaces the stack ([home,
+  family, line]); no target reopens it where it was left. Each page entry keeps its own state (the search text and
+  every "Show all" too), so Back returns to a page as it was, scroll position included: the content the offset
+  belongs to renders with the page's first frame.
+- **App.tsx `Openings`** renders it between the sheets and the paywall (z-index 100, later in the DOM: over the
+  Menu or the New game sheet it was opened from, which stay open under it, and under the paywall), loads
+  src/ui/openings/OpeningsView with a dynamic import (a spinner meanwhile, Try again on failure), and slides it up.
+  Escape (`useEscapeLayer`) and the browser's or Android's Back button (one history entry while open,
+  `useBackButton`) go back a page; the App's own ← → and Escape handler stands down while it is open. Closing it
+  shows what it covered: the game is never paused or changed by it (the bot moves on as under a sheet). A game
+  the bot ends meanwhile keeps its game-over sheet until the section closes (`finish()` defers it as for the
+  explorer; the controller follows `openingsOpen`), so the sheet never mounts unseen under the section, taking
+  the focus and Escape. During a rated game in progress (`playing`, not `assisted`) App passes no analysis service
+  and `evalHidden`: no evaluation bar or engine verdict in the section (`EvalHiddenNote` says why), since trying
+  moves on the game's positions with the engine is live help that only an unrated game may have (the explorer's
+  rule); names, book moves and guides stay. *Play* calls `controller.newGame({ ...settings, playerColor, botId,
+  botElo, adaptive }, { opening })` (`openingStart(line, mode, showLineMoves)`: a catalog line by its id, any
+  other line with its moves, name and family) and closes it.
+- **OpeningsView** (lazy) loads the book, the catalog and the guides (`loadOpeningsData`; the search index is
+  built when idle), shows the navigation bar (Back with the previous page's title, Done), the top page with a push /
+  pop slide, the Play sheet, and in the installed app and the App Store app (no browser gesture) a swipe from the
+  left edge for Back. Chessground measures its board once (and again only on a scroll or resize), so after a slide
+  the section dispatches a `resize` (`boardsMoved`), or a tap would land on the square that used to be there.
+- **model.ts** (pure, tested in node): study lines (`resolveLine`): catalog lines, a guide's own annotated main line
+  (`guide:<family>`, what "Learn the main line" opens, `guideMainLine`: the guide's `mainLine` when set, else its
+  longest annotated line; a game plays it by its moves, `openingStart`) and a guide's traps (`trap:<family>:<i>`,
+  not playable; their `mistakes` plies are flagged like the book's known mistakes); their positions and names
+  (`studySteps`); "Next variation" (`nextLineId`: the next line of the family that is not just the start of the
+  one studied); "Start here" easiest first (`starterFamilies`: by the own guide's level, then the curated order);
+  the openings a search names (`familyHits`, shown first as a way to their page);
+  where a book move leads (`branchTarget`: the line that goes on the main way, `mainContinuation`, else the most
+  popular line through it, else the tree); what the tree's *Learn this line* and *Play* open; the wording (moves
+  with no-break spaces, `movesSummary` for long lines, theory shares in words, the engine's verdict in words); and
+  two per-device preferences (`chesscoach.openings-intro`, `chesscoach.openings-side`).
+- **Evaluation** (`useEval`): the app's own `AnalysisService` (App passes the controller's), `ensure(fen, { minDepth:
+  12, multiPv: 1, maxNodes: 250k, signal })` after the position has stayed put for 220 ms, withdrawn when it changes
+  or the page closes, so the section has at most one short search in the FIFO and the game's annotations wait for
+  nothing more; a cached result of depth 10 or more is shown at once. No engine yet: no number. While a new
+  position is searched the bar keeps its last fill (pulsing) but drops the verdict: words such as "about equal"
+  only ever describe the position on the board (`verdictFor`).
+- **Pages.** Home (search, the beginner card and a link that brings it back, Start here with `starterFamilies`,
+  Explore by moves, All openings, Practice: due lines (`isDue`) and recent drills), Family (who plays it, first moves, the guide, variations with
+  "Show all", related families, Learn / Drill / Play), Line (the board, step controls, tap or swipe on the note
+  card, auto-play, arrow keys, the move strip, the position's name, the guide's note, Other moves here, a move off
+  the book with the engine's verdict, the end of the line with what to do next, `lineEnd`), Tree (book moves with
+  names, theory share, main move and dubious flags, the trail, kept scrolled to the position shown), Drill (setup;
+  a trap from the side that sets it; the computer's moves after 650 ms, verdicts, a wrong move shown for 900 ms
+  then taken back, three hint levels, Show me, the end card, `recordDrill` once with the line's family and side:
+  the other side's drills are practice), and the Play sheet (side, preselected from the drill; start, from move 1
+  only for a line that ends in mate; the line's moves as a guide; the opponent with the New game sheet's
+  `EloSlider`; a warning when the side played makes a known mistake in the line, `dubiousPlayerMoves`).
+- **Pro** (`openingGuides`, `openingDrills` in `FEATURE_TIERS`): locked guide text shows a `Teaser` with Unlock
+  (`requirePro`, the paywall opens on that feature), never the text; "Drill it" opens the paywall; progress and
+  mastery show only with drills. Free: browsing, search, the tree, stepping through any line (guide lines' moves
+  too: the guides load for everyone) and playing. (The guide module, about 25 KB compressed, holds the Pro text
+  too; it is not split, because the App Store app, the only build that sells Pro, has it on the device anyway.)
+
 ## Screen layout
 
 `#app` is a fixed full-screen flex column padded by the safe areas; `.app` inside it is a CSS grid
@@ -725,14 +1003,23 @@ and a size container, so the board is sized from the space really available
    inside, so nothing jumps when the text changes.
 5. `EvalGraph` (a 38 px row with a 32 px graph, hidden with the eval bar).
 6. `MoveList` (44 px).
-7. `Toolbar` (57 px): New · Undo · Hint · Flip · Coach · Menu. After the game: New · Flip · ‹ · › ·
-   Menu · Review. In review: Report · Flip · ‹ · › · Menu · Close.
+7. `Toolbar` (57 px): New · Undo · Hint · Explore · Flip · Coach · Menu. After the game: New · Flip · ‹ ·
+   › · Explore · Menu · Review. In review: Report · Flip · ‹ · › · Explore · Menu · Close. Exploring:
+   Reset · Flip · Back · Forward · Reply · Exit. Seven buttons fit a 375 px phone; a toolbar narrower
+   than 340 px (the landscape side column) drops New from them (the Menu has it, and after the game the
+   game-over sheet and the coach), or Flip from the review's (the Menu has it), and uses 10 px labels.
 
 **Short phones (e.g. 375×667):** the board stays full width; when the coach slot is under 144 px
 (`COACH_TIGHT_PX`: title, two lines of text and a row of actions) the coach shows as one row (class
 icon, title, first sentence). Tapping it floats the full bubble over the lower part of the board
 until the next move. The one threshold applies with or without actions, so the panel does not flip
-between the two forms from move to move.
+between the two forms from move to move. When the game rates both your moves and the opponent's
+(`store.coach.paired`), the threshold is 164 px (`COACH_TIGHT_PAIRED_PX`: the other move's row too); the
+one row then has a half for each move ("You ★ Best | Pip ? Mistake"; a long name gives way to the
+verdict), and tapping a half floats that move's full bubble. That panel and the explorer's have more
+fixed rows (a two-line title in a narrow column; the explored move, "Best here", news): when the
+expanded form leaves its text under two lines (`PANEL_MIN_TEXT_PX` = 38 px) and the text does not
+fit, `PanelArea` collapses it too, for as long as the slot keeps its size (e.g. landscape phones).
 
 **Landscape and desktop (aspect ratio ≥ 5:4):** two columns. The eval bar and the board fill the
 height on the left; the right column (280–420 px) holds the opponent strip, coach / review panel,
@@ -840,7 +1127,8 @@ the JavaScript and Swift method and event names match.
 ### Entitlements and the paywall (src/game/entitlements.ts)
 
 ```ts
-export type ProFeature = 'coachExplanations' | 'hint' | 'showBest' | 'bestMoveArrows' | 'reviewDetails';
+export type ProFeature = 'coachExplanations' | 'hint' | 'showBest' | 'bestMoveArrows' | 'reviewDetails' | 'explorer'
+  | 'openingGuides' | 'openingDrills';     // the Openings section's guide text, and its drills with saved progress
 export const FEATURE_TIERS: Readonly<Record<ProFeature, 'free' | 'pro'>>; // THE free / Pro split
 export const PRO_NAME: string;              // `${APP_NAME} Pro`
 export const PRO_CACHE_KEY = 'chesscoach.pro';
@@ -863,16 +1151,18 @@ export function getEntitlements(): Entitlements; // the app's one instance (the 
   ("No earlier purchase…"), `failed` → `restoreFailed` ("Couldn't reach the App Store", Try again),
   `cancelled` → `idle` (nothing said).
 - **Always free:** every bot at any Elo, the rating, the evaluation bar and graph, move classes and
-  badges, accuracy, takebacks and Retry, PGN export. The engine still analyzes every move either way;
+  badges (also the opponent's, `rateOpponent`), accuracy, takebacks and Retry, PGN export. The engine still analyzes every move either way;
   only what the view models show is gated.
 - **Gating** (`GameController.entitlements`; the store gets `locked`): the coach panel keeps the
-  verdict and the class icon but replaces the explanation with `lockedTeaser()` (game/coach.ts: what
+  verdict and the class icon (also on the opponent's moves) but replaces the explanation with `lockedTeaser()` (game/coach.ts: what
   the coach would explain, never the answer) and an "Unlock to see why" action; Show best shows a lock
   and opens the paywall (`runAction`); the toolbar's Hint shows a lock and `requestHint()` opens the
   paywall instead of the "unrated" question; no arrows are drawn from locked features; best-move arrows
   (Menu, New game sheet) open the paywall instead of switching on; the review keeps accuracy and
-  counts but shows a locked key-moments card (`ReviewPanel` `lockedMoments` + `onUnlock`). When features
-  become locked again (a refund), `onLocksChanged()` closes a hint or Show best and turns arrows off.
+  counts but shows a locked key-moments card (`ReviewPanel` `lockedMoments` + `onUnlock`); the toolbar's
+  Explore shows a lock and `requestExplore()` opens the paywall (no "unrated" question, no rating
+  effect). When features become locked again (a refund), `onLocksChanged()` closes a hint, Show best
+  or the explorer and turns arrows off.
 - **UI:** `PaywallSheet` (the store's localized price on the Buy button, Restore Purchases, the
   Privacy Policy and Terms of Use links, thanks then closes after a purchase); the Menu's Pro section
   (Unlock / "Unlocked ✓" / "Waiting for approval", Restore Purchases); a toast when Pro unlocks while the
@@ -924,8 +1214,9 @@ to it (see README "Hosting" for hosting from a private fork: `npm run build:sour
 
 Service worker (`vite.config.ts`, Workbox `generateSW`):
 - It precaches the whole app, including the engine `.js` + `.wasm` and the license notices, so it
-  works offline: 25 files, about 3.3 MB (the engine `.wasm` 1.8 MB, the opening book 0.9 MB; about
-  1.6 MB gzipped), the privacy, terms and support pages included. Hashed `assets/` and the engine files (versioned by name; `ENGINE_FILES` pins
+  works offline: 29 files, about 3.9 MB (the engine `.wasm` 1.8 MB, the opening book 0.9 MB, the Openings
+  section's lazy chunks: its lines 0.4 MB, guides and screens; about 1.7 MB gzipped), the privacy, terms and
+  support pages included. Hashed `assets/` and the engine files (versioned by name; `ENGINE_FILES` pins
   their SHA-256 and fails the build if they change) are precached without a revision, so the first
   visit can reuse the engine download from the HTTP cache instead of fetching it twice.
 - The first install is all or nothing: if one download fails, the browser deletes the registration.
@@ -943,7 +1234,7 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
 
 ## Tests
 
-- `npm test`: Vitest unit tests in node, about 790 tests in 40 files (the one test in
+- `npm test`: Vitest unit tests in node, about 1,040 tests in 54 files (the one test in
   `tests/bot/calibration.slow.test.ts` is skipped unless `CALIBRATE=1`, see `npm run calibrate`). They
   cover pure logic, the engine layer against scripted transports, the controller against a fake
   engine and a scripted bot (`tests/helpers/fakeEngine.ts`), the store's view models, UI helpers, the
@@ -952,9 +1243,21 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   history, bot mates and conversions). `tests/native/` covers src/native (platform flags, haptics,
   the storage mirror, share, and the purchases contract against a fake Store plugin, including that
   the JavaScript and Swift names match); `tests/game/entitlements.test.ts` and `paywall.test.ts` cover
-  Pro's state and the gating in the controller and the view models.
+  Pro's state and the gating in the controller and the view models; `tests/game/explorer.test.ts` the
+  explorer's state and `explorer.controller.test.ts` the explorer in the controller and the store;
+  `tests/game/opponent.test.ts` the opponent's move ratings (the view models with the coach and the
+  setting on or off, the two rows, rated games and the question, Show best, the Pro gating, the review
+  unchanged); `tests/game/opening.test.ts` and `opening.controller.test.ts` opening practice (`lineProgress` with
+  transpositions; steering, the line move's abort paths (hidden page, undo, new game), leaving the line, undo
+  back onto it, the arrow, notes and banner, 'skip' with its preplayed moves, PGN and review, unrated games,
+  rematch, persistence and older saves, Pro locked; a guide's line played by its moves and restored from them; the
+  New game defaults kept; a mate line stopping short in 'skip'; a known mistake's line move; the game-over sheet
+  and the reload gate while the Openings section is open). `tests/openings/` covers the openings core (catalog,
+  tree, drill, progress per side, guides with their trap mistakes and main lines, session) and `tests/ui/openings.test.ts`
+  the section's view logic (study lines, what a game plays, Next variation, Start here's order, search's openings,
+  the end of a line, verdicts only for the position shown).
 - `npm run e2e`: Playwright on the production build with the real engine, iPhone 15 Pro emulation,
-  28 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id`, iOS tags, engine MIME
+  45 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id`, iOS tags, engine MIME
   types, service worker and precache, offline, license notices served as files, full-screen layout);
   `e2e/game.spec.ts` (15) plays through the UI (moves by tapping squares, coach, hint, undo, flip,
   reload, resign, review, a game as Black, a mating promotion, the move list staying on the current
@@ -963,11 +1266,27 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   and the Back to game chip, the coach verdict, the floating review header), the starting level and
   Set my level, the Engine rows and compatibility mode, "Available offline", download progress on
   the splash, a failed download that recovers when back online, and `?enginetest`).
-  `e2e/paywall.spec.ts` (6) runs against a second build made with `VITE_PAYWALL=1` (playwright.config.ts
+  `e2e/explorer.spec.ts` (4): the explorer during a rated game (the question, moves for both sides by
+  tapping squares, ratings and eval, Back, Reset, Reply, Play, Exit), a selection or promotion picker
+  that never carries over between the game and the explorer, the game's news on a short phone and the
+  collapsed panel, Flip and the "Exploring" tag in landscape, and in Game Review.
+  `e2e/opponent.spec.ts` (3): "Rate opponent's moves" switched on in the New game sheet (unrated, the bot's
+  badge, rating and verdict, both rows of the coach panel and the halves on a short phone), in landscape
+  with a long bot name (no squeezed text, whole verdicts) and in the Menu during a rated game (Cancel,
+  then the question and the Unrated pill).
+  `e2e/opening-game.spec.ts` (3): opening practice started through the debug hook: the bot following the line, the
+  line move's arrow and coach line, the banner, leaving the line said once, a tap on the banner opening the line in
+  the Openings section (Done returns to the game as it was); 'skip' with a reload; the collapsed coach on a short
+  phone and the banner in its floating panel.
+  `e2e/openings.spec.ts` (4): the Openings section from the Menu (the beginner card, Start here, a family, Learn
+  with notes and branches, Back, a move off the book, Explore by moves, search with the opening first and Back to
+  the results, a drill as Black, progress, Play following the guide's line), from the New game sheet and a game's
+  opening chip (no evaluation during a rated game), offline, and its speed on a slow small phone.
+  `e2e/paywall.spec.ts` (9) runs against a second build made with `VITE_PAYWALL=1` (playwright.config.ts
   serves it on port 4174) and steers the mock store through `window.__mockStore`: the locked coach,
   Hint and Show best, the paywall and a purchase, cancelled / failed / pending (Ask to Buy) purchases,
   Restore Purchases (also cancelled and offline) and a refund, the locked key moments of Game Review,
-  About's privacy / terms / support links with Pro locked and unlocked, and Escape over stacked sheets.
+  the locked explorer, the opponent's move ratings (verdict free, explanation locked), About's privacy / terms / support links with Pro locked and unlocked, Escape over stacked sheets, and the Openings section (free browsing and playing, the guides and drills locked).
   `E2E_REQUIRE_APP_SW=1` makes the PWA tests fail if the app does not register its service worker.
 - The native shell itself (Swift, Xcode project) is only compiled on macOS: `ios-build.yml` in CI, or
   Xcode on a Mac. Runtime checks in WKWebView need a device (see `docs/APP_STORE.md`, "Device

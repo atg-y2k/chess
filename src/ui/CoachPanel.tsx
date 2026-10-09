@@ -2,9 +2,15 @@ import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { MoveClass } from '../analysis/types';
 import { CLASS_META, ClassIcon } from './ClassIcon';
 import { IconChevronRight } from './icons';
+import { OpeningBanner, openingBannerOf } from './OpeningBanner';
 import { IconLock } from './PaywallSheet';
 import './CoachPanel.css';
 
+/**
+ * A button of the panel. The action with id 'opening' is opening practice's banner instead: drawn
+ * at the top of the bubble (OpeningBanner), its label being the line's name, the status and the
+ * tone separated by tabs (`openingBannerOf`); `onClick` opens the line.
+ */
 export interface CoachAction {
   id: string;
   label: string;
@@ -33,6 +39,97 @@ export interface CoachPanelProps {
   collapsed?: boolean;
   /** Shows a collapse chevron and makes the collapsed row tappable. */
   onToggleCollapsed?: () => void;
+  /**
+   * Your move and the opponent's are both rated: the other one as a compact row ("You ★ 12. Nf3
+   * Best") that expands it when tapped. Collapsed, the panel shows both as one row of two halves.
+   */
+  other?: CoachOther;
+  /** With `other`: whose move this feedback is about ("You", "Pip"), for the collapsed row. */
+  who?: string;
+  /** With `other`: the short verdict ("Mistake"), for the collapsed row. */
+  verdict?: string;
+}
+
+/** The other rated move's feedback, as one compact row of the coach panel. */
+export interface CoachOther {
+  /** "You" or the opponent's name. */
+  who: string;
+  /** "12… Nf6". */
+  move: string;
+  /** Short verdict: "Mistake", "Gives up material", "Checking…". */
+  verdict: string;
+  /** Its class icon (none for a move that gives something away, or while it is checked). */
+  cls?: MoveClass;
+  /** Still being checked (a small spinner instead of the icon). */
+  busy?: boolean;
+  /** Above the expanded feedback or below it, so the two rows keep their order ("You" first). */
+  place: 'before' | 'after';
+  /** Expands this move's feedback instead. */
+  onSelect: () => void;
+}
+
+/** `--coach-tone` for a class colour (the bubble, a row, a half of the collapsed row). */
+function toneOf(cls: MoveClass | undefined): Record<string, string> | undefined {
+  return cls ? { '--coach-tone': CLASS_META[cls].color } : undefined;
+}
+
+/** The other move's feedback: a compact, tappable row inside the bubble. */
+function OtherRow({ other }: { other: CoachOther }) {
+  return (
+    <button
+      type="button"
+      class="coach-other"
+      data-place={other.place}
+      data-cls={other.cls}
+      style={toneOf(other.cls)}
+      aria-expanded="false"
+      aria-label={`${other.who}: ${other.move}, ${other.verdict}. Show this move`}
+      onClick={other.onSelect}
+    >
+      <span class="coach-other-who">{other.who}</span>
+      {other.busy ? (
+        <span class="coach-spin coach-spin--sm" aria-hidden="true" />
+      ) : other.cls ? (
+        <ClassIcon cls={other.cls} size={16} />
+      ) : null}
+      <span class="coach-other-move">{other.move}</span>
+      <span class="coach-other-verdict">{other.verdict}</span>
+      <IconChevronRight size={16} class="coach-other-chevron" />
+    </button>
+  );
+}
+
+interface Half {
+  who: string;
+  verdict: string;
+  cls?: MoveClass;
+  busy?: boolean;
+  current?: boolean;
+  onClick?: () => void;
+}
+
+/** One half of the collapsed row when both moves are rated: "You ★ Best". */
+function HalfButton({ half }: { half: Half }) {
+  return (
+    <button
+      type="button"
+      class="coach-half"
+      data-cls={half.cls}
+      data-current={half.current ? '' : undefined}
+      style={toneOf(half.cls)}
+      aria-label={`${half.who}: ${half.verdict}`}
+      onClick={half.onClick}
+      disabled={!half.onClick}
+    >
+      {half.busy ? (
+        <span class="coach-spin coach-spin--sm" aria-hidden="true" />
+      ) : half.cls ? (
+        <ClassIcon cls={half.cls} size={18} />
+      ) : null}
+      <span class="coach-half-who">{half.who}</span>
+      <span class="coach-half-verdict">{half.verdict}</span>
+    </button>
+  );
 }
 
 /** Emoji used for the coach's avatar. */
@@ -53,14 +150,27 @@ export function CoachPanel({
   actions,
   collapsed = false,
   onToggleCollapsed,
+  other,
+  who,
+  verdict,
 }: CoachPanelProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const text = lines.join('\n');
   const split = !!titleMove && title.length > titleMove.length && title.startsWith(titleMove);
+  // The opponent's "Pip’s 12… Nf6": the name can give way before the move does (see CoachPanel.css).
+  const owner = who && titleMove?.startsWith(`${who}’s `) ? `${who}’s` : null;
+  const moveText =
+    owner && titleMove ? (
+      <>
+        <span class="coach-title-who">{owner}</span> <span class="coach-title-san">{titleMove.slice(owner.length + 1)}</span>
+      </>
+    ) : (
+      titleMove
+    );
   const titleText = split ? (
     <>
-      <span class="coach-title-move">{titleMove}</span>{' '}
-      <span class="coach-title-verdict">{title.slice(titleMove.length).trimStart()}</span>
+      <span class="coach-title-move">{moveText}</span>{' '}
+      <span class="coach-title-verdict">{title.slice(titleMove!.length).trimStart()}</span>
     </>
   ) : (
     title
@@ -86,13 +196,36 @@ export function CoachPanel({
     };
   }, [text, collapsed, busy]);
 
-  const meta = cls ? CLASS_META[cls] : undefined;
-  const tone = meta ? { '--coach-tone': meta.color } : undefined;
+  const tone = toneOf(cls);
+  // Opening practice: one action is the banner at the top of the bubble, not a button of the row.
+  const bannerAction = actions?.find((a) => a.id === 'opening');
+  const banner = bannerAction ? openingBannerOf(bannerAction.label) : null;
+  const buttons = actions?.filter((a) => a.id !== 'opening');
   const badge = busy ? (
     <span class="coach-spin" role="img" aria-label="Analyzing" />
   ) : cls ? (
     <ClassIcon cls={cls} size={collapsed ? 18 : 20} />
   ) : null;
+
+  if (collapsed && other) {
+    // Both moves rated: one row of two halves in their order ("You" first); a tap opens that one.
+    const mine: Half = { who: who ?? '', verdict: verdict ?? title, cls, busy, current: true, onClick: onToggleCollapsed };
+    const theirs: Half = { who: other.who, verdict: other.verdict, cls: other.cls, busy: other.busy, onClick: other.onSelect };
+    const halves = other.place === 'before' ? [theirs, mine] : [mine, theirs];
+    return (
+      <section class="coach coach--collapsed coach--dual" data-cls={cls} style={tone} aria-label="Coach">
+        <div class="coach-row coach-row--dual">
+          <span class="coach-avatar" aria-hidden="true">
+            {COACH_EMOJI}
+          </span>
+          {halves.map((h, i) => (
+            <HalfButton key={i} half={h} />
+          ))}
+          {onToggleCollapsed && <IconChevronRight size={18} class="coach-chevron coach-chevron--up" />}
+        </div>
+      </section>
+    );
+  }
 
   if (collapsed) {
     return (
@@ -118,11 +251,19 @@ export function CoachPanel({
   }
 
   return (
-    <section class="coach" data-cls={cls} style={tone} aria-label="Coach">
+    <section
+      class={other || banner ? 'coach coach--dual' : 'coach'}
+      data-cls={cls}
+      data-banner={banner ? '' : undefined}
+      style={tone}
+      aria-label="Coach"
+    >
       <div class="coach-avatar" aria-hidden="true">
         {COACH_EMOJI}
       </div>
       <div class="coach-bubble">
+        {banner && <OpeningBanner {...banner} onOpen={bannerAction?.onClick} />}
+        {other?.place === 'before' && <OtherRow other={other} />}
         <div class="coach-head">
           {badge}
           <h2 class={titleClass}>{titleText}</h2>
@@ -146,9 +287,9 @@ export function CoachPanel({
             </div>
           ) : null}
         </div>
-        {actions && actions.length > 0 && (
+        {buttons && buttons.length > 0 && (
           <div class="coach-actions">
-            {actions.map((a) => (
+            {buttons.map((a) => (
               <button
                 key={a.id}
                 type="button"
@@ -168,6 +309,7 @@ export function CoachPanel({
             ))}
           </div>
         )}
+        {other?.place === 'after' && <OtherRow other={other} />}
       </div>
     </section>
   );

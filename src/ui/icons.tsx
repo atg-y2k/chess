@@ -141,3 +141,42 @@ export const IconCheckCircle = (p: IconProps) => (
     <path d="m8 12.5 2.8 2.8L16.5 9.5" />
   </Svg>
 );
+
+/** The explorer: a branching line (try moves off the game). */
+export const IconExplore = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="6" cy="18" r="2.5" />
+    <circle cx="6" cy="5" r="2" />
+    <circle cx="18" cy="7" r="2.5" />
+    <path d="M6 7v8.5" />
+    <path d="M18 9.5c0 4.5-6.5 3.5-10.5 7" />
+  </Svg>
+);
+
+/** Start over (the explorer's Reset). */
+export const IconReset = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5" />
+    <path d="M3.5 3.5v5h5" />
+  </Svg>
+);
+
+/** Rating the opponent's moves: the computer's head with a verdict mark. */
+export const IconBotRated = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="8" width="13" height="11" rx="3" />
+    <path d="M9.5 8V5M8.5 3.5h2" />
+    <circle cx="7" cy="13" r="0.6" fill="currentColor" />
+    <circle cx="12" cy="13" r="0.6" fill="currentColor" />
+    <path d="M7.5 16.2h4" />
+    <path d="M20 4v7M20 14.5v.5" />
+  </Svg>
+);
+
+/** Openings: an open book. */
+export const IconBook = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 6.5C10.2 5 7.6 4.5 3.5 4.8v13.4c4.1-.3 6.7.2 8.5 1.8 1.8-1.6 4.4-2.1 8.5-1.8V4.8c-4.1-.3-6.7.2-8.5 1.7Z" />
+    <path d="M12 6.5V20" />
+  </Svg>
+);

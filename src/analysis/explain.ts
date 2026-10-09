@@ -10,7 +10,7 @@
  */
 import { Chess, type Color, type Move, type PieceSymbol, type Square } from 'chess.js';
 import type { AnalysisResult, PvLine, Score } from '../engine/types';
-import { PIECE_NAMES, pvToSan, sideToMove, uciToSan } from '../chess/utils';
+import { formatLine, PIECE_NAMES, pvToSan, sideToMove, uciToSan } from '../chess/utils';
 import type { Arrow, ArrowBrush, Classification, Explanation, MoveClass } from './types';
 import { detectSacrifice } from './sacrifice';
 import { scoreToWin } from './winprob';
@@ -56,6 +56,9 @@ import {
   type Threat,
 } from './motifs';
 
+/** A book move's reason when nothing more specific is found ("Nf3 is a known opening move."). */
+export const BOOK_REASON = 'is a known opening move';
+
 /** Who the text addresses: 'you' = the mover is the user ("your knight"); 'neutral' = White/Black. */
 export type Perspective = 'you' | 'neutral';
 
@@ -100,13 +103,13 @@ interface Voice {
 
 function voice(mover: Color, perspective: Perspective | undefined): Voice {
   const you = perspective !== 'neutral';
-  return { you, mover, own: you ? 'your' : `${SIDE[mover]}'s`, victim: 'the', subject: you ? 'You' : SIDE[mover] };
+  return { you, mover, own: you ? 'your' : `${SIDE[mover]}’s`, victim: 'the', subject: you ? 'You' : SIDE[mover] };
 }
 
 /** The voice for explaining the OPPONENT's reply to a user's move (victims are the user's pieces). */
 function replyVoice(v: Voice): Voice {
   const mover = other(v.mover);
-  return { you: false, mover, own: `${SIDE[mover]}'s`, victim: v.own, subject: SIDE[mover] };
+  return { you: false, mover, own: `${SIDE[mover]}’s`, victim: v.own, subject: SIDE[mover] };
 }
 
 const on = (p: PieceOn) => `${NAME[p.type]} on ${p.square}`;
@@ -265,7 +268,7 @@ function motifClause(m: Motif, poss: string): string | null {
   }
 }
 
-const KING_PIN = " (it can't move)";
+const KING_PIN = " (it can’t move)";
 
 /** "once", "twice", "3 times". */
 const times = (n: number) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
@@ -335,9 +338,9 @@ function principleText(p: Principle): string {
     case 'earlyQueen':
       return 'brings the queen out early, where enemy pieces can chase it';
     case 'edgePawn':
-      return "is an edge-pawn move that doesn't help development";
+      return "is an edge-pawn move that doesn’t help development";
     case 'fPawn':
-      return "weakens the king's position";
+      return "weakens the king’s position";
     case 'knightRim':
       return 'puts the knight on the edge, where it controls fewer squares';
     case 'luft':
@@ -723,10 +726,12 @@ function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove, opts: L
   }
   if (givenUp) return res(givenUp.title, givenUp.reason, keyLine, { motifs: givenUp.motifs, targets: took });
   // Not a line whose reply was a tie-break that gives material away for nothing (see `unforced`).
+  // The engine's continuation, numbered ("Engine line: 3. c4 Nf6 4. g3"): not a "main line", which
+  // the Openings section uses for the most studied way an opening goes.
   const main = unforced ? [] : playLine(fen, line.pv, 5).sans;
-  const mainLine = main.length > 1 ? [`Main line: ${main.join(' ')}.`] : [];
-  if (checks) return res('Check', 'gives check', mainLine, { fallback: true, motifs: ['check'] });
-  return res('Positional', 'improves the position', mainLine, { fallback: true });
+  const engineLine = main.length > 1 ? [`Engine line: ${formatLine(fen, main)}.`] : [];
+  if (checks) return res('Check', 'gives check', engineLine, { fallback: true, motifs: ['check'] });
+  return res('Positional', 'improves the position', engineLine, { fallback: true });
 }
 
 /**
@@ -939,7 +944,7 @@ export function explainBestMove(fen: string, line: PvLine, opts: ExplainBestMove
     };
   } catch {
     const san = line.pv[0] ? uciToSan(fen, line.pv[0]) : null;
-    return { headline: san ? `${san} is the engine's choice.` : 'There is no move to suggest here.', details: [] };
+    return { headline: san ? `${san} is the engine’s choice.` : 'There is no move to suggest here.', details: [] };
   }
 }
 
@@ -1067,7 +1072,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     const backRank = isBackRankMate(fenAfter);
     return done(
       v.you ? `${move.san} is checkmate — well played!` : `${move.san} is checkmate.`,
-      [backRank && "It's a back-rank mate: the king has no escape square."],
+      [backRank && "It’s a back-rank mate: the king has no escape square."],
       'Checkmate',
       ['checkmate', ...(backRank ? ['backRank'] : [])],
     );
@@ -1110,7 +1115,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
       oppMates === 1 && mates[0] ? `${grab} ${mates[0]}, checkmate.` : `${grab} a forced mate in ${oppMates}.`,
       [
         oppMates > 1 && mateSentence(`${Opp} mates with`, mates, oppMates),
-        backRank && `It's a back-rank mate: ${v.own} king has no escape square.`,
+        backRank && `It’s a back-rank mate: ${v.own} king has no escape square.`,
         bestSan && needed,
       ],
       'Allows mate',
@@ -1122,7 +1127,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     arrows.push(...arrow(reply?.pv[0], 'threat'));
     const mateIn = oppMates === 1 ? `${Opp} mates next move` : `${Opp} still has a forced mate in ${oppMates}`;
     if (new Chess(fenBefore).moves().length === 1) {
-      return done(`${move.san} is forced: it's the only legal move.`, [`${mateIn}.`], 'Only move', ['onlyMove']);
+      return done(`${move.san} is forced: it’s the only legal move.`, [`${mateIn}.`], 'Only move', ['onlyMove']);
     }
     if (isBest || (bestMate !== null && oppMates >= -bestMate)) {
       return done(`${move.san} is the most stubborn defense.`, [`${mateIn}.`], 'Forced mate', ['mated']);
@@ -1284,7 +1289,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     details.push(...lost.details);
   } else if (bestRecap && captor?.color === opp && bestGain < 1 && bestOut && bestOut.net - playedOut.net >= 1) {
     // 4r. Did not take back the piece the opponent just captured.
-    headline = `${v.subject} didn't recapture the ${NAME[captor.type]} on ${p.prevMove!.to}.`;
+    headline = `${v.subject} didn’t recapture the ${NAME[captor.type]} on ${p.prevMove!.to}.`;
     title = 'Missed recapture';
     motifs = ['missedRecapture'];
   } else if (missedGain) {
@@ -1316,7 +1321,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     const took = move.captured ? { to: move.to, captured: move.captured } : undefined;
     const rr = reply ? explainLine(fenAfter, reply, rv, took, { lines: p.after?.lines }) : null;
     if (neg) headline = `${move.san} ${principleText(neg)}.`;
-    else if (cl.cls === 'miss') headline = `${v.subject} missed a chance to punish ${Opp}'s mistake.`;
+    else if (cl.cls === 'miss') headline = `${v.subject} missed a chance to punish ${Opp}’s mistake.`;
     else headline = evalHeadline(cl.winBefore, cl.winAfter, v, Opp);
     // Only mention the reply when it does something concrete (a tactic, a threat, winning material),
     // and not when it takes a piece that was lost anyway (that is said instead).
@@ -1408,7 +1413,8 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     else if (cl.cls === 'great' && onlyMove && !headline.includes('the only move')) {
       details.push('It was the only good move here.');
     }
-    if (r?.fallback && details.length === 0) details.push(cmp?.detail, ...r.details);
+    // A book move needs no engine line after it (the opening's own moves are what comes next).
+    if (r?.fallback && details.length === 0 && cl.cls !== 'book') details.push(cmp?.detail, ...r.details);
     return done(headline, details, r?.title ?? 'Good move', [...(r?.motifs ?? []), ...(cmp?.motifs ?? [])]);
 
     /** What kind of move it is when nothing specific was found, instead of "improves the position". */
@@ -1416,7 +1422,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
       const sacked = cl.cls === 'brilliant' ? sacrificedPiece(fenBefore, moveUci, fenAfter, me, true) : null;
       if (sacked) return `sacrifices ${theOn(sacked, v.own)}`;
       if (onlyMove && bestLine?.score) return onlyMoveReason(bestLine.score);
-      if (cl.cls === 'book') return 'is a known opening move';
+      if (cl.cls === 'book') return BOOK_REASON;
       if (isBest) return cmp?.reason ?? fallback;
       if (cl.winAfter <= 1 - WINNING) return 'is a reasonable try in a difficult position';
       if (cl.winAfter >= WINNING) return `keeps ${v.own} winning position`;

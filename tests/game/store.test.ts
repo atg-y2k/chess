@@ -39,6 +39,13 @@ describe('explanationLines', () => {
     expect(explanationLines(e('You missed Qxf7, which mates.'), 'Qxf7#')).toEqual(['You missed Qxf7, which mates.']);
   });
 
+  it('says what "book" means instead of repeating a book move’s verdict', () => {
+    expect(explanationLines(e('Nf3 is a known opening move.'))).toEqual([
+      'A “book” move is a well-known opening move that players have studied for years.',
+    ]);
+    expect(explanationLines(e('Nf3 develops a knight.', 'It attacks e5.'))).toEqual(['Nf3 develops a knight.', 'It attacks e5.']);
+  });
+
   it('a square or a longer move with the same letters is not a mention', () => {
     expect(explanationLines(e('Black can answer Nxf3.'), 'f3')).toEqual(['Black can answer Nxf3.', 'Best was f3.']);
     expect(explanationLines(e('O-O-O was possible.'), 'O-O')).toEqual(['O-O-O was possible.', 'Best was O-O.']);

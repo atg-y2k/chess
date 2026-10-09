@@ -24,8 +24,16 @@ optional one-time "Pro" purchase for the coaching features. See [iOS app](#ios-a
   wins or loses, the tactic or recapture you missed, the threat you allowed, and what the best move
   was.
 - **Hints, Show best and Retry** to learn from your mistakes during the game.
+- **Rate opponent’s moves** (an option): see whether the computer found the best move, with the same
+  ratings and explanations you get for yours.
+- **An explorer** to try moves before you play them: move for both sides, and the engine rates
+  each move, shows the evaluation and its best move, and can answer for the other side.
 - **Game Review** after the game: accuracy for both sides, key moments, and coaching for every move
   of both players.
+- **Openings** for beginners: 3,815 named lines (Italian Game, Sicilian Defense…) to search, browse
+  and step through on a board, a "Start here" list for White and for Black, the move tree, guides that
+  explain why each move is played, drills that test you move by move, and games against the computer
+  that follow an opening.
 - **Takebacks, board flip and PGN export** (with evaluations and move marks) through the iOS share
   sheet or the clipboard.
 - **Made for the iPhone:** full screen when installed, fits around the Dynamic Island and the home
@@ -44,7 +52,7 @@ Chrome and the other iOS browsers can also add it to the Home Screen from their 
 Screen app keeps its own rating and saved game, separate from Safari's, so progress made in a Safari
 tab before installing does not carry over.
 
-The first visit downloads about 3.3 MB (less if the site compresses it). Most of that is the chess
+The first visit downloads about 3.9 MB (less if the site compresses it). Most of that is the chess
 engine (1.8 MB) and the opening book (0.9 MB). On a slow connection, the start screen shows
 "Downloading engine NN%…". Once a launch has finished that download while online, the app works
 **offline**, in airplane mode too: it says **Available offline** once when the download is done,
@@ -75,15 +83,18 @@ The first time you open the app, and whenever you tap **New**, the **New game** 
 - **Pick an opponent:** a named bot, **Custom** (the slider, 100 to 3200 in steps of 50) or
   **Match my rating** (an opponent at your rating, rounded to 50, chosen again for every game).
 - **Pick a color:** White, Random or Black.
-- **Choose options:** Coach, Evaluation bar, Best-move arrows, Takebacks and Sound.
+- **Choose options:** Coach, Evaluation bar, Best-move arrows, Rate opponent’s moves, Takebacks and
+  Sound.
 
 Then tap **Play**. Move by dragging a piece or by tapping it and then its destination square. The
-bar at the bottom has **New** (a new game), **Undo** (take back your last move), **Hint**, **Flip**
-(turn the board around), **Coach** (coach on or off) and **Menu**. When the game ends, a sheet
-shows the result the way chess players write it, from White's side (1–0 when White won, 0–1 when
-Black won, ½–½ for a draw), with White on the left, and your rating change. After the game the bar
-has **Review** and ‹ › to step through the moves. Tap any move in the move list, or anywhere on the graph, to look
-at that position; **Back to game** returns to the current one.
+bar at the bottom has **New** (a new game), **Undo** (take back your last move), **Hint**,
+**Explore** (see [The explorer](#the-explorer)), **Flip** (turn the board around), **Coach** (coach
+on or off) and **Menu**. When the game ends, a sheet shows the result the way chess players write
+it, from White's side (1–0 when White won, 0–1 when Black won, ½–½ for a draw), with White on the
+left, and your rating change. After the game the bar has **Review** and ‹ › to step through the
+moves. Tap any move in the move list, or anywhere on the graph, to look at that position; **Back to
+game** returns to the current one. (With the phone in landscape the bar is narrower: **New** is
+then only in the Menu, and in Game Review **Flip** is.)
 
 If iOS closes the app (it often does in the background), your game is still there when you open it
 again, and a finished game comes back with its result, ready for review, until you start the next
@@ -108,6 +119,20 @@ and explains it. For example, "14. Qg4 is a blunder" with "This hangs your queen
 If you don't take back a piece your opponent just captured, the coach says so, for example "You
 didn't recapture the bishop on c6."
 
+**Rate opponent’s moves** (an option, separate from the coach) does the same for the computer's
+moves: you see whether it found the best move. Its last move gets its icon on the board and in the
+move list (the same icons as yours), its big moments a dot on the graph, and the coach panel gives
+the verdict and the explanation in the third person, for example "Pip’s 12… Nf6 is a mistake" with
+"This leaves Black's knight on f6 undefended." **Show best** shows what it should have played, with
+arrows on the position before its move. With the coach on too, the panel shows both moves, yours
+always on top: one open, the other as a row ("You ★ 12. Nf3 Best"); tap the row to open it. Your move
+stays open while it has something to fix (an inaccuracy or worse, with Retry and Show best at hand);
+after a good move the computer's latest move is open. On a short phone (or in landscape) both fit in
+one row ("You ★ Best | Pip ? Mistake"); tap a half to read it. With the coach off, the panel shows
+only the computer's moves. The option is in the New game sheet and the Menu. It shows you when the
+computer goes wrong, so it makes the game unrated, and it stays on for your next games until you
+switch it off (see [Rated and unrated games](#your-rating-what-elo-means)).
+
 **Good moves that give something away.** When the game is already decided, a move can hardly change
 your winning chances, so it can count as Good or Excellent even if it gives up material. The coach
 does not praise such a move: it says, for example, "10… Kd8 doesn't change the result" (the game
@@ -121,6 +146,129 @@ one. If the check fails (rarely), it says "Couldn't check …" with a **Try agai
 When it is your move right after your opponent took one of your pieces and you can take back
 without losing material, the coach's tip says so, for example "Rocco just took your bishop on c1.
 Can you recapture?"
+
+## The explorer
+
+**Explore** (in the bar at the bottom) lets you try moves before you make them. It opens on the
+position on the board: the current one, or an earlier one you are looking at, also after the game
+and in Game Review. A blue frame around the board, an **Exploring** tag and the blue explorer panel
+show that this is not your game; tap the tag to go back to the game.
+
+- **Move for both sides** on the board. The move list shows your line ("From 15… Nf6: 16. Nf3 Nc6
+  17. Bb5"); tap a move to go back to it.
+- The **evaluation bar** follows the explored position, and the engine's best moves for the side to
+  move are drawn as arrows (**Arrows on** in the panel switches them off, **Arrows off** back on).
+- **Each move gets a rating**, like your moves in the game: an icon on the board and in the list, and
+  in the panel the verdict, the evaluation and the coach's short explanation, for example
+  "16. Nf3 — Excellent · +0.4". **Best here** names the engine's choice in the position.
+- The bar at the bottom has **Reset** (clears your line and goes back to where you started),
+  **Flip**, **Back**, **Forward**, **Reply** (the engine plays the best move for the side to move) and
+  **Exit**.
+- A position that would end the game ends the line too: checkmate, stalemate, or a draw by
+  repetition (counting your game's moves before it), the 50-move rule or too little material. The
+  panel says so ("Threefold repetition: a draw.") and the evaluation is 0.0.
+- **Play 16. Nf3**: when you started on your turn in the game, this plays the first move of your
+  line in the game, and closes the explorer.
+- Your game never changes while you explore. If it was your opponent's turn, it plays on: the panel
+  says so ("Pip played 15… Nf6 in your game.", on a short phone under the panel's row), and **Play** is
+  no longer offered. A move you started (a piece you tapped, the promotion choice) is dropped when you
+  go in or out of the explorer, so it never lands in the other one. **Exit** brings you back to the
+  game as you left it. The explorer is not saved: if iOS closes the app, the game comes back without
+  it.
+- In a game that still counts for your rating, the first **Explore** asks first: "Exploring uses the
+  engine, so it makes this game unrated." It opens on the position you asked about, even if your
+  opponent has moved meanwhile. After the game and in Game Review it does not change anything.
+
+## Openings
+
+An **opening** is the first moves of a game. The **Openings** section (Menu → **Openings**, or
+**Learn openings** in the New game sheet) teaches them from scratch: it opens full screen over your
+game, and **Done** (or Back from its first page, Escape, or the phone's Back button) brings you back
+to where you were, with your game as it was (your opponent may move meanwhile, as when the Menu is
+open). A short card explains the words it uses (an opening, the main line, a variation, a book move)
+the first time (a link at the bottom of the first page brings it back), and an ⓘ next to a term
+explains it where it shows (ECO codes, book moves and "common in theory", the main line).
+
+- **Search** by name ("najdorf", "Spanish", "caro"), by ECO code ("C50") or by moves ("1. e4 c5
+  2.Nf3"). An opening the search names comes first (it opens the opening's page), then the matching
+  lines with their variation and moves. Back from a result returns to the same search.
+- **Start here:** pick **I play White** or **I play Black** for a list of good openings to start with,
+  the easiest first (beginner-friendly openings, then intermediate, then advanced), each with its
+  first moves (and, with the guides, how hard it is and what it is about). **All openings** lists all 141 openings, most studied first; **Explore by moves** is the
+  move tree (below).
+- **An opening's page** says who plays it ("An opening for Black: you choose it when White starts
+  1. e4"), its first moves, its guide (what it is about, your plans and the other side's, the traps
+  to know with **Show me**, and its key variations), all its variations, and related openings. Its
+  buttons: **Learn the main line**, **Drill it** and **Play it vs computer**.
+- **Learn** (stepping through a line): the board with the evaluation bar (the app's own engine, a
+  quick look at each position), the opening's name at each move, and the guide's note on why each move
+  is played. Step with the buttons (start, back, play, forward, end), by tapping the left or right
+  half of the note card, by swiping it, with the arrow keys, or let it play by itself. **Other moves
+  here** lists the other book moves at that point, how common they are in opening theory (not how
+  often people play them), the main move (★) and known mistakes (⚠, moves that give the other side
+  the better game); tap one to follow its line (Back returns). Moving a piece on the board follows
+  the book too; any other move says that it leaves the opening book, with the engine's verdict and
+  **Back to the line**. The last move of a line says what to do next (drill it, play it, or try the
+  other moves). A trap (**Show me** on an opening's page) marks the mistake it is about.
+- **Explore by moves:** the book moves from the starting position, with the opening each one leads
+  to; tap a move, or play it on the board, to go deeper, and tap the trail of moves to go back. **Learn
+  this line** and **Play** take it from there.
+- **Drill** a line: the computer plays one side's moves (you pick yours; a trap is drilled from the
+  side that sets it; **Strict** counts any other
+  book move as a mistake, **Allow them** does not, but either way you play the line's move to go on)
+  and you find yours on the board. A wrong move is shown, then taken back; **Hint** names the piece,
+  then its square, then the move; **Show me** plays it. The end shows your score, the moves to review
+  with their notes, and your progress: New, Learning (drilled), Familiar (a clean run: every move
+  found first time, no hints) and Mastered (clean runs on three different days). Only drills of the
+  side that plays the opening count towards it; the other side's are practice. **Next variation**
+  goes on with a line that adds something new. Lines due for practice and your latest drills show on
+  the first page, and your progress on the openings' cards.
+- **Play it vs computer** asks which side you play (the opening's, or "face it" while the computer
+  plays it; after a drill, the side you drilled), where to start (see
+  [Playing an opening](#playing-an-opening)) and which opponent, and starts the game. The game follows
+  exactly the line you were looking at, including an opening's main line from its guide. It warns when
+  your side plays a known mistake in the line, and a line that ends in checkmate starts from move 1.
+  These games are unrated, and your New game choices (side, opponent) stay as they were.
+- **From a game:** while the game's position has an opening name, a chip at the end of the move list
+  ("📖 Italian Game") opens it in the Openings section; in a game that plays an opening, so does the
+  coach's banner, at the game's move.
+- **During a rated game** the section shows no engine evaluation (that would be live help, which makes
+  a game unrated): the names, the book moves and the guides are all there. If your game ends while the
+  section is open, its result shows when you close the section.
+
+In the App Store app, the guides (the notes on each move, the plans, the traps and the key
+variations) and the drills with their saved progress are part of Pro; searching, browsing, stepping
+through any line, the move tree and playing openings are free. The section and its data (about
+110 KB compressed) load the first time it opens; once the app is cached it works offline.
+
+## Playing an opening
+
+**Play** on a line in the Openings section starts a game that follows that opening (for example the
+Italian Game) against the opponent you pick, with your usual options (coach, evaluation bar…):
+
+- **From move 1:** the game starts from the beginning, and while the game is on the line, the
+  computer plays the line's moves for its side. With **Show the line’s moves as I play** on, a light
+  brown arrow shows the line's next move on your turn, and the coach says "Line move: 3. Bc4 — Italian
+  Game" (and, for a move the line plays on purpose to show how it gets punished, that it is a known
+  mistake). Another move leaves the line: the coach says so once ("You left the line at 3. Nc3 (the line
+  continues 3. Bc4) — the game goes on normally"), and the computer then plays its own moves. Without
+  the arrow, the coach still says when someone leaves the line. Reaching the same position by another
+  move order counts as being on the line, and taking back a move that left it puts you back on it.
+  Once the line's last move is played, the coach says the line is complete and you are on your own.
+- **After the line:** the game starts with the line's moves already on the board, marked as "book"
+  moves (📖: well-known opening moves that players have studied for years), and you play on from
+  there. If it is the computer's move, it replies at once. A line that would end the game (the Fool's
+  Mate) stops before that, on your move.
+
+A banner at the top of the coach panel names the opening and where the game is: "Move 3 of 5" while
+on the line, "Line complete", or "Left at 3. Nc3" (on a narrow screen the variation's name gives way
+first, never the opening's). Tap it to open the line in the Openings section at the game's move (your
+game stays as it is). The computer's first moves are chosen for it, so these games never change
+your rating (the Unrated tag shows from the start), and the game-over sheet says "Opening practice:
+Italian Game". **Rematch** plays the same opening again; **New game** starts a normal game. The
+opening is saved with the game, so it goes on after iOS closes the app. Game Review leaves the moves
+that were on the board from the start out of the accuracy and the move counts, and the exported PGN
+is a normal game from the start position (its Event tag says "Opening practice: …").
 
 ## The evaluation bar
 
@@ -166,11 +314,17 @@ gains more than beating a weaker one.
 
 **Rated and unrated games.** A game counts for your rating unless you use help:
 
-- A **takeback** (Undo), a **hint**, **Retry** or **best-move arrows** make the game unrated. The
-  coach and the evaluation bar are fine in rated games.
-- In a rated game, the first hint, takeback or Retry asks you to confirm. While a takeback or Retry
-  is waiting for your answer, your opponent holds its reply; if you cancel, it plays on. Switching
-  best-move arrows on (in the Menu, or when starting the game) makes it unrated at once.
+- A **takeback** (Undo), a **hint**, **Retry**, **best-move arrows**, the **explorer** or **Rate
+  opponent’s moves** make the game unrated. The coach and the evaluation bar are fine in rated games.
+- In a rated game, the first hint, takeback, Retry or Explore asks you to confirm, and so does
+  switching on Rate opponent’s moves in the Menu. While a takeback or Retry is waiting for your
+  answer, your opponent holds its reply; if you cancel, it plays on (it also plays on while you
+  explore or answer about Rate opponent’s moves). Switching best-move arrows on (in the Menu, or when
+  starting the game) makes it unrated at once, and a game started with best-move arrows or Rate
+  opponent’s moves on is unrated from the start. Both are settings: they stay on for your next games
+  (a Rematch too) until you switch them off.
+- A game that plays an opening (see [Playing an opening](#playing-an-opening)) is unrated from the
+  start: the computer's first moves are scripted.
 - An **Unrated** tag on your player strip shows when a game no longer counts.
 - **Resigning** counts as a loss, rated unless the game was already unrated. Resigning before you
   have made a move does not change your rating.
@@ -236,8 +390,10 @@ match chess.com exactly. The Brilliant and Great thresholds depend on your ratin
 ## The Menu
 
 - **Flip board, Export PGN, New game and Resign** (Resign asks first).
+- **Openings:** the Openings section (see [Openings](#openings)).
 - **Chess Coach Pro** (App Store app only): Unlock, or "Unlocked ✓", and **Restore Purchases**.
-- **While playing:** Coach, Evaluation bar, Best-move arrows (makes the game unrated) and Sound.
+- **While playing:** Coach, Evaluation bar, Best-move arrows (makes the game unrated), Rate opponent’s
+  moves (asks first in a rated game, then makes it unrated) and Sound.
 - **Appearance:** Dark, Light or Automatic (follows iOS).
 - **Your stats:** rating, peak, games, wins/draws/losses and **Set my level**; then your
   **Recent games** (the last 10).
@@ -308,7 +464,7 @@ Requires Node 24 (chessground declares `engines.node >= 24`).
 ```sh
 npm ci                 # install
 npm run dev            # dev server with hot reload (http://localhost:5173)
-npm test               # unit tests (Vitest: about 790 tests in 40 files; the calibration test is skipped)
+npm test               # unit tests (Vitest: about 1,040 tests in 54 files; the calibration test is skipped)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
 npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting
@@ -346,9 +502,12 @@ the device runs low on space). iPhone only, portrait, iOS 16.4 or later.
 (no server, no account; the check works offline).
 
 - **Free:** every opponent at any level, your rating, the evaluation bar and graph, the move ratings
-  and badges, accuracy, takebacks and Retry, and PGN export.
-- **Pro:** the coach's explanations (the "why"), Hint, Show best, best-move arrows, and Game Review's
-  key moments and per-move comments.
+  and badges (also of the opponent's moves, with Rate opponent’s moves), accuracy, takebacks and
+  Retry, PGN export, and in the Openings section searching, browsing, stepping through any line, the
+  move tree and playing openings.
+- **Pro:** the coach's explanations (the "why", also of the opponent's moves), Hint, Show best, the
+  explorer, best-move arrows, Game Review's key moments and per-move comments, and the Openings
+  section's guides (why each move is played, plans, traps) and drills with saved progress.
 
 The split is `FEATURE_TIERS` in `src/game/entitlements.ts`. The web app has no paywall: everything in
 it is unlocked. A web build made with `VITE_PAYWALL=1` locks Pro behind a mock store, for testing the

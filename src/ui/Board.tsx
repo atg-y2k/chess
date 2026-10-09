@@ -34,8 +34,16 @@ export interface BoardProps {
   /** Highlight the side-to-move king as in check. */
   check?: boolean;
   arrows?: Arrow[];
-  /** Classification icon at a square (like chess.com). */
+  /** Classification icon at a square (like chess.com); it tints the last move when it sits on its destination. */
   badge?: { square: string; cls: MoveClass };
+  /** More classification icons, without the tint (your last move's, while the opponent's reply has `badge`). */
+  extraBadges?: { square: string; cls: MoveClass }[];
+  /**
+   * What the board's moves are for (the game, or one opening of the explorer). When it changes, a
+   * move the user had started (a selected piece, a drag, an open promotion picker) is dropped, even
+   * when the position stays the same, so it never ends up in the other one.
+   */
+  session?: string;
   /**
    * A user move. Accept it by passing the new `fen` (in the same task, e.g. synchronously from a
    * store update); if `fen` is still unchanged shortly afterwards, the board snaps back to it.
@@ -50,6 +58,7 @@ const ARROW_HEX: Record<ArrowBrush, string> = {
   alt: '#3f86c4',
   threat: '#d9534f',
   played: '#f0b43c',
+  line: '#c8a27a',
 };
 
 /** Stroke width in 1/64ths of a square, and opacity, per arrow kind. */
@@ -58,10 +67,12 @@ const ARROW_STYLE: Record<ArrowBrush, { lineWidth: number; opacity: number }> = 
   alt: { lineWidth: 10, opacity: 0.62 },
   threat: { lineWidth: 11, opacity: 0.8 },
   played: { lineWidth: 11, opacity: 0.8 },
+  // Opening practice's guide: light, under any engine arrow.
+  line: { lineWidth: 10, opacity: 0.6 },
 };
 
 /** Draw order: the most important arrow last, so it ends up on top. */
-const ARROW_ORDER: Record<ArrowBrush, number> = { alt: 0, played: 1, threat: 2, best: 3 };
+const ARROW_ORDER: Record<ArrowBrush, number> = { line: 0, alt: 1, played: 2, threat: 3, best: 4 };
 
 /** How long a user move may stay unanswered (fen prop unchanged) before the board snaps back. */
 const RESYNC_DELAY_MS = 40;
@@ -77,6 +88,8 @@ interface PendingPromotion {
   from: string;
   to: string;
   color: BoardColor;
+  /** The board's `session` when the pawn was moved. */
+  session: string | undefined;
 }
 
 /** FEN piece letter on `square` (e.g. 'P', 'n'), or null. */
@@ -132,10 +145,11 @@ function makeBrushes(el: Element): DrawBrushes {
     alt: brush('alt'),
     threat: brush('threat'),
     played: brush('played'),
+    line: brush('line'),
   };
 }
 
-function buildShapes(arrows: Arrow[] | undefined, badge: BoardProps['badge']): DrawShape[] {
+function buildShapes(arrows: Arrow[] | undefined, badge: BoardProps['badge'], extra?: BoardProps['extraBadges']): DrawShape[] {
   const shapes: DrawShape[] = (arrows ?? [])
     .slice()
     .sort((a, b) => ARROW_ORDER[a.brush] - ARROW_ORDER[b.brush])
@@ -144,7 +158,9 @@ function buildShapes(arrows: Arrow[] | undefined, badge: BoardProps['badge']): D
       dest: a.from === a.to ? undefined : (a.to as Key),
       brush: a.brush,
     }));
-  if (badge) shapes.push({ orig: badge.square as Key, customSvg: { html: classBadgeSvg(badge.cls) } });
+  for (const b of [...(extra ?? []), ...(badge ? [badge] : [])]) {
+    shapes.push({ orig: b.square as Key, customSvg: { html: classBadgeSvg(b.cls) } });
+  }
   return shapes;
 }
 
@@ -174,7 +190,7 @@ function decorationConfig(p: BoardProps): Config {
   return {
     orientation: p.orientation,
     highlight: { custom: badgeHighlight(p) },
-    drawable: { autoShapes: buildShapes(p.arrows, p.badge) },
+    drawable: { autoShapes: buildShapes(p.arrows, p.badge, p.extraBadges) },
   };
 }
 
@@ -193,6 +209,8 @@ export function Board(props: BoardProps) {
   const [promo, setPromo] = useState<PendingPromotion | null>(null);
   const promoRef = useRef(promo);
   promoRef.current = promo;
+  /** The `session` chessground was last synced to. */
+  const sessionRef = useRef(props.session);
 
   /** Puts chessground back on the props (after a rejected or cancelled move). */
   const resync = () => {
@@ -219,7 +237,7 @@ export function Board(props: BoardProps) {
     const color = promotionColor(propsRef.current.fen, orig, dest);
     if (color) {
       pendingFenRef.current = propsRef.current.fen;
-      setPromo({ from: orig, to: dest, color });
+      setPromo({ from: orig, to: dest, color, session: propsRef.current.session });
     } else {
       submit(orig, dest);
     }
@@ -259,7 +277,7 @@ export function Board(props: BoardProps) {
         enabled: false,
         visible: true,
         brushes: makeBrushes(el),
-        autoShapes: buildShapes(p.arrows, p.badge),
+        autoShapes: buildShapes(p.arrows, p.badge, p.extraBadges),
       },
     });
     cgRef.current = cg;
@@ -297,11 +315,18 @@ export function Board(props: BoardProps) {
 
   // Push prop changes into chessground.
   const lastMoveKey = props.lastMove?.join('') ?? '';
+  const extraBadgesKey = props.extraBadges?.map((b) => b.square + b.cls).join() ?? '';
   useLayoutEffect(() => {
     const cg = cgRef.current;
     if (!cg) return;
     const fenChanged = props.fen !== syncedFenRef.current;
-    if (fenChanged) {
+    // Another session (into or out of the explorer): a move started in the old one is dropped.
+    const sessionChanged = props.session !== sessionRef.current;
+    if (sessionChanged) {
+      sessionRef.current = props.session;
+      window.clearTimeout(timerRef.current);
+    }
+    if (fenChanged || sessionChanged) {
       pendingFenRef.current = null;
       syncedFenRef.current = props.fen;
       if (promoRef.current) setPromo(null);
@@ -312,9 +337,10 @@ export function Board(props: BoardProps) {
     } else {
       cg.set({ ...positionConfig(props, false), ...decorationConfig(props) });
     }
-    // Read-only now: drop a selection or drag the user had started.
-    if (!props.movableColor && (cg.state.selected || cg.state.draggable.current)) cg.cancelMove();
+    // Read-only now, or another session: drop a selection or drag the user had started.
+    if ((sessionChanged || !props.movableColor) && (cg.state.selected || cg.state.draggable.current)) cg.cancelMove();
   }, [
+    props.session,
     props.fen,
     props.orientation,
     props.movableColor,
@@ -324,13 +350,15 @@ export function Board(props: BoardProps) {
     props.arrows,
     props.badge?.square,
     props.badge?.cls,
+    extraBadgesKey,
   ]);
 
   const choosePromotion = (piece: PromotionPiece) => {
     const p = promoRef.current;
     if (!p) return;
     setPromo(null);
-    submit(p.from, p.to, piece);
+    if (p.session !== propsRef.current.session) resync(); // started in the other session
+    else submit(p.from, p.to, piece);
   };
 
   const cancelPromotion = () => {

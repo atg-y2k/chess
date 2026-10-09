@@ -22,6 +22,8 @@ export interface GameOverSheetProps {
   /** Bot avatar background colour. */
   botColor?: string;
   botElo?: number;
+  /** Opening practice: the line's name ("Opening practice: Italian Game" in place of "Unrated game"). */
+  practice?: string;
 }
 
 export type GameOverKind = 'win' | 'loss' | 'draw';
@@ -95,6 +97,7 @@ export function GameOverSheet({
   botEmoji = '🤖',
   botColor: botAvatarColor,
   botElo,
+  practice,
 }: GameOverSheetProps) {
   const { kind, headline } = gameOverHeadline(outcome, playerColor);
   const reason = gameOverReason(outcome, playerColor, botName);
@@ -190,10 +193,13 @@ export function GameOverSheet({
               <span class="gos-delta">{formatRatingDelta(delta)}</span>
             </div>
           ) : (
-            <div class="gos-rating gos-rating--unrated">
-              <span class="gos-rating-label">Unrated game</span>
+            <div class="gos-rating gos-rating--unrated" data-practice={practice ? '' : undefined}>
+              <span class="gos-rating-label">{practice ? `Opening practice: ${practice}` : 'Unrated game'}</span>
               <span class="gos-rating-note">
-                {ratingChange ? `Your rating stays at ${ratingChange.before}` : 'Your rating is unchanged'}
+                {practice ? 'Unrated game: ' : ''}
+                {ratingChange
+                  ? `${practice ? 'your' : 'Your'} rating stays at ${ratingChange.before}`
+                  : `${practice ? 'your' : 'Your'} rating is unchanged`}
               </span>
             </div>
           )}

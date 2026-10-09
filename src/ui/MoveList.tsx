@@ -19,6 +19,13 @@ export interface MoveListProps {
    * - 'all': every classified move (e.g. a full review).
    */
   iconSet?: 'notable' | 'all';
+  /**
+   * A chip before the moves for the position they start from (e.g. "From 15… Nf6" in the explorer):
+   * current when `current` is 0, and tapping it selects 0.
+   */
+  lead?: string;
+  /** Shown when there are no moves (default "No moves yet"). */
+  emptyText?: string;
 }
 
 /** Classes that get an icon in the move list with the default `iconSet: 'notable'`. */
@@ -78,7 +85,15 @@ function centerCurrent(box: HTMLElement, current: number, smooth: boolean): void
  * the row changes width under it: icons appear as moves are classified, or for every move when a
  * review starts; and when the row itself gets wider or narrower, e.g. the phone is rotated).
  */
-export function MoveList({ plies, current, onSelect, showClassIcons, iconSet = 'notable' }: MoveListProps) {
+export function MoveList({
+  plies,
+  current,
+  onSelect,
+  showClassIcons,
+  iconSet = 'notable',
+  lead,
+  emptyText = 'No moves yet',
+}: MoveListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const mounted = useRef(false);
   const currentRef = useRef(current);
@@ -152,9 +167,22 @@ export function MoveList({ plies, current, onSelect, showClassIcons, iconSet = '
   const pairs = pairMoves(plies);
 
   return (
-    <div class="mlist" ref={scrollRef} onWheel={onWheel} role={pairs.length ? 'list' : undefined} aria-label="Moves">
+    <div class="mlist" ref={scrollRef} onWheel={onWheel} role={pairs.length || lead ? 'list' : undefined} aria-label="Moves">
+      {lead && (
+        <div class="mlist-pair" role="listitem">
+          <button
+            type="button"
+            class="mlist-move mlist-lead"
+            data-ply="lead"
+            aria-current={current === 0 ? 'true' : undefined}
+            onClick={() => onSelect(0)}
+          >
+            <span class="mlist-pill">{lead}</span>
+          </button>
+        </div>
+      )}
       {pairs.length === 0 ? (
-        <span class="mlist-empty">No moves yet</span>
+        <span class="mlist-empty">{emptyText}</span>
       ) : (
         pairs.map((p) => (
           <div class="mlist-pair" role="listitem" key={`${p.no}-${p.white?.index ?? p.black?.index}`}>

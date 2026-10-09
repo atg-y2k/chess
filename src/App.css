@@ -136,15 +136,93 @@
 /*
  * A strip too narrow for "You (1500) Unrated" and the chip side by side (the landscape side
  * column, small phones): "Unrated", the only sign on screen that the game no longer counts, moves
- * to the start of the second row, clear of the chip.
+ * to the start of the second row, clear of the chip (or of the explorer's "Exploring" tag, on the
+ * top strip when the board is flipped).
  */
 @container player (max-width: 360px) {
-  .app-player:has(> .app-chip) .pstrip-top > .pstrip-unrated {
+  .app-player:is(:has(> .app-chip), :has(> .app-explore-tag)) .pstrip-top > .pstrip-unrated {
     display: none;
   }
-  .app-player:has(> .app-chip) .pstrip-caps-unrated {
+  .app-player:is(:has(> .app-chip), :has(> .app-explore-tag)) .pstrip-caps-unrated {
     display: block;
   }
+}
+
+/* ---------------------------------------------------------------- explorer */
+
+/*
+ * Exploring: a frame in the explorer's color around the board, an "Exploring" tag on the top
+ * player strip and the blue explorer panel, so the explored position never passes for the game.
+ */
+.app[data-exploring] .app-board-cell > .board-host > .board {
+  box-shadow:
+    0 0 0 2px var(--explore),
+    0 0 18px color-mix(in srgb, var(--explore) 35%, transparent);
+}
+/* Also a way back to the game (like the toolbar's Exit). */
+.app-explore-tag {
+  appearance: none;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  margin: 0;
+  padding: 0 8px 0 9px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--explore);
+  color: var(--explore-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  transform: translateY(-50%);
+  cursor: pointer;
+  animation: app-chip-in 0.22s cubic-bezier(0.3, 0.7, 0.2, 1.2) both;
+}
+/* A 44px tap target without a taller pill. */
+.app-explore-tag::after {
+  content: '';
+  position: absolute;
+  inset: -8px -4px;
+}
+.app-explore-tag:active {
+  filter: brightness(0.92);
+}
+.app-explore-tag svg {
+  flex: none;
+  stroke-width: 2.4;
+}
+.app-explore-tag .app-explore-tag-x {
+  margin-left: 1px;
+  opacity: 0.85;
+}
+/*
+ * Room for the pill at the strip's right end: the name (ellipsized) and the captured pieces end
+ * before it. It takes the turn dot's place: the avatar's ring still shows whose turn it is.
+ */
+.app-player:has(> .app-explore-tag) .pstrip {
+  padding-right: 128px;
+}
+.app-player:has(> .app-explore-tag) .pstrip-status {
+  display: none;
+}
+/* The game's graph while exploring: still there, dimmed and not tappable. */
+.app-graph[data-dim] {
+  opacity: 0.4;
+  filter: saturate(0.6);
+}
+/* The explored line in the move list: tinted like the explorer. */
+.app-moves[data-exploring] .mlist-move[aria-current='true'] .mlist-pill {
+  box-shadow: inset 0 -2px 0 var(--explore);
+}
+.app-moves[data-exploring] .mlist-lead .mlist-pill {
+  border: 1px dashed color-mix(in srgb, var(--explore) 60%, var(--border));
 }
 
 /* ---------------------------------------------------------------- coach / review panel */
@@ -167,6 +245,18 @@
 .app-panel > .coach--collapsed {
   flex: none;
 }
+.app-panel > .xpanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 260px;
+}
+.app-panel > .xpanel--collapsed {
+  flex: none;
+  margin: 0 var(--gap);
+}
+.app-panel:has(> .xpanel--collapsed) {
+  justify-content: center;
+}
 .app-panel:has(> .coach--collapsed) {
   justify-content: center;
 }
@@ -180,6 +270,17 @@
 .app-panel[data-peek] {
   z-index: 20;
 }
+.app-panel[data-peek] > .xpanel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 4px;
+  min-height: 150px;
+  max-height: min(300px, 62cqh);
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
+  background: color-mix(in srgb, var(--explore) 9%, var(--bg));
+  animation: app-peek-in 0.22s cubic-bezier(0.3, 0.7, 0.2, 1) both;
+}
 .app-panel[data-peek] > .coach {
   position: absolute;
   left: 0;
@@ -192,6 +293,10 @@
   background: var(--bg);
   box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
   animation: app-peek-in 0.22s cubic-bezier(0.3, 0.7, 0.2, 1) both;
+}
+/* Both moves rated: room for the other move's row too. */
+.app-panel[data-peek] > .coach--dual {
+  min-height: 168px;
 }
 @keyframes app-peek-in {
   from {
@@ -240,7 +345,24 @@
 }
 .app-tools {
   grid-area: tools;
+  container: tools / inline-size;
   min-width: 0;
+}
+/*
+ * A narrow toolbar (the side column of a phone in landscape): a seven-button bar leaves out New
+ * (the Menu has it, and after the game the game-over sheet and the coach too) so Flip stays, and
+ * the review's, which has no New, leaves out Flip (in the Menu too). The labels get a little
+ * smaller, so "Explore" and "Forward" fit.
+ */
+@container tools (max-width: 340px) {
+  .toolbar:has(> .toolbar-btn:nth-child(7)) > .toolbar-btn[data-id='newGame'],
+  .toolbar:has(> .toolbar-btn:nth-child(7)):not(:has(> .toolbar-btn[data-id='newGame'])) > .toolbar-btn[data-id='flip'] {
+    display: none;
+  }
+  .app-tools .toolbar-label {
+    font-size: 10px;
+    letter-spacing: 0;
+  }
 }
 
 /* ---------------------------------------------------------------- landscape / desktop: two columns */
@@ -507,6 +629,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .app-explore-tag,
+  .app-panel[data-peek] > .xpanel,
   .app-chip,
   .app-panel[data-peek] > .coach,
   .app-splash-logo,
@@ -516,4 +640,133 @@
   .app-spinner {
     animation-duration: 2s;
   }
+}
+
+/* ---------------------------------------------------------------- openings */
+
+/*
+ * The Openings section (src/ui/openings, lazy-loaded) slides up over the game and its sheets,
+ * full screen inside the safe areas. Over the sheets (later in the DOM, same layer), under the
+ * paywall. No transform once open: the Play sheet inside it is position: fixed.
+ */
+.openings-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  padding: var(--safe-top) 0 0;
+  background: var(--bg);
+  animation: openings-in 0.36s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.openings-shell:focus {
+  outline: none;
+}
+.openings-shell > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.openings-shell[data-state='closing'] {
+  pointer-events: none;
+  animation: openings-out 0.28s cubic-bezier(0.4, 0, 0.9, 0.6) forwards;
+}
+@keyframes openings-in {
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+}
+@keyframes openings-out {
+  to {
+    transform: translate3d(0, 100%, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .openings-shell,
+  .openings-shell[data-state='closing'] {
+    animation-duration: 0.01s;
+  }
+}
+/* As for the app: keep the status bar's band dark in the light theme of the installed app. */
+@media (display-mode: standalone) {
+  :root[data-theme='light'] .openings-shell {
+    box-shadow: inset 0 var(--safe-top) 0 0 #1d1c1a;
+  }
+}
+.openings-shell-loading {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.openings-shell-done {
+  appearance: none;
+  position: absolute;
+  top: 2px;
+  right: max(6px, var(--safe-right));
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font-size: 17px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+/* The game's opening name at the end of the move list: opens it in the Openings section. */
+.app-moves[data-opening] {
+  display: flex;
+  align-items: center;
+}
+.app-moves[data-opening] > .mlist {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.app-opening-chip {
+  appearance: none;
+  position: relative;
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 42%;
+  min-height: 32px;
+  margin: 0 10px 0 6px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--cls-book) 55%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--cls-book) 16%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.app-opening-chip::after {
+  /* 44px tap target. */
+  content: '';
+  position: absolute;
+  inset: -6px -2px;
+}
+.app-opening-chip svg {
+  flex: none;
+  color: var(--cls-book);
+}
+.app-opening-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app-opening-chip:active {
+  filter: brightness(0.92);
+}
+.app-opening-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

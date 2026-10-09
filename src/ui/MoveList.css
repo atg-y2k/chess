@@ -93,3 +93,15 @@
   font-size: 13px;
   color: var(--text-faint);
 }
+
+/* The explorer's starting position, before its moves ("From 15… Nf6"). */
+.mlist-lead {
+  margin-right: 6px;
+}
+.mlist-lead .mlist-pill {
+  font-size: 13px;
+  color: var(--text-faint);
+}
+.mlist-lead[aria-current='true'] .mlist-pill {
+  color: var(--text);
+}

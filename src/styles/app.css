@@ -37,6 +37,10 @@
   --arrow-threat: #d9534f;
   --arrow-played: #f0b43c;
 
+  /* The explorer (trying moves off the game): its board frame and panel. */
+  --explore: #8a9cf5;
+  --explore-text: #111a3d;
+
   /* Eval bar */
   --eval-white: #f3f1ec;
   --eval-black: #3b3834;
@@ -89,6 +93,8 @@
   --text-faint: #6e675e;
   /* --accent-text stays dark: white on the green accent is only 2.7:1. */
   --link: #2e7a3e;
+  --explore: #4d5fd6;
+  --explore-text: #ffffff;
 }
 
 *,

@@ -7,6 +7,8 @@ import type { GameRecord, PlayerProfile } from '../rating/types';
 import type { ThemePref } from '../theme';
 import { About } from './About';
 import {
+  IconBook,
+  IconBotRated,
   IconChart,
   IconCheckCircle,
   IconChevronRight,
@@ -21,6 +23,7 @@ import {
   IconSound,
 } from './icons';
 import { LevelPicker, levelFor, type StartingLevel } from './LevelPicker';
+import { RATE_OPPONENT_MENU_DESCRIPTION } from './NewGameSheet';
 import { IconLock } from './PaywallSheet';
 import { Sheet } from './Sheet';
 import { Toggle } from './Toggle';
@@ -40,6 +43,8 @@ export interface MenuSheetProps {
   onFlip: () => void;
   onNewGame: () => void;
   onClose: () => void;
+  /** Opens the Openings section (omitted: no row). */
+  onOpenings?: () => void;
   /** Optional personas, to show avatars in the recent-games list (matched by `botName`). */
   bots?: BotPersona[];
   /** Colour theme preference; with `onThemeChange` an "Appearance" picker is shown. */
@@ -158,6 +163,7 @@ export function MenuSheet({
   onFlip,
   onNewGame,
   onClose,
+  onOpenings,
   bots,
   theme,
   onThemeChange,
@@ -226,6 +232,23 @@ export function MenuSheet({
         )}
       </section>
 
+      {onOpenings && (
+        <section class="sheet-section">
+          <div class="sheet-group">
+            <button type="button" class="menu-row menu-row--link" data-id="openings" onClick={onOpenings}>
+              <span class="menu-row-icon" style={{ background: 'var(--cls-book)' }} aria-hidden="true">
+                <IconBook />
+              </span>
+              <span class="menu-row-text">
+                <span class="menu-row-label">Openings</span>
+                <span class="menu-row-desc">Learn, explore and practice chess openings</span>
+              </span>
+              <IconChevronRight size={18} class="menu-row-chevron" />
+            </button>
+          </div>
+        </section>
+      )}
+
       {pro && (
         <section class="sheet-section">
           <div class="sheet-group menu-pro" data-unlocked={pro.unlocked ? '' : undefined}>
@@ -286,6 +309,15 @@ export function MenuSheet({
             onChange={arrowsLocked ? () => onUnlock?.('bestMoveArrows') : (v) => onChange({ showBestMoves: v })}
             icon={arrowsLocked ? <IconLock /> : <IconEye />}
             iconColor={arrowsLocked ? 'var(--warning)' : 'var(--cls-brilliant)'}
+          />
+          <Toggle
+            id="rateOpponent"
+            label="Rate opponent’s moves"
+            description={RATE_OPPONENT_MENU_DESCRIPTION}
+            checked={settings.rateOpponent}
+            onChange={(v) => onChange({ rateOpponent: v })}
+            icon={<IconBotRated />}
+            iconColor="var(--cls-inaccuracy)"
           />
           <Toggle
             id="sound"

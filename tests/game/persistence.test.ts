@@ -248,6 +248,19 @@ describe('settings', () => {
     expect(s).toEqual({ ...DEFAULT_SETTINGS, botElo: 3200, sound: false, newToggle: true });
   });
 
+  it('"Rate opponent’s moves" (rateOpponent): off by default, and off for settings saved before it existed', () => {
+    expect(DEFAULT_SETTINGS.rateOpponent).toBe(false);
+    // Settings saved by an older version (no rateOpponent field).
+    const { rateOpponent: _new, ...old } = { ...DEFAULT_SETTINGS, coach: false, showBestMoves: true };
+    storage.setItem(SETTINGS_KEY, JSON.stringify({ version: 1, settings: old }));
+    expect(loadSettings()).toEqual({ ...DEFAULT_SETTINGS, coach: false, showBestMoves: true, rateOpponent: false });
+    // Round trip, and a value of the wrong type falls back to off.
+    saveSettings({ ...DEFAULT_SETTINGS, rateOpponent: true });
+    expect(loadSettings().rateOpponent).toBe(true);
+    storage.setItem(SETTINGS_KEY, JSON.stringify({ version: 1, settings: { rateOpponent: 'yes' } }));
+    expect(loadSettings().rateOpponent).toBe(false);
+  });
+
   it('accepts a bare settings object and recovers from corrupt data', () => {
     storage.setItem(SETTINGS_KEY, JSON.stringify({ ...DEFAULT_SETTINGS, botElo: 333.3 }));
     expect(loadSettings().botElo).toBe(333);
