@@ -1,9 +1,11 @@
 /**
  * The explorer end to end, on the production build with the real engine (iPhone 15 Pro emulation):
- * during a rated game (the question, then moves for both sides by tapping squares, the eval bar,
- * the rating badges, Back, Reset, Engine reply, "Play" committing a move to the game, Exit) and in
- * Game Review (no question, the review comes back on Exit). The game itself must never change while
- * exploring.
+ * during a rated game it opens at once with its engine off (no question, no eval bar, arrows or
+ * badges; moves for both sides by tapping squares, Back, "Play" committing a move to the game, the
+ * game still rated), then the Engine switch (the question, Keep off, Turn on: the Unrated pill, the
+ * eval bar, the rating badges, arrows, Best here, Reset, Engine reply, Exit); and in Game Review
+ * (the engine on, no question, the review comes back on Exit). The game itself must never change
+ * while exploring.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
@@ -33,6 +35,10 @@ const board = (page: Page): Locator => page.locator('.board cg-board').first();
 const tool = (page: Page, id: string): Locator => page.locator(`.toolbar-btn[data-id="${id}"]`);
 const panel = (page: Page): Locator => page.locator('.app-panel .xpanel');
 const lineMoves = (page: Page): Locator => page.locator('.app-moves .mlist-move:not(.mlist-lead)');
+const engineSwitch = (page: Page): Locator => panel(page).locator('[data-id="explorer-engine"]');
+/** Engine arrows (auto shapes; their arrowheads stay defined once drawn) and verdict badges (custom SVGs) on the board. */
+const arrows = (page: Page): Locator => page.locator('.cg-shapes line');
+const badges = (page: Page): Locator => page.locator('.cg-custom-svgs [cgHash]');
 
 async function squareCenter(page: Page, square: string): Promise<{ x: number; y: number }> {
   const box = await board(page).boundingBox();
@@ -87,7 +93,7 @@ async function startGame(page: Page): Promise<void> {
 }
 
 test.describe('Explorer', () => {
-  test('during a rated game: ask, try moves for both sides, Back, Reset, Engine reply, Play, Exit', async ({ page }) => {
+  test('during a rated game: no question and no engine, moves for both sides, Play keeps it rated; the Engine switch asks, then everything', async ({ page }) => {
     test.setTimeout(180_000);
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
@@ -98,54 +104,45 @@ test.describe('Explorer', () => {
     await waitForMyTurn(page);
     const game = await gameSans(page);
     const live = await page.evaluate(() => (window as unknown as Win).__chessCoach!.controller.store.liveFen.value);
+    await expect(page.locator('.evalbar[role="meter"]')).toBeVisible(); // the game's own bar
 
-    // Explore asks first: the game is rated.
+    // Explore opens at once, with the engine off: the game stays rated.
     await tool(page, 'explore').tap();
-    const ask = page.getByRole('dialog', { name: 'Explore this position?' });
-    await expect(ask).toBeVisible();
-    await expect(ask).toContainText('Exploring uses the engine, so it makes this game unrated: win or lose, your rating stays the same.');
-    await ask.locator('[data-id="confirm-ok"]').tap();
-    await expect(ask).toBeHidden();
     await expect(page.locator('.app[data-exploring]')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Turn on the engine?' })).toHaveCount(0);
     await expect(page.locator('[data-id="exploring"]')).toHaveText('Exploring');
-    await expect(page.locator('.app-player--bottom')).toContainText('Unrated');
+    await expect(page.locator('.app-player--bottom')).not.toContainText('Unrated');
     await expect(panel(page).locator('.xpanel-title')).toHaveText('White to move');
+    await expect(panel(page)).toContainText('Engine off: try moves for both sides. Your game stays rated.');
+    await expect(engineSwitch(page)).toHaveAttribute('aria-checked', 'false');
+    await expect(engineSwitch(page)).toHaveAccessibleName('Engine');
+    await expect(page.locator('.evalbar[role="meter"]')).toHaveCount(0);
+    await expect(page.locator('.evalbar-off')).toHaveAttribute('aria-label', 'Evaluation: engine off');
+    await expect(tool(page, 'explorerReply')).toBeDisabled(); // in its place, so the toolbar keeps its shape
     await expect(page.locator('.app-moves .mlist-lead')).toContainText('From 1…');
 
-    // Moves for both sides by tapping squares.
-    await tapMove(page, await explorerMove(page, ['g1f3', 'b1c3', 'd2d4']));
+    // Moves for both sides by tapping squares: no ratings, arrows, badges or best move.
+    const white = await explorerMove(page, ['g1f3', 'b1c3', 'd2d4']);
+    await tapMove(page, white);
     await expect(lineMoves(page)).toHaveCount(1);
     await tapMove(page, await explorerMove(page, ['b8c6', 'g8f6', 'd7d6']));
     await expect(lineMoves(page)).toHaveCount(2);
     await expect(panel(page).locator('.xpanel-title')).toHaveText(/^2… \S+$/);
+    await page.waitForTimeout(3_000); // time enough for an engine answer, were one asked for
+    await expect(page.locator('.app-moves .class-icon')).toHaveCount(0);
+    await expect(panel(page).locator('.class-icon, .xpanel-verdict, .xpanel-eval, .xpanel-best')).toHaveCount(0);
+    await expect(arrows(page)).toHaveCount(0);
+    await expect(badges(page)).toHaveCount(0);
+    expect(
+      await page.evaluate(() => (window as unknown as Win).__chessCoach!.controller.store.explorer.value!.moves.some((m) => m.rating)),
+    ).toBe(false);
 
-    // The engine rates both moves (badges in the list, on the board, a verdict and an eval).
-    await expect(page.locator('.app-moves .mlist-move:not(.mlist-lead) .class-icon')).toHaveCount(2, { timeout: 30_000 });
-    await expect(panel(page).locator('.xpanel-move .class-icon, .xpanel-move .xpanel-verdict').first()).toBeVisible();
-    await expect(panel(page).locator('.xpanel-eval')).toHaveText(/^[+-]?(\d+\.\d|M\d+)$/, { timeout: 30_000 });
-    await expect(panel(page).locator('.xpanel-best')).toHaveText(/^Best here: \S+ \(/, { timeout: 30_000 });
-    await expect.poll(() => evalText(page), { timeout: 30_000 }).toMatch(/^[+-]?(\d+\.\d|M\d+)/);
-    await expect(page.locator('.cg-shapes line, .cg-shapes path').first()).toBeAttached(); // engine arrows
-
-    // Back, then Reset.
+    // Back, then "Play 2. X" commits the first move to the game; the game is still rated.
     await tool(page, 'prev').tap();
     await expect(panel(page).locator('.xpanel-title')).toHaveText(/^2\. \S+$/);
-    await expect(tool(page, 'next')).toBeEnabled();
-    await tool(page, 'explorerReset').tap();
-    await expect(lineMoves(page)).toHaveCount(0);
-    await expect(page.locator('.app-moves .mlist-empty')).toHaveText('Try a move for either side');
-    await expect(panel(page).locator('.xpanel-title')).toHaveText('White to move');
-
-    // Engine reply plays White's best move.
-    await tool(page, 'explorerReply').tap();
-    await expect(lineMoves(page)).toHaveCount(1, { timeout: 30_000 });
-    const first = await page.evaluate(() => (window as unknown as Win).__chessCoach!.controller.store.explorer.value!.moves[0].san);
-
-    // The real game did not move.
     expect(await gameSans(page)).toEqual(game);
     expect(await page.evaluate(() => (window as unknown as Win).__chessCoach!.controller.store.liveFen.value)).toBe(live);
-
-    // "Play 2. X" commits that move to the game and leaves the explorer; the bot replies.
+    const first = await page.evaluate(() => (window as unknown as Win).__chessCoach!.controller.store.explorer.value!.moves[0].san);
     const play = panel(page).locator('[data-action="play"]');
     await expect(play).toHaveText(`Play 2. ${first}`);
     await play.tap();
@@ -153,19 +150,69 @@ test.describe('Explorer', () => {
     await expect.poll(() => gameSans(page)).toEqual([...game, first]);
     await expect(page.locator('.app-moves .mlist-move')).toHaveCount(4, { timeout: 30_000 });
     await expect(page.locator('.app-panel .coach')).toBeVisible();
+    await expect(page.locator('.app-player--bottom')).not.toContainText('Unrated');
 
-    // Explore again (no question now), then Exit back to the game as it was.
+    // The Engine switch asks first; Keep off changes nothing.
     await waitForMyTurn(page);
     await tool(page, 'explore').tap();
-    await expect(page.getByRole('dialog', { name: 'Explore this position?' })).toHaveCount(0);
     await expect(page.locator('.app[data-exploring]')).toBeVisible();
+    await expect(engineSwitch(page)).toHaveAttribute('aria-checked', 'false');
+    await engineSwitch(page).tap();
+    const ask = page.getByRole('dialog', { name: 'Turn on the engine?' });
+    await expect(ask).toBeVisible();
+    await expect(ask).toContainText(
+      'The engine’s evaluation, best moves and move ratings will show while you explore. Turning it on makes this game unrated: win or lose, your rating stays the same. Switching it off again won’t undo that.',
+    );
+    const backAt = (await tool(page, 'prev').boundingBox())!.x;
+    await ask.getByRole('button', { name: 'Keep off' }).tap();
+    await expect(ask).toBeHidden();
+    await expect(engineSwitch(page)).toHaveAttribute('aria-checked', 'false');
+    await expect(page.locator('.app-player--bottom')).not.toContainText('Unrated');
+
+    // Turn on: the game becomes unrated, and the engine shows everything.
+    await engineSwitch(page).tap();
+    await ask.locator('[data-id="confirm-ok"]').tap();
+    await expect(ask).toBeHidden();
+    await expect(engineSwitch(page)).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('.app-player--bottom')).toContainText('Unrated');
+    await expect(page.locator('.evalbar[role="meter"]')).toBeVisible();
+    expect((await tool(page, 'prev').boundingBox())!.x).toBe(backAt); // the toolbar did not move
     await tapMove(page, await explorerMove(page, ['d2d4', 'd2d3', 'b1c3']));
     await expect(lineMoves(page)).toHaveCount(1);
+    await tapMove(page, await explorerMove(page, ['d7d6', 'g8f6', 'a7a6']));
+    await expect(lineMoves(page)).toHaveCount(2);
+    await expect(page.locator('.app-moves .mlist-move:not(.mlist-lead) .class-icon')).toHaveCount(2, { timeout: 30_000 });
+    await expect(panel(page).locator('.xpanel-move .class-icon, .xpanel-move .xpanel-verdict').first()).toBeVisible();
+    await expect(panel(page).locator('.xpanel-eval')).toHaveText(/^[+-]?(\d+\.\d|M\d+)$/, { timeout: 30_000 });
+    await expect(panel(page).locator('.xpanel-best')).toHaveText(/^Best here: \S+ \(/, { timeout: 30_000 });
+    await expect.poll(() => evalText(page), { timeout: 30_000 }).toMatch(/^[+-]?(\d+\.\d|M\d+)/);
+    await expect(arrows(page).first()).toBeAttached();
+    await expect(panel(page).locator('[data-action="arrows"]')).toHaveText('Arrows on');
+
+    // Reset, then Engine reply plays White's best move.
+    await tool(page, 'explorerReset').tap();
+    await expect(lineMoves(page)).toHaveCount(0);
+    await expect(page.locator('.app-moves .mlist-empty')).toHaveText('Try a move for either side');
+    await tool(page, 'explorerReply').tap();
+    await expect(lineMoves(page)).toHaveCount(1, { timeout: 30_000 });
+
+    // Off again: everything hides at once; the game stays unrated.
+    await engineSwitch(page).tap();
+    await expect(page.getByRole('dialog', { name: 'Turn on the engine?' })).toHaveCount(0);
+    await expect(engineSwitch(page)).toHaveAttribute('aria-checked', 'false');
+    await expect(page.locator('.evalbar[role="meter"]')).toHaveCount(0);
+    await expect(page.locator('.app-moves .class-icon')).toHaveCount(0);
+    await expect(arrows(page)).toHaveCount(0);
+    await expect(tool(page, 'explorerReply')).toBeDisabled();
+    await expect(page.locator('.app-player--bottom')).toContainText('Unrated');
+    await expect(panel(page)).toContainText('Engine off: try moves for both sides. This game is already unrated.');
+
+    // Exit back to the game as it was.
     await tool(page, 'explorerExit').tap();
     await expect(page.locator('.app[data-exploring]')).toHaveCount(0);
     await expect(page.locator('.app-moves .mlist-move')).toHaveCount(4);
     await expect(tool(page, 'undo')).toBeVisible();
-    // The board shows the game's position again.
+    await expect(page.locator('.evalbar[role="meter"]')).toBeVisible();
     const shown = await page.evaluate(() => {
       const s = (window as unknown as Win).__chessCoach!.controller.store;
       return { board: s.board.value.fen, live: s.liveFen.value, explorer: s.explorer.value };
@@ -236,7 +283,7 @@ test.describe('Explorer', () => {
     expect(await gameSans(page)).toEqual([]);
   });
 
-  test('short phone and landscape: the news from the game shows collapsed, the panel never squeezes its text, Flip stays', async ({ page }) => {
+  test('short phone and landscape: the news from the game shows collapsed, the Engine switch stays in sight, the panel never squeezes its text, Flip stays', async ({ page }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width: 375, height: 667 });
     await page.goto('./');
@@ -251,12 +298,21 @@ test.describe('Explorer', () => {
     await expect(page.locator('.app[data-exploring]')).toBeVisible();
     const row = page.locator('.app-panel .xpanel--collapsed');
     await expect(row).toBeVisible();
+    // The one-row panel keeps the Engine switch beside its row (no need to open it first).
+    await expect(row.locator('[data-id="explorer-engine"]')).toHaveAttribute('aria-checked', 'false');
+    await expect(row.locator('[data-id="explorer-engine"]')).toHaveAccessibleName('Engine');
     await expect(row.locator('.xpanel-notice')).toHaveText(/^Pip (is thinking|played 1… \S+) in your game/);
     await expect.poll(() => gameSans(page), { timeout: 30_000 }).toHaveLength(2);
     await expect(row.locator('.xpanel-notice')).toHaveText(/^Pip played 1… \S+ in your game$/);
 
-    // Landscape: the explorer collapses rather than leave its explanation a line or less.
+    // Landscape: the explorer collapses rather than leave its explanation a line or less. The
+    // engine goes on at once (an unrated game) from its switch, which either form of the panel
+    // shows (so the tap needs no guess about which form the resize has settled on).
     await page.setViewportSize({ width: 852, height: 393 });
+    await engineSwitch(page).tap();
+    await expect(page.locator('.evalbar[role="meter"]')).toBeVisible();
+    await expect(engineSwitch(page)).toHaveAttribute('aria-checked', 'true'); // still in sight after the switch
+    await expect(tool(page, 'explorerReply')).toBeVisible();
     await tapMove(page, await explorerMove(page, ['g1f3', 'b1c3', 'd2d4']));
     await expect(page.locator('.app-moves .mlist-move:not(.mlist-lead) .class-icon')).toHaveCount(1, { timeout: 30_000 });
     const body = await page.locator('.app-panel .xpanel-body').evaluateAll((els) => els.map((e) => [e.clientHeight, e.scrollHeight]));
@@ -272,7 +328,7 @@ test.describe('Explorer', () => {
     await expect(tool(page, 'newGame')).toBeVisible();
   });
 
-  test('in Game Review: no question, and Exit returns to the move being reviewed', async ({ page }) => {
+  test('in Game Review: the engine on, no question, and Exit returns to the move being reviewed', async ({ page }) => {
     test.setTimeout(180_000);
     await startGame(page);
     await waitForMyTurn(page);
@@ -289,8 +345,10 @@ test.describe('Explorer', () => {
     const ratingBefore = await page.locator('.app-player--bottom').textContent();
 
     await tool(page, 'explore').tap();
-    await expect(page.getByRole('dialog', { name: 'Explore this position?' })).toHaveCount(0);
     await expect(page.locator('.app[data-exploring]')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Turn on the engine?' })).toHaveCount(0);
+    await expect(engineSwitch(page)).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('.evalbar[role="meter"]')).toBeVisible();
     await expect(page.locator('.app-moves .mlist-lead')).toHaveText('From 1. e4');
     await tapMove(page, await explorerMove(page, ['e7e5', 'c7c5', 'e7e6']));
     await expect(lineMoves(page)).toHaveCount(1);

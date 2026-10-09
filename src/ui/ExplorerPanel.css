@@ -342,3 +342,162 @@
     animation: none;
   }
 }
+
+/* The Engine switch in the header (a 44px target around a compact switch). */
+.xpanel-engine {
+  appearance: none;
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  margin: -2px 0 -2px auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.xpanel-engine::after {
+  content: '';
+  position: absolute;
+  inset: -9px -8px;
+}
+.xpanel-head:has(.xpanel-toggle) .xpanel-engine {
+  margin-right: 4px;
+}
+.xpanel-head:has(.xpanel-engine) .xpanel-toggle {
+  margin-left: 0;
+}
+.xpanel-engine:focus-visible {
+  outline: 2px solid var(--explore);
+  outline-offset: 3px;
+  border-radius: 13px;
+}
+.xpanel-engine-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.xpanel-engine[aria-checked='true'] .xpanel-engine-label {
+  color: var(--text);
+}
+.xpanel-engine-lock {
+  margin-top: -1px;
+}
+.xpanel-switch {
+  --xpanel-switch-off: color-mix(in srgb, var(--text-faint) 42%, transparent);
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 24px;
+  border-radius: 12px;
+  background: var(--xpanel-switch-off);
+  transition: background-color 0.2s ease;
+}
+:root[data-theme='light'] .xpanel-switch {
+  --xpanel-switch-off: color-mix(in srgb, var(--text-faint) 34%, var(--surface));
+}
+.xpanel-engine[aria-checked='true'] .xpanel-switch {
+  background: var(--explore);
+}
+.xpanel-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 2px 5px rgba(0, 0, 0, 0.18),
+    0 1px 1px rgba(0, 0, 0, 0.1);
+  transition: transform 0.24s cubic-bezier(0.3, 0.7, 0.2, 1.15);
+}
+.xpanel-engine[aria-checked='true'] .xpanel-switch-thumb {
+  transform: translateX(16px);
+}
+.xpanel-engine[data-locked] .xpanel-switch {
+  opacity: 0.6;
+}
+
+/* The one-row panel: the Engine switch as a pill of its own beside the row (a 44px target). */
+.xpanel--collapsed > .xpanel-engine {
+  order: 1;
+  height: 44px;
+  margin: 0;
+  padding: 0 9px 0 12px;
+  border: 1px solid var(--xpanel-border);
+  border-radius: 22px;
+  background: var(--xpanel-bg);
+}
+.xpanel--collapsed > .xpanel-engine::after {
+  inset: 0;
+}
+.xpanel--collapsed > .xpanel-row-action {
+  order: 2;
+}
+.xpanel--collapsed > .xpanel-notice--row {
+  order: 3;
+}
+/*
+ * Narrow, with the main action too: the row drops its explorer icon (the blue panel and the
+ * "Exploring" tag above the board say it) so the switch keeps its name; narrower still, the
+ * switch alone (its name is still read out).
+ */
+@container panel (max-width: 380px) {
+  .xpanel--collapsed:has(> .xpanel-row-action) > .xpanel-engine {
+    padding: 0 8px 0 10px;
+  }
+  .xpanel--collapsed:has(> .xpanel-row-action) .xpanel-row .xpanel-tag {
+    display: none;
+  }
+}
+@container panel (max-width: 330px) {
+  .xpanel--collapsed:has(> .xpanel-row-action) > .xpanel-engine {
+    padding: 0 9px;
+  }
+  .xpanel--collapsed:has(> .xpanel-row-action) > .xpanel-engine .xpanel-engine-word {
+    display: none;
+  }
+}
+
+/* The collapsed row with the engine off (and no switch): say so where the verdict would be. */
+.xpanel-off {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xpanel-switch,
+  .xpanel-switch-thumb {
+    transition: none;
+  }
+}
+
+/*
+ * No room for "from 15… Nf6" beside the Engine switch (landscape, or a short phone's floated panel
+ * with its collapse button): the move list's first chip says it too, so it gives way whole.
+ */
+@container panel (max-width: 320px) {
+  .xpanel-head:has(.xpanel-engine) .xpanel-from {
+    visibility: hidden;
+  }
+}
+@container panel (max-width: 389px) {
+  .xpanel-head:has(.xpanel-engine):has(.xpanel-toggle) .xpanel-from {
+    visibility: hidden;
+  }
+}

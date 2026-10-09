@@ -569,10 +569,52 @@ function StatesPage() {
         <>
           <ExplorerPanel
             from="15… Nf6"
+            title="16. Nf3"
+            engine={{ on: false }}
+            onEngine={noop('states:xp-engine')}
+            verdict={null}
+            evalLabel={null}
+            lines={[
+              'Engine off: try moves for both sides. Your game stays rated.',
+              'Tap a piece to see where it can go. Back and Forward step through your line.',
+            ]}
+            best={null}
+            notice={null}
+            actions={[{ id: 'play', label: 'Play 16. Nf3', primary: true, onClick: noop('states:xp-play') }]}
+          />
+          <ExplorerPanel
+            from="15… Nf6"
+            title="16. Qxf7#"
+            engine={{ on: false, locked: true }}
+            onEngine={noop('states:xp-engine')}
+            verdict={null}
+            evalLabel={null}
+            lines={['Engine off: try moves for both sides.']}
+            best="Checkmate: White wins."
+            notice={null}
+            actions={[]}
+          />
+          <ExplorerPanel
+            from="15… Nf6"
+            title="16. Nf3"
+            engine={{ on: false }}
+            verdict={null}
+            evalLabel={null}
+            lines={[]}
+            best={null}
+            notice={null}
+            actions={[]}
+            collapsed
+            onToggleCollapsed={noop('states:xp-expand')}
+          />
+          <ExplorerPanel
+            from="15… Nf6"
+            engine={{ on: true }}
+            onEngine={noop('states:xp-engine')}
             title="White to move"
             verdict={null}
             evalLabel={null}
-            lines={['Make moves for either side to try them out. Your game stays as it is.']}
+            lines={['Make moves for either side to try them out: your game itself doesn’t change.']}
             best="Best here: Bd3 (+0.6)"
             notice={null}
             actions={[{ id: 'arrows', label: 'Arrows on', pressed: true, onClick: noop('states:xp-arrows') }]}

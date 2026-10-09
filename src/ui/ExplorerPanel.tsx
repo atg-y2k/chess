@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { MoveClass } from '../analysis/types';
 import { CLASS_META, ClassIcon } from './ClassIcon';
 import { IconChevronRight, IconExplore } from './icons';
+import { IconLock } from './PaywallSheet';
 import './ExplorerPanel.css';
 
 export interface ExplorerPanelAction {
@@ -18,6 +19,12 @@ export interface ExplorerPanelProps {
   from: string | null;
   /** The explored move on the board ("16. Nf3"), or "White to move" at the starting position. */
   title: string;
+  /**
+   * The Engine switch in the header (with `onEngine`): on or off, and locked (Pro: it shows a lock
+   * and its tap opens the paywall). Without it, no switch.
+   */
+  engine?: { on: boolean; locked?: boolean };
+  onEngine?: () => void;
   /** The move's verdict ("Excellent", "Checking…"). */
   verdict: string | null;
   /** Its class icon and color. */
@@ -44,13 +51,18 @@ export interface ExplorerPanelProps {
 
 /**
  * The explorer's panel, in the coach's place while the player tries moves: an "Exploring" header
- * (with where the line starts), the explored move on the board with its verdict and eval, its
- * explanation, the engine's best move in the position, news from the real game, and buttons. Its
- * blue tint matches the frame around the explorer's board, so it never passes for the game.
+ * (with where the line starts and the Engine switch, which the one-row form keeps beside its row),
+ * the explored move on the board with its
+ * verdict and eval, its explanation, the engine's best move in the position, news from the real
+ * game, and buttons. With the engine off it shows only the move and what the rules say (checkmate,
+ * a draw). Its blue tint matches the frame around the explorer's board, so it never passes for the
+ * game.
  */
 export function ExplorerPanel({
   from,
   title,
+  engine,
+  onEngine,
   verdict,
   cls,
   evalLabel,
@@ -117,8 +129,11 @@ export function ExplorerPanel({
           <span class="xpanel-title">{title}</span>
           {verdict && <span class="xpanel-verdict">{verdict}</span>}
           {evalLabel && <span class="xpanel-eval">{evalLabel}</span>}
+          {engine && !engine.on && !onEngine && <span class="xpanel-off">Engine off</span>}
           {onToggleCollapsed && <IconChevronRight size={18} class="xpanel-chevron xpanel-chevron--up" />}
         </button>
+        {/* The Engine switch stays one tap away (and in sight once switched) in the one-row panel too. */}
+        {engine && onEngine && <EngineSwitch on={engine.on} locked={!!engine.locked} onClick={onEngine} />}
         {primary && (
           <button
             type="button"
@@ -142,6 +157,7 @@ export function ExplorerPanel({
           Exploring
         </span>
         <span class="xpanel-from">{fromText}</span>
+        {engine && onEngine && <EngineSwitch on={engine.on} locked={!!engine.locked} onClick={onEngine} />}
         {onToggleCollapsed && (
           <button
             type="button"
@@ -187,5 +203,32 @@ export function ExplorerPanel({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * The explorer's Engine switch: a labeled switch (`role="switch"`, a 44px target). Locked (Pro), it
+ * shows a lock, stays off, and its tap opens the paywall.
+ */
+function EngineSwitch({ on, locked, onClick }: { on: boolean; locked: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      class="xpanel-engine"
+      data-id="explorer-engine"
+      data-locked={locked ? '' : undefined}
+      aria-checked={on ? 'true' : 'false'}
+      aria-label={locked ? 'Engine (part of Pro)' : 'Engine'}
+      onClick={onClick}
+    >
+      <span class="xpanel-engine-label" aria-hidden="true">
+        {locked && <IconLock size={13} class="xpanel-engine-lock" />}
+        <span class="xpanel-engine-word">Engine</span>
+      </span>
+      <span class="xpanel-switch" aria-hidden="true">
+        <span class="xpanel-switch-thumb" />
+      </span>
+    </button>
   );
 }

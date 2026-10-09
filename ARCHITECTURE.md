@@ -67,12 +67,14 @@ src/
                            Retry is offered, neutral verdicts for praised moves that give something away)
     review.ts              game summary (accuracy, counts, key moments)
     explorer.ts            the explorer's pure state: base position, explored line, cursor, moves, ratings
+    drawings.ts            Draw mode's drawings (arrows, circles) by position (placement + side to move): toggle, Clear
     opening.ts             opening practice: where a game stands on the line it follows (on it / left / complete)
     pgn.ts                 PGN export with [%eval] comments and NAGs
     persistence.ts         save/restore the current (or just finished) game + settings
     sound.ts               synthesized move sounds (Web Audio, unlocked on first tap)
   ui/                      presentational components; each has its own CSS file next to it
-                           (SelfTestPage.tsx is the ?enginetest page)
+                           (SelfTestPage.tsx is the ?enginetest page; draw.ts: Draw mode's pure touch geometry,
+                           DrawBar.tsx: its toggle and bar)
   dev/                     component gallery pages (dev only: /gallery.html?g=<board|panels|sheets|engine>)
   openings/                the Openings section's data and logic (no DOM; see "Openings section"):
     catalog.ts             every named line (lazy src/data/opening-lines.json), families, search, starter lists
@@ -140,7 +142,8 @@ scripts/appstore-screenshots.mjs                App Store screenshots (Playwrigh
     retried (up to twice) before its waiters get the best result so far. A request whose `signal`
     aborts is withdrawn: it resolves at once with the best so far (`aborted: true`), a queued search
     nobody else waits for is dropped, and the running one goes on only as live analysis (replaced
-    unless it is the watched position). The explorer withdraws its requests when it closes.
+    unless it is the watched position). The explorer withdraws its requests when it closes or its
+    engine is switched off.
   - `watch(fen)`: live analysis of the current position (depth 18, MultiPV 3, at most `LIVE_NODES`
     = 5M nodes, about 10 s on an iPhone), with streaming updates to subscribers.
   - **Node budgets.** Every search is limited by depth and by nodes (`go depth D nodes N`), never
@@ -472,6 +475,9 @@ interface BoardProps {
                                              // opponent's rated reply has `badge`)
   session?: string;                          // 'game' or 'explorer:<n>': a change drops a selected piece, a drag or an
                                              // open promotion picker, even on the same position (never finishes in the other)
+  shapes?: readonly UserShape[];             // the player's drawings on this position (game/drawings.ts), under the engine's arrows
+  drawColor?: DrawColor | null;              // Draw mode in this color (null: off): touches draw instead of moving pieces
+  onDraw?: (shape: UserShape) => void;       // a finished drawing (the parent toggles it in or out of `shapes`)
   /** A user move. Accept it by passing the new `fen` in the same task (e.g. synchronously from a store
    *  update); if `fen` is unchanged shortly afterwards, the board snaps back. Pawn moves to the last
    *  rank first show the promotion picker. */
@@ -480,6 +486,30 @@ interface BoardProps {
 ```
 The component owns the chessground instance, updates it on prop changes (without re-creating it),
 fills its container as a square, and includes the promotion picker overlay.
+
+**Draw mode** (`drawColor` + `onDraw`). Chessground's own drawing needs a right mouse button or a
+modifier key, so the Board draws by touch itself: a layer (`DrawLayer`, `.board-draw`, z-index over
+the pieces, under the promotion picker) covers the board and takes every pointer, so chessground sees
+no touch and moves nothing; its move settings are never changed, so leaving Draw mode restores moving
+exactly (entering it drops a selected piece, a drag or an open promotion picker). The layer has
+`touch-action: none` (no scrolling, no double-tap zoom) and an inner frame in the color drawn with.
+`ui/draw.ts` (pure, tested) maps a pointer to a square for either orientation and any board size
+(`squareAt`, from chessground's own bounds) and turns a gesture into a shape: down on a square starts it;
+moving less than a quarter square (`dragThreshold`, at least 8 px) is still a tap, which draws a circle
+on the square it went down on; a drag draws an arrow to the square under the finger, and nothing when it
+ends on its start square or off the board (`gestureShape`, `endGesture`). The shape being drawn is
+chessground's "current" drawing (`state.drawable.current`, lighter while dragging; an existing shape it
+would take off is dimmed), so it renders with the user shapes and the engine's auto shapes. A second
+finger cancels the gesture until every finger is up (each pointer is captured, so its end is always
+seen); a new position, side or session cancels it too: the layer notes the board (orientation, session
+and FEN) at pointerdown and draws nothing on a move or pointerup when it has changed (a layout effect
+also drops the preview with the render that changed it), and `onDraw(shape, fen)` passes the FEN the
+gesture was drawn on, which the controller checks against its board (`drawShape`). The user shapes go to
+chessground as `drawable.shapes` with the brushes `green`, `red`, `blue`, `orange` (the `--draw-*`
+colors, nearly opaque; brush keys `draw-<color>`), apart from the engine's (`best`, `alt`, `threat`,
+`played`, `line`). Board.css dashes their arrows (`line[marker-end^='url(#arrowhead-draw-']`,
+`stroke-dasharray` in square units), a look the engine's solid arrows never have, so a drawn idea
+never passes for the engine's best move.
 
 ### ClassIcon.tsx
 `ClassIcon({ cls, size?, title? })` renders a round badge with a symbol (`!!`, `!`, `★`, `👍`, `✓`, `📖`, `□`, `?!`, `?`, `✕`, `??`).
@@ -493,6 +523,7 @@ interface EvalBarProps {
   label: string;               // e.g. "+1.3", "M3", "-M2", "0.0"
   orientation: 'white' | 'black'; // white at the bottom when 'white'
   thinking?: boolean;          // subtle pulse while the live analysis is shallow (depth < 12) and still running
+  off?: boolean;               // the explorer with its engine off: a neutral bar reading "Engine off" (role img), no evaluation
 }
 ```
 It is a vertical bar, 18 px wide, with the same height as the board, and animates smoothly on
@@ -568,17 +599,17 @@ interface PlayerStripProps {
   materialDiff: number;       // show "+N" when > 0
   active: boolean;            // side to move
   thinking?: boolean;         // bot thinking indicator
-  unrated?: boolean;          // "Unrated" pill: takebacks, hints, Retry, the explorer, arrows or opponent ratings were used
+  unrated?: boolean;          // "Unrated" pill: takebacks, hints, Retry, the explorer's engine, arrows or opponent ratings were used
 }
 ```
 
 ### Toolbar.tsx + icons.tsx
 `Toolbar({ items: { id, label, icon: preact.ComponentChild, onClick, disabled?, active? }[], label? })` is the bottom bar with 44px+ tap targets.
-`icons.tsx` exports simple inline SVG icons: `IconPlus, IconUndo, IconBulb, IconFlip, IconCoach, IconMenu, IconChart, IconClose, IconChevronLeft, IconChevronRight, IconShare, IconFlag, IconEye, IconSound, IconCpu, IconGauge, IconCheckCircle, IconExplore` (a branching line), `IconReset`.
+`icons.tsx` exports simple inline SVG icons: `IconPlus, IconUndo, IconBulb, IconFlip, IconCoach, IconMenu, IconChart, IconClose, IconChevronLeft, IconChevronRight, IconShare, IconFlag, IconEye, IconSound, IconCpu, IconGauge, IconCheckCircle, IconExplore` (a branching line), `IconReset`, `IconPencil` (Draw), `IconTrash` (the Draw bar's Clear).
 `Toggle({ label, description?, checked, onChange, disabled?, icon?, iconColor?, id? })` is the switch row used by the sheets.
 
 ### Sheet.tsx (base) and sheets
-`Sheet({ open, onClose, title, children, footer?, hideTitle?, class? })` is a bottom sheet with backdrop, safe-area padding, and swipe/tap-outside/Escape to close (Escape closes only the sheet opened last, e.g. the paywall over the Menu, through a module-level stack of open sheets). `useEscapeLayer(active, onEscape)` puts any overlay on that stack (the Openings section uses it: Escape goes back a page, under a sheet or the paywall opened over it) and returns `isTop()`.
+`Sheet({ open, onClose, title, children, footer?, hideTitle?, class? })` is a bottom sheet with backdrop, safe-area padding, and swipe/tap-outside/Escape to close (Escape closes only the sheet opened last, e.g. the paywall over the Menu, through a module-level stack of open sheets). `useEscapeLayer(active, onEscape)` puts any overlay on that stack (the Openings section uses it: Escape goes back a page, under a sheet or the paywall opened over it) and returns `isTop()`. `hasOpenLayer()` says whether any layer is open: the App's own ← → and Escape (Draw mode, the explorer) stand down meanwhile, so Escape with the paywall over the explorer closes the paywall, not the explorer under it.
 - `NewGameSheet({ open, initial: GameSettings, playerRating: number, bots: BotPersona[], onStart(settings), onClose, inProgress?, newPlayer?, levels?, onSetLevel? })`:
   bot picker grid, custom Elo slider 100..3200 (step 50), color choice (white / random / black), toggles (coach, eval bar,
   best-move arrows, rate opponent's moves, takebacks, sound), and "Match my rating" (adaptive). The note under the
@@ -613,9 +644,12 @@ interface PlayerStripProps {
   players write it, from White's side: `gameOverScore(outcome)` gives "1–0" / "0–1" / "½–½" and "White won" /
   "Black won" / "Draw" (a per-player "You 0 – 1 Robot" read as a Black win after a win as Black).
 - `ConfirmSheet({ open, title, message, confirmLabel, cancelLabel?, onConfirm, onClose })`: a small confirmation sheet.
-  `assistPrompt(kind: 'hint' | 'undo' | 'retry' | 'explore' | 'rateOpponent')` gives its wording for "this makes the game unrated"
-  ('explore': "Exploring uses the engine, so it makes this game unrated: win or lose, your rating stays the same.";
-  'rateOpponent' adds that it stays on for the next games until switched off, as the setting is saved).
+  `assistPrompt(kind: 'hint' | 'undo' | 'retry' | 'exploreEngine' | 'rateOpponent')` gives its wording for "this makes
+  the game unrated" ('exploreEngine', the explorer's Engine switch: "Turn on the engine?" / "The engine’s evaluation, best
+  moves and move ratings will show while you explore. Turning it on makes this game unrated: win or lose, your rating
+  stays the same. Switching it off again won’t undo that." with "Turn on" and `cancelLabel` "Keep off"; every kind
+  uses the shared `UNRATED` wording; 'rateOpponent' adds that it stays on for the next games until switched off, as the setting is
+  saved). Opening the explorer asks nothing: only its engine is help.
 - `About()` (in the Menu): the GPL notice with the no-warranty line, the Source code link (`SOURCE_URL` =
   `VITE_SOURCE_URL` or `https://github.com/atg-y2k/chess`; the exact commit or build tag in the App Store app), where Pro
   is sold (`SHOW_LEGAL_LINKS`) the Privacy Policy, Terms of Use and Support links (`LEGAL_URLS`, so they stay reachable
@@ -633,6 +667,8 @@ interface PlayerStripProps {
 interface ExplorerPanelProps {
   from: string | null;        // the game's move before the starting position ("15… Nf6"); null = the start position
   title: string;              // the explored move on the board ("16. Nf3"), or "White to move" at the start
+  engine?: { on: boolean; locked?: boolean }; onEngine?: () => void; // the Engine switch in the header (role switch,
+                              // aria-checked, a 44px target; locked: a lock, and its tap opens the paywall)
   verdict: string | null;     // "Excellent", "Checking…", "Couldn’t check this move"
   cls?: MoveClass; evalLabel: string | null /* "+0.4" */; busy?: boolean;
   lines: string[];            // the move's explanation (coach explanations: Pro), or an instruction
@@ -640,12 +676,37 @@ interface ExplorerPanelProps {
   notice: string | null;      // news from the real game ("Pip played 15… Nf6 in your game.")
   noticeShort?: string | null; noticeBusy?: boolean;     // its one-line form for the collapsed row; the bot still thinking
   actions: { id; label; onClick; primary?; pressed? }[];  // "Arrows on" / "Arrows off" (a toggle), Play 16. Nf3, Try again
-  collapsed?: boolean; onToggleCollapsed?: () => void;    // one row (short phones), with the primary action beside it
+  collapsed?: boolean; onToggleCollapsed?: () => void;    // one row (short phones), with the Engine switch and the primary action beside it
 }
 ```
-The coach panel's place while exploring, in the explorer's color (`--explore`), with an "Exploring" tag.
+The coach panel's place while exploring, in the explorer's color (`--explore`), with an "Exploring" tag
+and the Engine switch (the "from 15… Nf6" label gives way to it when the panel is narrow: the move list's
+first chip says it too). With the engine off the store gives it the move, the "Engine off: …" line and a tip,
+and only the rules' verdicts in `best` (checkmate, a draw). Collapsed (a short phone, or a panel squeezed
+in landscape, e.g. once the engine's longer content no longer fits), the Engine switch is a pill of its own
+beside the row (when the panel is narrower than 381 px and the primary action is there too, the row drops
+its explorer icon so the switch keeps its word "Engine"; under 331 px the switch goes alone), so it is never more than one tap away and stays in sight after it is switched; PanelArea closes
+a floated panel when it is used, so what it changed (the "Unrated" pill, the bar, the arrows) shows.
 Collapsed, the news from the real game is a line under the row (`noticeShort`: "Pip played 2… Nc6 in your
 game", "Pip is thinking in your game…" with a pulsing dot, "…: game over"), so a short phone shows it too.
+
+### DrawBar.tsx
+```ts
+DrawToggle({ onClick })                  // the pencil pill "Draw" (aria-label "Draw on the board")
+interface DrawBarProps {
+  color: DrawColor; colors: readonly DrawColor[];  // the swatches (a radio group)
+  canClear: boolean;                       // the position on the board has drawings
+  tip?: string | null;                     // the first-use tip under the bar (above it in landscape); taps go through it
+  yourMove?: boolean;                      // the player's move in the game: the turn dot, "Your move", Done pulses
+  onColor(color); onClear(); onDone();
+}
+```
+The bar is a size container: narrower than 377 px its pencil (or the turn dot) drops its word ("Draw",
+"Your move"); narrower than 327 px (the landscape side column) the pencil goes, Clear shows a
+wastebasket (its tap target still 44 px) and Done narrows. The swatches are 44 × 44 px. With
+`yourMove` the pencil gives way to the strip's pulsing turn dot (the strip is under the bar), a hidden
+status says "Your move. Tap Done to move a piece.", and Done pulses three times. The tip has
+`pointer-events: none` (it can lie over the explorer's Engine switch or the coach's buttons).
 
 ### ReviewPanel.tsx
 ```ts
@@ -704,6 +765,7 @@ component (`board`, `evalBar`, `evalGraph`, `moveList`, `coach`, `topPlayer`, `b
 | ExplorerPanel (instead of the coach while exploring) | `store.explorerPanel` | actions -> `runExplorerAction(id)` |
 | ReviewPanel | `store.review` | `onSelectPly = goTo`, `onClose = exitReview` |
 | PlayerStrip | `store.topPlayer` / `store.bottomPlayer` (incl. `unrated`) | — |
+| DrawToggle / DrawBar (on the bottom strip) | `store.draw` (null without a game on the board) | `toggleDraw`, `setDrawColor`, `clearDrawings`, `exitDraw` (Done); Board `onDraw = drawShape(shape, fen)` |
 | Toolbar | `store.toolbar` (disabled / active per button) | `openSheet`, `requestUndo`, `requestHint`, `requestExplore`, `flip`, `toggleCoach`, `stepBack`, `stepForward`, `startReview`, `exitReview`; exploring: `explorerReset`, `flip`, `stepBack`, `stepForward`, `explorerReply`, `exitExplorer` |
 | NewGameSheet | `store.sheets.newGame` (`inProgress`, `newPlayer`) + `STARTING_LEVELS` | `newGame`, `setStartingRating`, `closeSheet` |
 | ConfirmSheet | `store.sheets.assist` (`assistPrompt(kind)`) | `confirmAssist`, `closeSheet` (cancel) |
@@ -718,7 +780,9 @@ starting level and saves the profile), `playerMove(from, to, promotion?)`, `undo
 `resign()`, `goTo(index | null)`, `backToLive()`, `canReloadNow({ hidden? })`, `exportPgn()`,
 `onVisibilityChange(hidden)`, `selectCoachFeedback(subject)` (the coach panel's other row) and `idle()` (tests); the explorer's `requestExplore()`, `explore()`, `exitExplorer()`,
 `explorerMove(from, to, promotion?)`, `explorerBack()`, `explorerForward()`, `explorerGoTo(n)`, `explorerReset()`,
-`explorerReply()`, `explorerPlay()` and `runExplorerAction(id)` (see "Explorer" below). `engineStartAdvice(e)` picks the error screen's
+`explorerReply()`, `explorerPlay()`, `toggleExplorerEngine()` and `runExplorerAction(id)` (see "Explorer" below);
+Draw mode's `toggleDraw()`, `exitDraw()`, `setDrawColor(color)`, `drawShape(shape, fen?)` and `clearDrawings()`
+(see "Draw mode" below). `engineStartAdvice(e)` picks the error screen's
 advice by `engineFailureKind`. Dependencies are injectable (`ControllerDeps`): `createEngines(request:
 { onProgress })` (a zero-argument factory also type-checks), `onlineEvents` (where `online` comes
 from, for the download retry), `storage`, `rng`, `sound`, `now`, `thinkDelay`, `createBot`,
@@ -727,7 +791,8 @@ the controller passes the game's `startFen`, so games from a custom position get
 handling too.
 
 **Rated vs unrated.** A hint, takeback or Retry makes a rated game unrated, so `requestHint()`,
-`requestUndo()` and the coach's Retry action ask first in a rated game: they set
+`requestUndo()` and the coach's Retry action ask first in a rated game (so does the explorer's Engine
+switch, `requestAssist({ kind: 'exploreEngine' })`, see "Explorer"; opening the explorer does not): they set
 `store.pendingAssist` and open the `'assist'` sheet; `confirmAssist()` runs the help and
 `closeSheet()` cancels. In an unrated game they run at once. While a takeback (Undo or Retry) waits
 for confirmation in a rated game, the bot's reply is stopped and held: confirming takes the move back,
@@ -833,16 +898,43 @@ compares them: board, side to move, castling), 'complete' (the game reached the 
   first "book" verdict says what "book" means. With `showLineMoves` the board shows the line's next move on your turn as
   an arrow with its own light brush ('line', under any engine arrow). `sheets.gameOver.practice` names the line.
 
-**Explorer.** `requestExplore()` (toolbar *Explore*) opens it on the displayed position (`explore()`):
-the live one (`fromLive`) or a browsed earlier one, while playing (either side to move), after the
-game and in the review. It is Pro (`requirePro('explorer')` opens the paywall instead). In a rated game
-in progress it asks first (`requestAssist({ kind: 'explore', base })`, the 'assist' sheet; the bot is not
-held meanwhile) and marks the game assisted. `base` is the position asked about: when the bot moves
-before the answer, the explorer still opens there, with the "Pip played …" news and no *Play*, as when
-opened on the bot's turn. A game in progress that is already unrated, a finished
-game and the review open it at once, with no rating effect. State: `store.explorer` (game/explorer.ts,
-ephemeral: not saved, `canReloadNow()` is false while exploring), `explorerArrows` (the panel's toggle,
-default on) and `explorerReplying`.
+**Explorer.** `requestExplore()` (toolbar *Explore*) opens it at once on the displayed position
+(`explore()`): the live one (`fromLive`) or a browsed earlier one, while playing (either side to
+move), after the game and in the review. It never asks and never changes the rating. The explorer is
+free; its engine is Pro (`FEATURE_TIERS.explorer` 'free', `explorerEngine` 'pro'; were the explorer
+itself made Pro, `requirePro('explorer')` would open the paywall). State: `store.explorer`
+(game/explorer.ts, ephemeral: not saved, `canReloadNow()` is false while exploring), `explorerEngine`
+(the Engine switch), `explorerArrows` (the panel's toggle, default on) and `explorerReplying`.
+- **The engine is off during a game** (`store.explorerEngine` false when it opens in `playing` with no
+  outcome), unless it was switched on in this game before (the controller's `explorerEngineGame`, the
+  game's id; switching it off forgets it, and a reload may): then on. After the game and in the review it
+  opens on, when allowed (locked in the paywall build: off, the switch showing a lock). Off, nothing is
+  asked of the engine about the explored positions and nothing it knows about them shows: `updateWatch()`
+  watches the game's position as if not exploring (the game's annotations and coach go on), there is no
+  `kickExplorerRatings()`, no `ensure()` for explored FENs and no *Reply*; the store's `explorerEngineOn`
+  gates `liveForExplorer` (so not even the game's own watch or the cache, holding the same position, can
+  leak), the arrows, the board badge, the move list's icons (`showClassIcons` false), the panel (no
+  verdict, eval, explanation, *Arrows* or *Best here*: the move, `EXPLORER_ENGINE_OFF` "Engine off: try
+  moves for both sides." plus "Your game stays rated." in a rated game in progress or "This game is
+  already unrated." in an unrated one, and `EXPLORER_ENGINE_OFF_TIP`), the toolbar (`explorerReply`
+  disabled, in its place, so the toolbar never changes shape on the switch) and the
+  eval bar (`off`: a neutral "Engine off" bar where the game's was, so the board keeps its size; none
+  when the game's bar is off). The rules still speak: legal-move dots, last move, check, checkmate,
+  stalemate and `explorerDraw` in `best`, captures on the strips, the line, *Play*, the game's news.
+- **The Engine switch** (`toggleExplorerEngine()`, also `runExplorerAction('engine')`; the panel's
+  `engine: { on, locked }`): on, in a rated game in progress, asks first (`requestAssist({ kind:
+  'exploreEngine' })`, the 'assist' sheet; the bot is not held), and `confirmAssist()` marks the game
+  assisted and switches it on (Keep off = `closeSheet()`: nothing changes). The question is dropped when
+  the explorer closes (`exitExplorer`), the game ends (`finish()` closes the sheet when it defers the
+  game-over sheet) or a new game starts. In an unrated game, after the game and in the review it switches
+  on at once; while locked (Pro) it opens the paywall (`requirePro('explorerEngine')`), with no question.
+  On (`setExplorerEngine(true)`): the watch follows the explorer and every explored move not rated yet is
+  rated (`kickExplorerRatings`). Off: `explorerSession` is bumped and `explorerAbort` aborted (as on Exit),
+  so the explorer's `ensure()` requests are withdrawn and their late results dropped, and the watch goes
+  back to the game; the ratings kept are hidden, and a game the engine made unrated stays unrated. A
+  refund (`onLocksChanged`, `explorerEngine` locked) switches it off and drops a "Turn on the engine?"
+  still open (as a pending hint question when hints lock); the explorer stays. An answer that comes
+  through anyway finds it locked in `runAssist` and opens the paywall instead (`requirePro`).
 - The game is never modified: the board (`store.board`) shows the explorer's position with both colors
   movable, its last move and check, and a blue frame (`.app[data-exploring]`) plus an "Exploring ✕" tag
   on the top strip (tapping it exits); `playerMove` and `goTo` are refused; the toolbar's ‹ › (and ← →,
@@ -854,19 +946,26 @@ default on) and `explorerReplying`.
   `store.explorerDraw` (`drawReason`: too little material, a third repetition counting the game's
   positions up to the base, the 50-move rule). Then no side moves, *Reply* is off, no arrows, the eval
   bar is exactly 0.0 and the panel says "Threefold repetition: a draw." in place of "Best here".
-- `updateWatch()` watches the explorer's position, so the eval bar (shown even when off for the game),
-  the arrows (`lineArrows`: best + alt) and "Best here" follow it; the game's graph stays, dimmed and not
-  tappable. `exitExplorer()` points the watch back at the game.
-- Each explored move is rated like a game ply (`rateExplored`: `ensure` before and after with the
+- With the engine on, `updateWatch()` watches the explorer's position, so the eval bar (shown even when
+  off for the game), the arrows (`lineArrows`: best + alt) and "Best here" follow it; the game's graph
+  stays, dimmed and not tappable (also with the engine off). `exitExplorer()` points the watch back at the game.
+- With the engine on, each explored move is rated like a game ply (`rateExplored`: `ensure` before and after with the
   annotations' request, `classifyMove` with the previous move, explored or the game's, its `winLoss`,
   the book and the threefold over the game's positions plus the line, `explainMove` with perspective
   'you' for the human's color, else 'neutral'). The ratings run one at a time in line order
-  (`kickExplorerRatings`), so the explorer has at most one rating search in the `ensure` FIFO (plus a
+  (`kickExplorerRatings`, which starts only when a move needs a rating and, when its run ends, looks
+  again, unless that run threw: then not in the same explorer). Each turn of `runExplorerRatings` first
+  makes sure of the position on the board (an `ensure` with the annotations' request, answered by the
+  cache once known): it is the watched position, so its search streams to the eval bar, the arrows and
+  "Best here", which would otherwise wait for every earlier move's rating after a long line tried with the
+  engine off. A rating that throws (`classifyMove`, `explainMove`…) marks its move failed (*Try again*)
+  and the run goes on, so nothing retries without end. The explorer has at most one rating search in the `ensure` FIFO (plus a
   pending *Reply*) and the game's annotations keep their turn (the bot has its own engine); results are
   cached by position, so stepping through the line or replaying a move asks for nothing new. A result
   is dropped unless the move's path (`movePath`) and the explorer session still match; a failed rating
   offers *Try again*. The explorer's requests carry its session's `AbortSignal`: closing it (Exit,
-  *Play*, a new game) withdraws them, so the game's own analysis comes next at once.
+  *Play*, a new game) or switching its engine off withdraws them, so the game's own analysis comes next
+  at once.
 - *Reply* (`explorerReply`) plays the engine's best move for the side to move: from the analysis at hand
   when it reached depth 12, else an `ensure` with the annotations' request (which the next rating
   reuses). A reply still pending from an explorer since closed never stands in for a new one.
@@ -878,8 +977,38 @@ default on) and `explorerReplying`.
   phone, as a line under its row). A game that ends meanwhile keeps its game-over sheet until the
   explorer closes.
 - `exitExplorer()` restores the view it left (`viewIndex`, unless the game ended meanwhile, and the flip)
-  with no sheet open. A new game, a restore, an engine failure, a refund (`onLocksChanged`) or `resign()`
-  close it.
+  with no sheet open. A new game, a restore, an engine failure or `resign()` close it (and a refund, were
+  the explorer itself Pro).
+
+**Draw mode.** The player's own arrows and circles (README "Drawing on the board"): free, and no
+help (the game stays rated, nothing is saved). State: `store.drawMode`, `drawColor` (kept for the
+session), `drawTip` and `drawings` (game/drawings.ts `Drawings`: shapes by `positionKey`, the FEN's
+piece placement and side to move, so castling rights, the en passant square and the move counters do
+not matter). `store.board` adds the drawings of the position it shows (`shapes`) and, while Draw mode is
+on, `drawColor`; `store.draw` (`DrawView`: `on`, `color`, `colors`, `canClear`, `tip`, `yourMove`: on
+over the live game on the human's turn, outside the explorer) is null unless a game is on the board
+(playing, over, review). The game's board, the explorer's (the same Board) and the
+review's share the drawings, so a drawing on the live position shows in an explorer opened there, and the
+explorer's stay on their positions after it closes. `drawShape(shape, fen?)` toggles a shape on the board's
+position (`drawOn`: the same squares and color take it off, another color recolors it), unless `fen`, the
+position the gesture was drawn on, is no longer the board's (a move landed meanwhile); `clearDrawings()`
+clears that position only. `startGame()` (new game, rematch, opening practice) clears them all, and so
+does `restore()` of another game (the same game again after an engine failure keeps them). Draw mode
+ends (`exitDraw()`) on Done and Escape (App, before the explorer's Escape), and on `openSheet()`, a
+`requestAssist()` (hint, takeback, Retry, the explorer's engine, Rate opponent's moves), `undo()`, the
+coach's actions except Back to game, dismissing a hint and Try again, `explore()`, `exitExplorer()`,
+`explorerReply()`, `finish()` (unless the game-over sheet is deferred: a game that ends in the background
+while exploring leaves the explorer's Draw mode on, and `exitExplorer()` ends it as the sheet appears),
+`startReview()` / `exitReview()`, `startGame()`, `restore()`, an engine failure, the paywall opening
+(`entitlements.paywall`) and the Openings section opening; Flip, browsing (‹ ›, the move list, Back to
+game), the bot's move and the Coach toggle keep it (the bar then shows `yourMove`). First use:
+`toggleDraw()` shows the tip (`drawTip`, `DRAW_TIP`: how to draw and erase, and that Done brings moves
+back) while `chesscoach.draw-tip` is not set (persistence.ts `loadDrawTipSeen`); the first drawing sets
+it (`saveDrawTipSeen`; a failing storage only shows it again) and hides the tip, and leaving Draw mode
+hides it. The Openings section's Learn and Tree boards (`OpeningBoard drawable`, `OpeningDrawControls`
+in the row under the board) have the same Draw mode with their own drawings (the two pages share them;
+they are forgotten when the section closes; Escape, and the navigation bar's Done (`leaveSectionDraw`),
+leave Draw mode before the page or the section).
 
 **Boot, errors and the splash.** `boot()` starts the engines first and only then loads the opening
 book (0.9 MB, only a game needs it), so the book never competes with the engine download. While
@@ -946,8 +1075,8 @@ and opening practice's coach banner (`runAction('opening')`, `{ lineId, ply }`: 
   explorer; the controller follows `openingsOpen`), so the sheet never mounts unseen under the section, taking
   the focus and Escape. During a rated game in progress (`playing`, not `assisted`) App passes no analysis service
   and `evalHidden`: no evaluation bar or engine verdict in the section (`EvalHiddenNote` says why), since trying
-  moves on the game's positions with the engine is live help that only an unrated game may have (the explorer's
-  rule); names, book moves and guides stay. *Play* calls `controller.newGame({ ...settings, playerColor, botId,
+  moves on the game's positions with the engine is live help that only an unrated game may have (as the
+  explorer's engine); names, book moves and guides stay. *Play* calls `controller.newGame({ ...settings, playerColor, botId,
   botElo, adaptive }, { opening })` (`openingStart(line, mode, showLineMoves)`: a catalog line by its id, any
   other line with its moves, name and family) and closes it.
 - **OpeningsView** (lazy) loads the book, the catalog and the guides (`loadOpeningsData`; the search index is
@@ -998,14 +1127,19 @@ and a size container, so the board is sized from the space really available
 **Portrait (iPhone 15 Pro: 393×852 pt, safe areas 59 / 34)**, top to bottom:
 1. Opponent `PlayerStrip` (44 px).
 2. Eval bar (18 px + a 4 px gap) + board: the board takes the full width minus the eval bar (≈363 px).
-3. Player `PlayerStrip` (44 px; the "Back to game" chip sits on its right while browsing).
+3. Player `PlayerStrip` (44 px). At its right end the **Draw** toggle (a pencil pill; on a strip narrower
+   than 361 px a pencil alone), and left of it the "Back to game" chip while browsing (narrow: "Back",
+   and "Unrated" moves to the strip's second row when the strip is under 441 px with both). In Draw mode
+   the Draw bar covers the whole strip (the strip keeps its place, so nothing moves and the board is
+   never covered); the first-use tip floats under it, over the panel (above it in landscape, over the
+   move list), and lets taps through to what it covers.
 4. `CoachPanel` (or `ReviewPanel`): takes all remaining height (≈170 px), fixed box, text scrolls
    inside, so nothing jumps when the text changes.
 5. `EvalGraph` (a 38 px row with a 32 px graph, hidden with the eval bar).
 6. `MoveList` (44 px).
 7. `Toolbar` (57 px): New · Undo · Hint · Explore · Flip · Coach · Menu. After the game: New · Flip · ‹ ·
    › · Explore · Menu · Review. In review: Report · Flip · ‹ · › · Explore · Menu · Close. Exploring:
-   Reset · Flip · Back · Forward · Reply · Exit. Seven buttons fit a 375 px phone; a toolbar narrower
+   Reset · Flip · Back · Forward · Reply · Exit (Reply disabled with the explorer's engine off). Seven buttons fit a 375 px phone; a toolbar narrower
    than 340 px (the landscape side column) drops New from them (the Menu has it, and after the game the
    game-over sheet and the coach), or Flip from the review's (the Menu has it), and uses 10 px labels.
 
@@ -1127,7 +1261,9 @@ the JavaScript and Swift method and event names match.
 ### Entitlements and the paywall (src/game/entitlements.ts)
 
 ```ts
-export type ProFeature = 'coachExplanations' | 'hint' | 'showBest' | 'bestMoveArrows' | 'reviewDetails' | 'explorer'
+export type ProFeature = 'coachExplanations' | 'hint' | 'showBest' | 'bestMoveArrows' | 'reviewDetails'
+  | 'explorer'                             // the explorer itself: 'free' (moves on the board, no engine)
+  | 'explorerEngine'                       // the engine in the explorer (eval, arrows, Best here, ratings, Reply): 'pro'
   | 'openingGuides' | 'openingDrills';     // the Openings section's guide text, and its drills with saved progress
 export const FEATURE_TIERS: Readonly<Record<ProFeature, 'free' | 'pro'>>; // THE free / Pro split
 export const PRO_NAME: string;              // `${APP_NAME} Pro`
@@ -1151,7 +1287,8 @@ export function getEntitlements(): Entitlements; // the app's one instance (the 
   ("No earlier purchase…"), `failed` → `restoreFailed` ("Couldn't reach the App Store", Try again),
   `cancelled` → `idle` (nothing said).
 - **Always free:** every bot at any Elo, the rating, the evaluation bar and graph, move classes and
-  badges (also the opponent's, `rateOpponent`), accuracy, takebacks and Retry, PGN export. The engine still analyzes every move either way;
+  badges (also the opponent's, `rateOpponent`), accuracy, takebacks and Retry, the explorer with its
+  engine off, Draw mode (no feature in `FEATURE_TIERS`: nothing gates it), PGN export. The engine still analyzes every move of the game either way;
   only what the view models show is gated.
 - **Gating** (`GameController.entitlements`; the store gets `locked`): the coach panel keeps the
   verdict and the class icon (also on the opponent's moves) but replaces the explanation with `lockedTeaser()` (game/coach.ts: what
@@ -1159,10 +1296,11 @@ export function getEntitlements(): Entitlements; // the app's one instance (the 
   and opens the paywall (`runAction`); the toolbar's Hint shows a lock and `requestHint()` opens the
   paywall instead of the "unrated" question; no arrows are drawn from locked features; best-move arrows
   (Menu, New game sheet) open the paywall instead of switching on; the review keeps accuracy and
-  counts but shows a locked key-moments card (`ReviewPanel` `lockedMoments` + `onUnlock`); the toolbar's
-  Explore shows a lock and `requestExplore()` opens the paywall (no "unrated" question, no rating
-  effect). When features become locked again (a refund), `onLocksChanged()` closes a hint, Show best
-  or the explorer and turns arrows off.
+  counts but shows a locked key-moments card (`ReviewPanel` `lockedMoments` + `onUnlock`); Explore
+  opens the explorer (free) with its engine off, and its Engine switch shows a lock and opens the
+  paywall (`requirePro('explorerEngine')`: no "unrated" question, no rating effect; after the game too).
+  When features become locked again (a refund), `onLocksChanged()` closes a hint or Show best, switches
+  the explorer's engine off and turns arrows off.
 - **UI:** `PaywallSheet` (the store's localized price on the Buy button, Restore Purchases, the
   Privacy Policy and Terms of Use links, thanks then closes after a purchase); the Menu's Pro section
   (Unlock / "Unlocked ✓" / "Waiting for approval", Restore Purchases); a toast when Pro unlocks while the
@@ -1234,7 +1372,7 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
 
 ## Tests
 
-- `npm test`: Vitest unit tests in node, about 1,040 tests in 54 files (the one test in
+- `npm test`: Vitest unit tests in node, about 1,090 tests in 57 files (the one test in
   `tests/bot/calibration.slow.test.ts` is skipped unless `CALIBRATE=1`, see `npm run calibrate`). They
   cover pure logic, the engine layer against scripted transports, the controller against a fake
   engine and a scripted bot (`tests/helpers/fakeEngine.ts`), the store's view models, UI helpers, the
@@ -1244,7 +1382,11 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   the storage mirror, share, and the purchases contract against a fake Store plugin, including that
   the JavaScript and Swift names match); `tests/game/entitlements.test.ts` and `paywall.test.ts` cover
   Pro's state and the gating in the controller and the view models; `tests/game/explorer.test.ts` the
-  explorer's state and `explorer.controller.test.ts` the explorer in the controller and the store;
+  explorer's state and `explorer.controller.test.ts` the explorer in the controller and the store (its
+  engine off during a game: no `position`/`go` for an explored position, checked on a real
+  StockfishEngine over a scripted UCI transport, `tests/helpers/uciTransport.ts`, and nothing shown even
+  for positions the engine knows; the switch, its question and when it is dropped (a refund too), per-game
+  memory, Pro; the position on the board analyzed before a backlog of ratings; a rating that throws failing once);
   `tests/game/opponent.test.ts` the opponent's move ratings (the view models with the coach and the
   setting on or off, the two rows, rated games and the question, Show best, the Pro gating, the review
   unchanged); `tests/game/opening.test.ts` and `opening.controller.test.ts` opening practice (`lineProgress` with
@@ -1255,9 +1397,18 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   and the reload gate while the Openings section is open). `tests/openings/` covers the openings core (catalog,
   tree, drill, progress per side, guides with their trap mistakes and main lines, session) and `tests/ui/openings.test.ts`
   the section's view logic (study lines, what a game plays, Next variation, Start here's order, search's openings,
-  the end of a line, verdicts only for the position shown).
+  the end of a line, verdicts only for the position shown). Draw mode: `tests/ui/draw.test.ts` (a pointer to its
+  square for both orientations and two board sizes; a tap's circle, a sloppy tap, a drag's arrow and its preview,
+  a drag back to its square or off the board, a fast drag) and `tests/game/drawings.test.ts` (the position key
+  ignoring castling, en passant and the counters; the same shape again off, another color recolored, a
+  zero-length arrow as a circle, Clear on one position); `tests/game/draw.controller.test.ts` the controller and
+  the store (only with a game on the board, the board's view, drawings by position while moving and browsing,
+  shared with the explorer, Game Review, a new game clearing them, what ends Draw mode and what keeps it (the
+  game ending in the background while exploring keeps it), "your move", a drawing for a position the board has
+  left dropped, the game staying rated and unsaved, free with Pro locked, the first-use tip remembered from the
+  first drawing and a failing storage).
 - `npm run e2e`: Playwright on the production build with the real engine, iPhone 15 Pro emulation,
-  45 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id`, iOS tags, engine MIME
+  51 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id`, iOS tags, engine MIME
   types, service worker and precache, offline, license notices served as files, full-screen layout);
   `e2e/game.spec.ts` (15) plays through the UI (moves by tapping squares, coach, hint, undo, flip,
   reload, resign, review, a game as Black, a mating promotion, the move list staying on the current
@@ -1266,10 +1417,13 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   and the Back to game chip, the coach verdict, the floating review header), the starting level and
   Set my level, the Engine rows and compatibility mode, "Available offline", download progress on
   the splash, a failed download that recovers when back online, and `?enginetest`).
-  `e2e/explorer.spec.ts` (4): the explorer during a rated game (the question, moves for both sides by
-  tapping squares, ratings and eval, Back, Reset, Reply, Play, Exit), a selection or promotion picker
-  that never carries over between the game and the explorer, the game's news on a short phone and the
-  collapsed panel, Flip and the "Exploring" tag in landscape, and in Game Review.
+  `e2e/explorer.spec.ts` (4): the explorer during a rated game (no question, the engine off: no eval bar,
+  arrows, badges or Reply; moves for both sides by tapping squares, Back, Play, still rated; then the
+  Engine switch: the question, Keep off, Turn on and the Unrated pill, ratings and eval, arrows, Best here,
+  Reset, Reply, off again, Exit; Reply disabled in its place, the toolbar not moving), a selection or promotion
+  picker that never carries over between the game and the explorer, the game's news on a short phone and the
+  collapsed panel with its Engine switch beside the row, the switch (still in sight after it is switched) and Flip
+  and the "Exploring" tag in landscape, and in Game Review (the engine on).
   `e2e/opponent.spec.ts` (3): "Rate opponent's moves" switched on in the New game sheet (unrated, the bot's
   badge, rating and verdict, both rows of the coach panel and the halves on a short phone), in landscape
   with a long bot name (no squeezed text, whole verdicts) and in the Menu during a rated game (Cancel,
@@ -1282,11 +1436,23 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   with notes and branches, Back, a move off the book, Explore by moves, search with the opening first and Back to
   the results, a drill as Black, progress, Play following the guide's line), from the New game sheet and a game's
   opening chip (no evaluation during a rated game), offline, and its speed on a slow small phone.
-  `e2e/paywall.spec.ts` (9) runs against a second build made with `VITE_PAYWALL=1` (playwright.config.ts
+  `e2e/draw.spec.ts` (5): Draw mode during a rated game with real touch events through the DevTools protocol (the
+  first-use tip, a touch drag's arrow, a tap's circle, taps that move no piece, the same circle again off, a mouse
+  drag, recoloring, a drag back to its square or off the board and a two-finger touch drawing nothing, a flipped
+  board, Clear, Done, pieces moving again, the drawing back when browsing to its position, no page scroll, still
+  rated; the tip letting taps through, the turn cue; the player's arrows dashed), the explorer sharing the drawings
+  with Escape leaving Draw mode then the explorer and a sheet ending it,
+  Game Review (a gesture whose board changes before the finger lifts drawing nothing; the explorer's solid engine
+  arrows beside the player's dashed ones), the bar on a short phone and in landscape (inside its strip, clear of the
+  board), and the Openings section's Learn board (by position, Escape and the header's Done leaving Draw mode first,
+  forgotten when the section closes).
+  `e2e/paywall.spec.ts` (10) runs against a second build made with `VITE_PAYWALL=1` (playwright.config.ts
   serves it on port 4174) and steers the mock store through `window.__mockStore`: the locked coach,
   Hint and Show best, the paywall and a purchase, cancelled / failed / pending (Ask to Buy) purchases,
   Restore Purchases (also cancelled and offline) and a refund, the locked key moments of Game Review,
-  the locked explorer, the opponent's move ratings (verdict free, explanation locked), About's privacy / terms / support links with Pro locked and unlocked, Escape over stacked sheets, and the Openings section (free browsing and playing, the guides and drills locked).
+  the explorer free with its engine locked (the switch's lock and paywall, no question, still rated, Escape closing the
+  paywall and not the explorer under it), Draw mode free
+  (no lock or paywall, still rated), the opponent's move ratings (verdict free, explanation locked), About's privacy / terms / support links with Pro locked and unlocked, Escape over stacked sheets, and the Openings section (free browsing and playing, the guides and drills locked).
   `E2E_REQUIRE_APP_SW=1` makes the PWA tests fail if the app does not register its service worker.
 - The native shell itself (Swift, Xcode project) is only compiled on macOS: `ios-build.yml` in CI, or
   Xcode on a Mac. Runtime checks in WKWebView need a device (see `docs/APP_STORE.md`, "Device

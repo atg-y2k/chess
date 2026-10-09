@@ -313,7 +313,8 @@ and press ⌘S in the Simulator to save a 1320 × 2868 screenshot. Screenshots t
 
 Captions or device frames around the screenshots are allowed, but prices don't belong in screenshots.
 
-- [ ] Every screenshot that shows a Pro feature (coach explanations, Hint, Show best, the explorer,
+- [ ] Every screenshot that shows a Pro feature (coach explanations, Hint, Show best, the engine in
+      the explorer (its eval, arrows and move ratings; the explorer with the engine off is free),
       best-move arrows, Game Review's key moments, opening guides and drills) says that it needs the in-app purchase, e.g. the script's tag or a
       caption (Guideline 2.3.2). Simulator screenshots need the same label.
 - [ ] No prices in product-page screenshots (Guideline 2.3.7): upload 01–05, not the paywall.
@@ -368,6 +369,8 @@ PLAY
 • 16 computer opponents from 100 to 3200 Elo, a custom strength slider, and "Match my rating"
 • Your own rating, with your stats and recent games
 • Takebacks, board flip and PGN export
+• The explorer: try moves for both sides on the board before you play them, on your own (your game stays rated)
+• Draw arrows and circles on the board with your finger to plan your moves
 
 SEE WHO'S WINNING
 • A live evaluation bar and a graph of the whole game
@@ -385,7 +388,7 @@ LEARN MORE WITH PRO (one-time purchase)
 • The coach explains every move: what it wins or loses, the tactic you missed, the threat you allowed, and what was better
 • Hints with the idea behind the best move
 • Show best: the move you should have played, and why
-• The explorer: try moves for both sides before you play them, with the engine's verdict
+• The engine in the explorer: its evaluation, best moves and a rating for every move you try
 • Best-move arrows while you play
 • A full review of every game, with its key moments and a comment on every move
 • Opening lessons and drills: why every move of an opening is played, the plans and traps, and drills with your progress saved
@@ -414,11 +417,11 @@ App Store Connect → the version → App Review Information: your contact detai
 ```text
 Chess Coach is a chess trainer that runs entirely on the device. The Stockfish chess engine (open source, GPL) is bundled in the app, so it works offline and needs no account or sign-in. There is no server.
 
-FREE: all 16 computer opponents (100-3200 Elo), the player's rating, the evaluation bar and graph, the rating of every move (Best, Mistake, Blunder...), also of the computer's moves with the "Rate opponent's moves" option, and accuracy after the game. The Openings section (Menu > Openings, or "Learn openings" on the New game sheet): browsing and searching 3,800 named opening lines, exploring them move by move, stepping through any line on a board, and playing an opening against the computer.
+FREE: all 16 computer opponents (100-3200 Elo), the player's rating, the evaluation bar and graph, the rating of every move (Best, Mistake, Blunder...), also of the computer's moves with the "Rate opponent's moves" option, and accuracy after the game. The explorer (the Explore button during or after a game): trying moves for both sides on the board, with the engine off. Draw (the pencil under the board): drawing arrows and circles on the board. The Openings section (Menu > Openings, or "Learn openings" on the New game sheet): browsing and searching 3,800 named opening lines, exploring them move by move, stepping through any line on a board, and playing an opening against the computer.
 
-PRO is one non-consumable in-app purchase (io.github.atgy2k.chesscoach.pro, Family Sharing on). It unlocks the coach's explanations of each move, Hint, Show best, the explorer (trying moves before playing them, with the engine's evaluation and ratings), best-move arrows, the key moments and per-move comments of the post-game review, and in the Openings section the opening guides (the "why" of each move, the plans, traps and key variations) and the opening drills with saved progress.
+PRO is one non-consumable in-app purchase (io.github.atgy2k.chesscoach.pro, Family Sharing on). It unlocks the coach's explanations of each move, Hint, Show best, the engine in the explorer (its evaluation, best moves, arrows and move ratings while trying moves; the "Engine" switch in the explorer's panel), best-move arrows, the key moments and per-move comments of the post-game review, and in the Openings section the opening guides (the "why" of each move, the plans, traps and key variations) and the opening drills with saved progress.
 
-WHERE TO FIND THE PURCHASE: tap Play on the New game sheet and make any move. The coach panel under the board rates the move and shows "Unlock to see why", which opens the purchase screen. The purchase screen also opens from the Hint and Explore buttons, from Menu > Chess Coach Pro > Unlock, and in the Openings section (Menu > Openings, then any opening under "Start here") from the guide's "Unlock" button and from "Drill it". Restore Purchases is in the Menu and on the purchase screen.
+WHERE TO FIND THE PURCHASE: tap Play on the New game sheet and make any move. The coach panel under the board rates the move and shows "Unlock to see why", which opens the purchase screen. The purchase screen also opens from the Hint button, from the "Engine" switch in the explorer (tap Explore, then the switch), from Menu > Chess Coach Pro > Unlock, and in the Openings section (Menu > Openings, then any opening under "Start here") from the guide's "Unlock" button and from "Drill it". Restore Purchases is in the Menu and on the purchase screen.
 
 OPEN SOURCE: the app is free software under the GNU GPL v3 or later. Menu > About links to the exact source code of this build (https://github.com/atg-y2k/chess/tree/ios-vX.Y.Z-bN) and shows the licenses, the Privacy Policy, the Terms of Use and Support. Our custom EULA states that the GPL governs the software.
 

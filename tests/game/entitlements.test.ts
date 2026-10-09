@@ -18,7 +18,7 @@ const ALL: ProFeature[] = [
   'coachExplanations',
   'hint',
   'showBest',
-  'explorer',
+  'explorerEngine',
   'bestMoveArrows',
   'reviewDetails',
   'openingGuides',
@@ -43,9 +43,12 @@ afterEach(() => {
 });
 
 describe('the free / Pro split (FEATURE_TIERS)', () => {
-  it('sells the coach’s explanations, Hint, Show best, the explorer, best-move arrows, the review details and the opening lessons and drills', () => {
+  it('sells the coach’s explanations, Hint, Show best, the engine in the explorer, best-move arrows, the review details and the opening lessons and drills', () => {
     expect(proFeatures()).toEqual(ALL);
     for (const f of ALL) expect(FEATURE_TIERS[f]).toBe('pro');
+    // The explorer itself (moves on the board, no engine) is free.
+    expect(FEATURE_TIERS.explorer).toBe('free');
+    expect(lockedFeatures(true, false).has('explorer')).toBe(false);
     for (const f of ALL) expect(FEATURE_INFO[f].title.length).toBeGreaterThan(0);
     expect(PRO_NAME).toBe('Chess Coach Pro');
   });

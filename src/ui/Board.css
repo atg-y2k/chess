@@ -145,6 +145,48 @@
   color: var(--board-light);
 }
 
+/*
+ * Draw mode: a layer over the board takes the touches (no piece moves), with a frame inside the
+ * board in the color being drawn, so it is clear that a tap draws.
+ */
+.board > .board-draw {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  touch-action: none;
+  cursor: crosshair;
+  box-shadow:
+    inset 0 0 0 3px color-mix(in srgb, var(--board-draw-color) 85%, transparent),
+    inset 0 0 14px color-mix(in srgb, var(--board-draw-color) 35%, transparent);
+  animation: board-draw-in 160ms ease-out;
+}
+.board-draw[data-color='green'] {
+  --board-draw-color: var(--draw-green);
+}
+.board-draw[data-color='red'] {
+  --board-draw-color: var(--draw-red);
+}
+.board-draw[data-color='blue'] {
+  --board-draw-color: var(--draw-blue);
+}
+.board-draw[data-color='orange'] {
+  --board-draw-color: var(--draw-orange);
+}
+/*
+ * The player's own arrows are dashed (their brushes' arrowheads are `arrowhead-draw-*`), a look the
+ * engine's solid arrows never have, so a drawn idea never passes for the engine's best move. In
+ * board squares (chessground's SVG units): with an 11/64 stroke and round caps, dashes of about a
+ * third of a square and gaps of an eighth; the arrowhead always meets a dash.
+ */
+.board .cg-shapes line[marker-end^='url(#arrowhead-draw-'] {
+  stroke-dasharray: 0.15 0.29;
+}
+@keyframes board-draw-in {
+  from {
+    opacity: 0;
+  }
+}
+
 /* Promotion picker */
 .board > .board-promo {
   position: absolute;
@@ -261,6 +303,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .board > .board-draw,
   .board > .board-promo,
   .board-promo-col {
     animation: none;

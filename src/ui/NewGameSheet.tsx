@@ -65,7 +65,7 @@ export function unratedNote(o: { arrows: boolean; rateOpponent: boolean }): { te
   if (o.rateOpponent) return { text: 'Your opponent’s moves are rated, so this game won’t count for your rating.', warn: true };
   return {
     text:
-      'The coach and evaluation bar are fine in rated games; takebacks, hints, Retry, the explorer, best-move arrows and rating your opponent’s moves make a game unrated.',
+      'The coach, the evaluation bar and the explorer without its engine are fine in rated games; takebacks, hints, Retry, the explorer’s engine, best-move arrows and rating your opponent’s moves make a game unrated.',
     warn: false,
   };
 }

@@ -177,14 +177,17 @@ describe('NewGameSheet / ConfirmSheet wording', () => {
   });
   it('asks before help that makes a game unrated', async () => {
     const { assistPrompt } = await import('../../src/ui/ConfirmSheet');
-    for (const kind of ['hint', 'undo', 'retry'] as const) {
-      expect(assistPrompt(kind).message).toMatch(/unrated/);
+    for (const kind of ['hint', 'undo', 'retry', 'exploreEngine', 'rateOpponent'] as const) {
+      expect(assistPrompt(kind).message).toMatch(/makes this game unrated: win or lose, your rating stays the same\./);
     }
     expect(assistPrompt('hint').confirmLabel).toBe('Show hint');
-    expect(assistPrompt('explore')).toEqual({
-      title: 'Explore this position?',
-      message: 'Exploring uses the engine, so it makes this game unrated: win or lose, your rating stays the same.',
-      confirmLabel: 'Explore',
+    // Exploring asks nothing; switching the explorer's engine on does.
+    expect(assistPrompt('exploreEngine')).toEqual({
+      title: 'Turn on the engine?',
+      message:
+        'The engine’s evaluation, best moves and move ratings will show while you explore. Turning it on makes this game unrated: win or lose, your rating stays the same. Switching it off again won’t undo that.',
+      confirmLabel: 'Turn on',
+      cancelLabel: 'Keep off',
     });
     expect(assistPrompt('rateOpponent')).toEqual({
       title: 'Rate your opponent’s moves?',
@@ -203,9 +206,10 @@ describe('NewGameSheet / ConfirmSheet wording', () => {
     const { unratedNote } = await import('../../src/ui/NewGameSheet');
     const off = unratedNote({ arrows: false, rateOpponent: false });
     expect(off.warn).toBe(false);
-    for (const help of ['takebacks', 'hints', 'Retry', 'the explorer', 'best-move arrows', 'rating your opponent’s moves']) {
+    for (const help of ['takebacks', 'hints', 'Retry', 'the explorer’s engine', 'best-move arrows', 'rating your opponent’s moves']) {
       expect(off.text).toContain(help);
     }
+    expect(off.text).toMatch(/^The coach, the evaluation bar and the explorer without its engine are fine in rated games/);
     expect(unratedNote({ arrows: true, rateOpponent: false })).toEqual({
       text: 'Best-move arrows are on, so this game won’t count for your rating.',
       warn: true,

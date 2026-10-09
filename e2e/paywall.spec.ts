@@ -4,8 +4,8 @@
  * steered through `window.__mockStore`. Covers the locked coach (teaser, locked Show best and Hint),
  * the paywall with the store's price, a purchase that unlocks everything, cancelled / failed /
  * pending (Ask to Buy) purchases, Restore Purchases (also offline and cancelled), a refund, the
- * locked Game Review, the locked explorer, the opponent's move ratings (verdicts free, explanations
- * locked), the always-reachable privacy policy, Escape over stacked sheets, and the Openings section
+ * locked Game Review, the explorer (free, its engine locked), Draw mode (free), the opponent's move ratings (verdicts
+ * free, explanations locked), the always-reachable privacy policy, Escape over stacked sheets, and the Openings section
  * (browsing, the moves of any line, the move tree and playing free; guide text and drills locked).
  */
 import { expect, test, type Locator, type Page } from '@playwright/test';
@@ -412,23 +412,92 @@ test.describe('Chess Coach Pro (paywall build)', () => {
     expect(errors).toEqual([]);
   });
 
-  test('the explorer is part of Pro: Explore shows a lock and opens the paywall, without asking about the rating', async ({ page }) => {
+  test('the explorer is free (engine off, no question, still rated); its Engine switch shows a lock and opens the paywall', async ({ page }) => {
     test.setTimeout(90_000);
     const errors = await open(page);
     await startFrom(page, QXF7_FEN);
     await waitForMyTurn(page);
     const explore = page.locator('.toolbar-btn[data-id="explore"]');
-    await expect(explore.locator('.locked-icon-badge')).toBeVisible();
+    await expect(explore.locator('.locked-icon-badge')).toHaveCount(0);
     await explore.tap();
+    await expect(page.locator('.app[data-exploring]')).toBeVisible();
+    await expect(paywall(page)).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: 'Turn on the engine?' })).toHaveCount(0); // no question either
+    const xpanel = page.locator('.app-panel .xpanel');
+    await expect(xpanel).toContainText('Engine off: try moves for both sides. Your game stays rated.');
+    await expect(page.locator('.evalbar-off')).toBeVisible();
+
+    // Moves for both sides, with no engine help.
+    await tapSquare(page, 'g1');
+    await tapSquare(page, 'f3');
+    await tapSquare(page, 'g8');
+    await tapSquare(page, 'f6');
+    await expect(page.locator('.app-moves .mlist-move:not(.mlist-lead)')).toHaveCount(2);
+    await page.waitForTimeout(1_500);
+    await expect(page.locator('.app-moves .class-icon')).toHaveCount(0);
+    await expect(page.locator('.cg-shapes line')).toHaveCount(0);
+
+    // The switch is locked: the paywall, at its line, without the rating question.
+    const sw = xpanel.locator('[data-id="explorer-engine"]');
+    await expect(sw).toHaveAttribute('aria-checked', 'false');
+    await expect(sw).toHaveAttribute('data-locked', '');
+    await expect(sw.locator('.xpanel-engine-lock')).toBeVisible();
+    await sw.tap();
     await expect(paywall(page)).toBeVisible();
-    await expect(paywall(page).locator('.paywall-item[data-current]')).toHaveAttribute('data-feature', 'explorer');
-    await expect(page.getByRole('dialog', { name: 'Explore this position?' })).toHaveCount(0);
+    await expect(paywall(page).locator('.paywall-item[data-current]')).toHaveAttribute('data-feature', 'explorerEngine');
+    await expect(paywall(page).locator('[data-id="paywall-lead"]')).toHaveText('See what the engine thinks of the moves you try.');
+    await expect(paywall(page).locator('.paywall-item[data-feature="explorer"]')).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: 'Turn on the engine?' })).toHaveCount(0);
+    // Escape closes the paywall (on top), not the explorer under it: the line is still there.
+    const line = await page.locator('.app-moves').innerText();
+    await page.keyboard.press('Escape');
+    await expect(paywall(page)).toBeHidden();
+    await expect(page.locator('.app[data-exploring]')).toBeVisible();
+    expect(await page.locator('.app-moves').innerText()).toBe(line);
+    await sw.tap();
+    await expect(paywall(page)).toBeVisible();
     await paywall(page).getByRole('button', { name: 'Close' }).tap();
     await expect(paywall(page)).toBeHidden();
-    await expect(page.locator('.app[data-exploring]')).toHaveCount(0);
+    await expect(page.locator('.app[data-exploring]')).toBeVisible();
+    await expect(sw).toHaveAttribute('aria-checked', 'false');
     await expect(page.locator('.app-player--bottom')).not.toContainText('Unrated');
     expect(errors).toEqual([]);
   });
+
+  test('Draw mode is free: no lock, no paywall, and the game stays rated', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = await open(page);
+    await startFrom(page, QXF7_FEN);
+    await waitForMyTurn(page);
+    const toggle = page.locator('[data-id="draw"]');
+    await expect(toggle).toBeVisible();
+    await expect(toggle.locator('.locked-icon-badge')).toHaveCount(0);
+    await toggle.tap();
+    const bar = page.getByRole('toolbar', { name: 'Draw' });
+    await expect(bar).toBeVisible();
+    await expect(paywall(page)).toHaveCount(0);
+    // A circle on f7 and a mouse-drawn arrow h5 → f7; the queen stays where it is.
+    await tapSquare(page, 'f7');
+    const box = (await board(page).boundingBox())!;
+    const at = (sq: string) => ({
+      x: box.x + (sq.charCodeAt(0) - 97 + 0.5) * (box.width / 8),
+      y: box.y + (8 - Number(sq[1]) + 0.5) * (box.width / 8),
+    });
+    await page.mouse.move(at('h5').x, at('h5').y);
+    await page.mouse.down();
+    await page.mouse.move(at('f7').x, at('f7').y, { steps: 5 });
+    await page.mouse.up();
+    await expect(page.locator('.board .cg-shapes circle')).toHaveCount(1);
+    await expect(page.locator('.board .cg-shapes line')).toHaveCount(1);
+    await bar.locator('[data-id="draw-done"]').tap();
+    await expect(bar).toHaveCount(0);
+    await expect(paywall(page)).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as Win).__chessCoach.controller.store.isLive.value)).toBe(true);
+    await expect(page.locator('.board cg-board piece.queen.white')).toHaveCount(1);
+    await expect(page.locator('.app-player--bottom')).not.toContainText('Unrated');
+    expect(errors).toEqual([]);
+  });
+
   test('openings: browsing, the moves of any line, the move tree and playing are free; guide text and drills are Pro', async ({ page }) => {
     test.setTimeout(120_000);
     const errors = await open(page);

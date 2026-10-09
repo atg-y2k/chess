@@ -28,7 +28,7 @@ export interface PaywallSheetProps {
 
 /** What stays free, so nobody buys Pro for something they already have. */
 export const ALWAYS_FREE =
-  'Always free: every opponent at any level, your rating, the evaluation bar, move ratings, accuracy, and browsing, stepping through and playing openings.';
+  'Always free: every opponent at any level, your rating, the evaluation bar, move ratings, accuracy, trying moves in the explorer, and browsing, stepping through and playing openings.';
 
 /** The purchase terms under the list. */
 export const PURCHASE_TERMS = ['One-time purchase', 'No subscription', 'Family Sharing'] as const;

@@ -245,7 +245,7 @@ describe('rate opponent: the view models during play', () => {
   it('Pro locked: the verdict, icons and badges stay free; the explanation and Show best are locked', () => {
     const { store } = view({
       plies: annotated(6, { cls: { 4: 'good' } }),
-      locked: ['coachExplanations', 'showBest', 'hint', 'bestMoveArrows', 'reviewDetails', 'explorer'],
+      locked: ['coachExplanations', 'showBest', 'hint', 'bestMoveArrows', 'reviewDetails', 'explorerEngine'],
     });
     const c = store.coach.value;
     expect(c).toMatchObject({ title: 'Pip’s 3… Nd4 is a mistake', cls: 'mistake', lines: [lockedTeaser(annotated()[5])] });

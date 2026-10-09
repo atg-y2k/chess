@@ -180,3 +180,20 @@ export const IconBook = (p: IconProps) => (
     <path d="M12 6.5V20" />
   </Svg>
 );
+
+/** Draw mode: a pencil (arrows and circles on the board). */
+export const IconPencil = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M15.2 5.2 18.8 8.8" />
+    <path d="M4 20l1-4.2L16.6 4.2a1.8 1.8 0 0 1 2.6 0l.6.6a1.8 1.8 0 0 1 0 2.6L8.2 19 4 20Z" />
+  </Svg>
+);
+
+/** Clear (a wastebasket). */
+export const IconTrash = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 7h16M10 7V4.5h4V7" />
+    <path d="M6 7l1 12.5a1.5 1.5 0 0 0 1.5 1.5h7a1.5 1.5 0 0 0 1.5-1.5L18 7" />
+    <path d="M10 11v6M14 11v6" />
+  </Svg>
+);

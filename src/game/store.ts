@@ -48,8 +48,9 @@ import {
   recaptureTip,
   verdictTitle,
 } from './coach';
+import { DRAW_COLORS, NO_DRAWINGS, NO_SHAPES, shapesAt, type DrawColor, type Drawings } from './drawings';
 import type { ProFeature } from './entitlements';
-import { currentMove, drawReason, explorerFen, type DrawReason, type Explorer, type ExplorerBase, type ExplorerMove } from './explorer';
+import { currentMove, drawReason, explorerFen, type DrawReason, type Explorer, type ExplorerMove } from './explorer';
 import { lineMoveNumber, lineMoves, lineProgress, type LineMove, type LineStatus, type OpeningTarget } from './opening';
 import type { ReviewSummary } from './review';
 import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings, type Ply } from './types';
@@ -62,8 +63,11 @@ export type Phase = 'boot' | 'error' | 'setup' | 'playing' | 'over' | 'review';
 export type SheetName = 'new' | 'menu' | 'gameOver' | 'assist';
 export type EngineMode = 'dual' | 'single';
 
-/** Help that makes a rated game unrated; the first use in a rated game asks for confirmation. */
-export type AssistKind = 'hint' | 'undo' | 'retry' | 'explore' | 'rateOpponent';
+/**
+ * Help that makes a rated game unrated; the first use in a rated game asks for confirmation.
+ * 'exploreEngine' is switching the engine on in the explorer (exploring without it is free help).
+ */
+export type AssistKind = 'hint' | 'undo' | 'retry' | 'exploreEngine' | 'rateOpponent';
 
 /** Whose move the coach's feedback is about during play: yours, or the opponent's (`rateOpponent`). */
 export type CoachSubject = 'you' | 'opponent';
@@ -79,12 +83,15 @@ export interface PendingAssist {
   kind: AssistKind;
   /** Retry: the human ply to take back. */
   index?: number;
-  /** Explore: the position it was asked for (the bot may move before the answer). */
-  base?: ExplorerBase;
 }
 
 /** Depth below which the live eval is shown as "still thinking". */
 export const SHALLOW_DEPTH = 12;
+
+/** The explorer panel's line while its engine is off (the game's status may follow it). */
+export const EXPLORER_ENGINE_OFF = 'Engine off: try moves for both sides.';
+/** …and the tip under it. */
+export const EXPLORER_ENGINE_OFF_TIP = 'Tap a piece to see where it can go. Back and Forward step through your line.';
 
 export interface AppError {
   message: string;
@@ -105,8 +112,8 @@ export interface GameInfo {
   /** ISO timestamp. */
   startedAt: string;
   /**
-   * Takebacks, hints, Retry, the explorer, best-move arrows or the opponent's move ratings were
-   * used: the game will not be rated.
+   * Takebacks, hints, Retry, the engine in the explorer, best-move arrows or the opponent's move
+   * ratings were used: the game will not be rated.
    */
   assisted: boolean;
   /**
@@ -204,12 +211,35 @@ export interface AppState {
    * null. The game itself is never changed by it; it is not saved.
    */
   explorer: Signal<Explorer | null>;
+  /**
+   * The engine is on in the explorer (its switch): the eval bar, arrows, "Best here", the explored
+   * moves' ratings and Reply. Off, the explorer shows nothing from the engine about its positions.
+   * Set when the explorer opens: off during a game in progress (unless it was switched on in this
+   * game before), on after the game and in the review (when allowed, Pro).
+   */
+  explorerEngine: Signal<boolean>;
   /** The explorer draws the engine's top moves as arrows (its own toggle; default on). */
   explorerArrows: Signal<boolean>;
   /** The explorer's "Engine reply" is waiting for the analysis of its position. */
   explorerReplying: Signal<boolean>;
   /** `annotationKey`s of plies whose analysis failed (the coach offers to try again). */
   failedAnnotations: Signal<ReadonlySet<string>>;
+  /**
+   * Draw mode: the board takes the player's arrows and circles instead of moves (free, and never
+   * help: drawing does not change the rating). Ends with Done, Escape, a sheet, the explorer
+   * opening or closing, a new game, the game's end, and the actions that make or take back moves.
+   */
+  drawMode: Signal<boolean>;
+  /** The color Draw mode draws in (the Draw bar's swatches; kept for the session). */
+  drawColor: Signal<DrawColor>;
+  /**
+   * The player's drawings by position (game/drawings.ts `positionKey`) in this game session: the
+   * game's positions, the explorer's and the review's share them. In memory only; a new game (or
+   * the restore of another one) clears them.
+   */
+  drawings: Signal<Drawings>;
+  /** The first-use tip under the Draw bar is showing ("Drag between squares for an arrow…"). */
+  drawTip: Signal<boolean>;
   /**
    * Pro features that are locked (game/entitlements.ts; empty where Pro is not sold or is
    * unlocked). The view models never show what they would reveal: explanations, hints, the best
@@ -221,7 +251,7 @@ export interface AppState {
 // -------------------------------------------------------------------------------------------------
 // View models
 
-export type BoardView = Omit<BoardProps, 'onMove'>;
+export type BoardView = Omit<BoardProps, 'onMove' | 'onDraw'>;
 /** A classification icon on a square of the board. */
 export type BoardBadge = NonNullable<BoardProps['badge']>;
 
@@ -312,7 +342,7 @@ export type ToolbarId =
   | 'review'
   | 'resign'
   | 'exportPgn'
-  /** Opens the explorer on the position on the board (a Pro feature). */
+  /** Opens the explorer on the position on the board (free; its engine is Pro). */
   | 'explore'
   /** The explorer's toolbar (its ‹ and › are 'prev' and 'next'). */
   | 'explorerReset'
@@ -359,8 +389,11 @@ export interface SheetsView {
 
 export type ReviewView = Omit<ReviewPanelProps, 'onSelectPly' | 'onClose' | 'onUnlock'>;
 
-/** The explorer panel's buttons: commit the first move to the game, the arrows toggle, a failed rating's retry. */
-export type ExplorerActionId = 'play' | 'arrows' | 'retryRating';
+/**
+ * The explorer panel's buttons: commit the first move to the game, the arrows toggle, a failed
+ * rating's retry, and the Engine switch (`ExplorerPanelView.engine`).
+ */
+export type ExplorerActionId = 'play' | 'arrows' | 'retryRating' | 'engine';
 
 export interface ExplorerActionView {
   id: ExplorerActionId;
@@ -376,16 +409,21 @@ export interface ExplorerPanelView {
   from: string | null;
   /** The explored move on the board ("16. Nf3"), or whose move it is at the starting position ("White to move"). */
   title: string;
-  /** The move's verdict ("Excellent"), "Checking…" while it is analyzed, or null. */
+  /** The Engine switch: on or off, and locked (Pro) while the engine in the explorer is. */
+  engine: { on: boolean; locked: boolean };
+  /** The move's verdict ("Excellent"), "Checking…" while it is analyzed, or null (always, with the engine off). */
   verdict: string | null;
   /** Its class icon (none for a move that gives something away, see coach.ts `concession`). */
   cls?: MoveClass;
   /** The evaluation after the move ("+0.4"), once rated. */
   evalLabel: string | null;
   busy: boolean;
-  /** The move's explanation (Pro: coach explanations), or a short instruction. */
+  /** The move's explanation (Pro: coach explanations), or a short instruction (what the engine being off means). */
   lines: string[];
-  /** "Best here: Bd3 (+0.6)" for the side to move, or how the game ended ("Checkmate: White wins."). */
+  /**
+   * "Best here: Bd3 (+0.6)" for the side to move (engine on), or how the game ended there
+   * ("Checkmate: White wins.", also with the engine off: the rules, not the engine, say so).
+   */
   best: string | null;
   /** What happened in the real game meanwhile ("Pip played 15… Nf6 in your game."). */
   notice: string | null;
@@ -394,6 +432,23 @@ export interface ExplorerPanelView {
   /** The notice is that the bot is still thinking in the game. */
   noticeBusy: boolean;
   actions: ExplorerActionView[];
+}
+
+/** Draw mode's toggle and bar (while a game is on the board: playing, finished or in review). */
+export interface DrawView {
+  /** Draw mode is on: the bar (colors, Clear, Done) shows in the toggle's place. */
+  on: boolean;
+  color: DrawColor;
+  colors: readonly DrawColor[];
+  /** The position on the board has drawings (Clear has something to clear). */
+  canClear: boolean;
+  /** The first-use tip (`DRAW_TIP`), until the first drawing on the device. */
+  tip: boolean;
+  /**
+   * Draw mode is on over the live game and it is the player's move (the board would take a move
+   * after Done): the bar shows the turn dot the strip under it would.
+   */
+  yourMove: boolean;
 }
 
 /** Facts about the displayed position (memoised per FEN). */
@@ -484,6 +539,8 @@ export interface Store extends AppState {
   explorerPanel: ReadonlySignal<ExplorerPanelView | null>;
   /** Opening practice: the line the game follows and the game's place on it; null in a normal game. */
   openingPractice: ReadonlySignal<OpeningPracticeView | null>;
+  /** Draw mode's toggle and bar; null when no game is on the board. */
+  draw: ReadonlySignal<DrawView | null>;
 }
 
 /** The store as the UI should see it: every signal read-only. */
@@ -623,9 +680,14 @@ export function createState(init: {
     reviewState: signal<ReviewState | null>(null),
     pendingAssist: signal<PendingAssist | null>(null),
     explorer: signal<Explorer | null>(null),
+    explorerEngine: signal(false),
     explorerArrows: signal(true),
     explorerReplying: signal(false),
     failedAnnotations: signal<ReadonlySet<string>>(new Set()),
+    drawMode: signal(false),
+    drawColor: signal<DrawColor>(DRAW_COLORS[0]),
+    drawings: signal<Drawings>(NO_DRAWINGS),
+    drawTip: signal(false),
     locked: init.locked ?? signal(NONE_LOCKED),
   };
 }
@@ -823,11 +885,17 @@ export function createStore(state: AppState): Store {
     const g = game.value;
     return x && g ? drawReason(x, g.startFen, plies.value) : null;
   });
-  /** Live analysis of the explorer's position (the controller watches it while exploring). */
+  /**
+   * The engine is on in the open explorer (its switch, and allowed: Pro). Off, nothing the engine
+   * knows about an explored position shows (not even an analysis of the same position the game's
+   * watch, or the cache, already has).
+   */
+  const explorerEngineOn = computed(() => !!explorer.value && state.explorerEngine.value && !locked('explorerEngine'));
+  /** Live analysis of the explorer's position (the controller watches it while its engine is on). */
   const liveForExplorer = computed(() => {
     const l = live.value;
     const fen = exploredFen.value;
-    return l && fen !== null && l.key === fenKey(fen) ? l.result : null;
+    return explorerEngineOn.value && l && fen !== null && l.key === fenKey(fen) ? l.result : null;
   });
   /** The game ply that led to the explorer's starting position (null at the game's start). */
   const explorerBasePly = computed(() => {
@@ -839,9 +907,9 @@ export function createStore(state: AppState): Store {
   // Locked Pro features draw no arrow at all: an arrow would give the best move away.
   const arrows = computed<Arrow[]>(() => {
     if (explorer.value) {
-      // The engine's top moves for the side to move in the explorer (its own toggle).
+      // The engine's top moves for the side to move in the explorer (its engine on, and its own toggle).
       const r = liveForExplorer.value;
-      return r && state.explorerArrows.value && !locked('explorer') && !explorerDraw.value ? lineArrows(r) : NO_ARROWS;
+      return r && explorerEngineOn.value && state.explorerArrows.value && !explorerDraw.value ? lineArrows(r) : NO_ARROWS;
     }
     const m = coachMode.value;
     if (m.kind === 'showBest') {
@@ -885,10 +953,10 @@ export function createStore(state: AppState): Store {
   const badges = computed<{ main?: BoardBadge; extra?: BoardBadge }>(() => {
     const x = explorer.value;
     if (x) {
-      // The verdict on the explored move that is on the board.
+      // The verdict on the explored move that is on the board (with the explorer's engine on).
       const mv = currentMove(x);
       const r = mv?.rating;
-      if (!mv || !r || concession(r)) return {};
+      if (!mv || !r || concession(r) || !explorerEngineOn.value) return {};
       return { main: { square: mv.uci.slice(2, 4), cls: r.classification.cls } };
     }
     const m = coachMode.value;
@@ -915,6 +983,23 @@ export function createStore(state: AppState): Store {
   });
 
 
+  // --- draw mode ---------------------------------------------------------------------------------
+  /** A game is on the board (in progress, finished or in review): Draw mode is offered. */
+  const drawAvailable = computed(() => {
+    const p = phase.value;
+    return !!game.value && (p === 'playing' || p === 'over' || p === 'review');
+  });
+  /** The color Draw mode draws in on the board, while it is on. */
+  const drawingColor = computed(() => (state.drawMode.value && drawAvailable.value ? state.drawColor.value : null));
+  /** The player's drawings on a position (and Draw mode), for the board's view. */
+  const withDrawings = (view: BoardView): BoardView => {
+    const shapes = shapesAt(state.drawings.value, view.fen);
+    if (shapes !== NO_SHAPES) view.shapes = shapes;
+    const color = drawingColor.value;
+    if (color) view.drawColor = color;
+    return view;
+  };
+
   const board = computed<BoardView>(() => {
     const x = explorer.value;
     const xpos = explorerPosition.value;
@@ -935,7 +1020,7 @@ export function createStore(state: AppState): Store {
       if (last) view.lastMove = [last.uci.slice(0, 2), last.uci.slice(2, 4)];
       const b = badges.value.main;
       if (b) view.badge = b;
-      return view;
+      return withDrawings(view);
     }
     const pos = position.value;
     const movable = humanToMove.value && isLive.value && coachMode.value.kind !== 'showBest';
@@ -953,7 +1038,20 @@ export function createStore(state: AppState): Store {
     const b = badges.value;
     if (b.main) view.badge = b.main;
     if (b.extra) view.extraBadges = [b.extra];
-    return view;
+    return withDrawings(view);
+  });
+
+  const draw = computed<DrawView | null>(() => {
+    if (!drawAvailable.value) return null;
+    const on = state.drawMode.value;
+    return {
+      on,
+      color: state.drawColor.value,
+      colors: DRAW_COLORS,
+      canClear: shapesAt(state.drawings.value, board.value.fen).length > 0,
+      tip: on && state.drawTip.value,
+      yourMove: on && !explorer.value && humanToMove.value && isLive.value,
+    };
   });
 
   // --- eval bar & graph ------------------------------------------------------------------------
@@ -1037,7 +1135,12 @@ export function createStore(state: AppState): Store {
     const x = explorer.value;
     const xpos = explorerPosition.value;
     if (x && xpos) {
-      // Exploring: the explorer's position (the bar shows even when it is off for the game).
+      if (!explorerEngineOn.value) {
+        // Engine off: a neutral bar that says so where the game's bar was (never the game's eval
+        // next to another board), so the board keeps its size.
+        return { visible: evalsVisible.value, off: true, whiteWinProb: 0.5, label: '', orientation: orientation.value, depth: 0 };
+      }
+      // Exploring with the engine: the explorer's position (the bar shows even when it is off for the game).
       const rated = (n: number): KnownEval | null => {
         if (n === 0) return knownAt(x.baseIndex);
         const r = x.moves[n - 1].rating;
@@ -1090,14 +1193,15 @@ export function createStore(state: AppState): Store {
   });
 
   // --- move list -------------------------------------------------------------------------------
-  /** The explored line as plies for the move list (indices within the line), with their verdicts. */
+  /** The explored line as plies for the move list (indices within the line), with their verdicts (engine on). */
   const explorerPlies = computed<Ply[] | null>(() => {
     const x = explorer.value;
     if (!x) return null;
+    const rated = explorerEngineOn.value;
     return x.moves.map((m, index) => {
       const p: Ply = { index, color: m.color, san: m.san, uci: m.uci, fenBefore: m.fenBefore, fenAfter: m.fenAfter };
       // Like the board badge: no icon for a move that gives something away.
-      if (m.rating && !concession(m.rating)) p.classification = m.rating.classification;
+      if (rated && m.rating && !concession(m.rating)) p.classification = m.rating.classification;
       return p;
     });
   });
@@ -1111,7 +1215,7 @@ export function createStore(state: AppState): Store {
       return {
         plies: xplies,
         current: x.cursor,
-        showClassIcons: true,
+        showClassIcons: explorerEngineOn.value,
         iconSet: 'all',
         lead: base ? `From ${moveLabel(base)}` : 'From the start',
         emptyText: 'Try a move for either side',
@@ -1615,7 +1719,7 @@ export function createStore(state: AppState): Store {
     const m = coachMode.value;
     const x = explorer.value;
     if (x) {
-      // Exploring: Reset, Flip, ‹, ›, Engine reply, Exit (the game's buttons are inactive).
+      // Exploring: Reset, Flip, ‹, ›, Engine reply (with the engine on), Exit (the game's buttons are inactive).
       const off = { disabled: true };
       return {
         newGame: off,
@@ -1631,8 +1735,10 @@ export function createStore(state: AppState): Store {
         exportPgn: off,
         explore: { disabled: false, active: true },
         explorerReset: { disabled: x.moves.length === 0 },
+        // Off with the engine (kept in its place, so the toolbar never changes shape on the switch).
         explorerReply: {
-          disabled: !explorerPosition.value?.dests.size || !!explorerDraw.value || state.explorerReplying.value,
+          disabled:
+            !explorerEngineOn.value || !explorerPosition.value?.dests.size || !!explorerDraw.value || state.explorerReplying.value,
         },
         explorerExit: { disabled: false },
       };
@@ -1734,9 +1840,11 @@ export function createStore(state: AppState): Store {
     if (!x || !g || !pos) return null;
     const base = explorerBasePly.value;
     const mv = currentMove(x);
+    const engineOn = explorerEngineOn.value;
     const view: ExplorerPanelView = {
       from: base ? moveLabel(base) : null,
       title: pos.turn === 'w' ? 'White to move' : 'Black to move',
+      engine: { on: engineOn, locked: locked('explorerEngine') },
       verdict: null,
       evalLabel: null,
       busy: false,
@@ -1747,7 +1855,15 @@ export function createStore(state: AppState): Store {
       noticeBusy: false,
       actions: [],
     };
-    if (mv) {
+    if (!engineOn) {
+      // No verdict, eval, explanation or best move: the moves are the player's to judge.
+      if (mv) view.title = moveLabel({ ...mv, index: x.baseIndex + x.cursor - 1 });
+      const playing = phase.value === 'playing' && !outcome.value;
+      view.lines = [
+        !playing ? EXPLORER_ENGINE_OFF : `${EXPLORER_ENGINE_OFF} ${g.assisted ? 'This game is already unrated.' : 'Your game stays rated.'}`,
+        EXPLORER_ENGINE_OFF_TIP,
+      ];
+    } else if (mv) {
       const label = moveLabel({ ...mv, index: x.baseIndex + x.cursor - 1 });
       view.title = label;
       const r = mv.rating;
@@ -1773,14 +1889,14 @@ export function createStore(state: AppState): Store {
       view.lines = [
         x.moves.length
           ? 'Step forward through your line, or try another move.'
-          : 'Make moves for either side to try them out. Your game stays as it is.',
+          : 'Make moves for either side to try them out: your game itself doesn’t change.',
       ];
     }
     const draw = explorerDraw.value;
     if (pos.terminal === 'checkmate') view.best = `Checkmate: ${pos.turn === 'w' ? 'Black' : 'White'} wins.`;
     else if (pos.terminal === 'stalemate') view.best = 'Stalemate: a draw.';
     else if (draw) view.best = `${draw}: a draw.`;
-    else if (!locked('explorer')) {
+    else if (engineOn) {
       const line = liveForExplorer.value?.lines[0];
       const san = line?.pv[0] ? uciToSan(pos.fen, line.pv[0]) : null;
       if (line && san) view.best = `Best here: ${san} (${formatScore(toWhitePov(line.score, pos.fen), pos.turn)})`;
@@ -1800,7 +1916,7 @@ export function createStore(state: AppState): Store {
     }
     // A toggle: its label says which way it is (and `pressed` for assistive technology).
     const arrowsOn = state.explorerArrows.value;
-    view.actions.unshift({ id: 'arrows', label: arrowsOn ? 'Arrows on' : 'Arrows off', pressed: arrowsOn });
+    if (engineOn) view.actions.unshift({ id: 'arrows', label: arrowsOn ? 'Arrows on' : 'Arrows off', pressed: arrowsOn });
     const playable = explorerPlayable.value;
     if (playable) {
       view.actions.push({ id: 'play', label: `Play ${moveLabel({ ...playable, index: x.baseIndex })}`, primary: true });
@@ -1845,6 +1961,7 @@ export function createStore(state: AppState): Store {
     explorerPlayable,
     explorerPanel,
     openingPractice,
+    draw,
   };
 }
 
