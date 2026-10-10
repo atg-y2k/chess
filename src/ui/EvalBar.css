@@ -102,3 +102,25 @@
     opacity: 0.6;
   }
 }
+
+/* The explorer with its engine off: no evaluation at all, just a neutral bar that says so. */
+.evalbar-off {
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+}
+.evalbar-off::after {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.evalbar-off-text {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-family: var(--font);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--text-faint);
+}

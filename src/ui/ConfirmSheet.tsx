@@ -13,13 +13,18 @@ export interface ConfirmSheetProps {
   onClose: () => void;
 }
 
-/** Help that makes a rated game unrated (hint, takeback, Retry, the explorer, rating the opponent's moves). */
-export type AssistPromptKind = 'hint' | 'undo' | 'retry' | 'explore' | 'rateOpponent';
+/**
+ * Help that makes a rated game unrated (hint, takeback, Retry, the engine in the explorer, rating
+ * the opponent's moves). Exploring without the engine is not help of this kind: it asks nothing.
+ */
+export type AssistPromptKind = 'hint' | 'undo' | 'retry' | 'exploreEngine' | 'rateOpponent';
 
 const UNRATED = 'makes this game unrated: win or lose, your rating stays the same.';
 
 /** Wording of the "this makes the game unrated" confirmation for each kind of help. */
-export function assistPrompt(kind: AssistPromptKind): Pick<ConfirmSheetProps, 'title' | 'message' | 'confirmLabel'> {
+export function assistPrompt(
+  kind: AssistPromptKind,
+): Pick<ConfirmSheetProps, 'title' | 'message' | 'confirmLabel'> & { cancelLabel?: string } {
   switch (kind) {
     case 'hint':
       return { title: 'Use a hint?', message: `Using a hint ${UNRATED}`, confirmLabel: 'Show hint' };
@@ -27,11 +32,13 @@ export function assistPrompt(kind: AssistPromptKind): Pick<ConfirmSheetProps, 't
       return { title: 'Take back your move?', message: `Taking a move back ${UNRATED}`, confirmLabel: 'Take back' };
     case 'retry':
       return { title: 'Retry this move?', message: `Retry takes your move back, which ${UNRATED}`, confirmLabel: 'Retry' };
-    case 'explore':
+    case 'exploreEngine':
       return {
-        title: 'Explore this position?',
-        message: `Exploring uses the engine, so it ${UNRATED}`,
-        confirmLabel: 'Explore',
+        title: 'Turn on the engine?',
+        // Switching it off again does not undo it: say so, as a switch looks reversible.
+        message: `The engine’s evaluation, best moves and move ratings will show while you explore. Turning it on ${UNRATED} Switching it off again won’t undo that.`,
+        confirmLabel: 'Turn on',
+        cancelLabel: 'Keep off',
       };
     case 'rateOpponent':
       return {

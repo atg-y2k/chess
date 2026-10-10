@@ -879,12 +879,37 @@
   min-width: 0;
 }
 
+/* The position's name (and the engine's words), with the Draw toggle at its right end. */
+.op-position-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 2px 0;
+  min-height: 44px;
+}
 .op-position {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: flex-start;
   gap: 2px 10px;
-  margin: 8px 2px 0;
   min-height: 40px;
+}
+.op-draw {
+  flex: none;
+  padding-top: 4px;
+}
+/* Draw mode: the bar over the row (colors, Clear, Done), so the page does not move. */
+.op-drawbar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 3;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  background: var(--bg);
 }
 .op-position-name {
   flex: 1 1 auto;

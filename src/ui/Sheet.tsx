@@ -56,6 +56,14 @@ export function useEscapeLayer(active: boolean, onEscape: () => void): () => boo
   return () => tokenRef.current !== null && openSheets[openSheets.length - 1] === tokenRef.current;
 }
 
+/**
+ * A layer of the Escape stack is open (a sheet, the paywall, the Openings section): page-wide keys
+ * (the App's ← → and Escape) leave it alone, so Escape never closes what is under the top layer.
+ */
+export function hasOpenLayer(): boolean {
+  return openSheets.length > 0;
+}
+
 /** Must match the closing transition in Sheet.css (plus a little slack). */
 const CLOSE_MS = 300;
 /** Pull distance (px) that dismisses on release, capped by a third of the panel height. */

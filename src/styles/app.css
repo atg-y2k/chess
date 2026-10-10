@@ -36,6 +36,11 @@
   --arrow-alt: #3f86c4;
   --arrow-threat: #d9534f;
   --arrow-played: #f0b43c;
+  /* The player's own drawings (Draw mode): the same in both themes, like the board (arrows dashed). */
+  --draw-green: #15a34a;
+  --draw-red: #e03131;
+  --draw-blue: #2563eb;
+  --draw-orange: #f59f00;
 
   /* The explorer (trying moves off the game): its board frame and panel. */
   --explore: #8a9cf5;

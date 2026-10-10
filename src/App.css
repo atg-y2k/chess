@@ -225,6 +225,76 @@
   border: 1px dashed color-mix(in srgb, var(--explore) 60%, var(--border));
 }
 
+/* ---------------------------------------------------------------- draw */
+
+/*
+ * Draw mode's toggle at the right end of the strip under the board (the turn dot moves left of it,
+ * the "Back to game" chip too), and its bar over the whole strip while it is on.
+ */
+.app-draw {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  z-index: 5;
+  transform: translateY(-50%);
+}
+.app-player:has(> .app-draw) > .app-chip {
+  right: 88px;
+}
+.app-player:has(> .app-draw) .pstrip {
+  padding-right: 86px;
+}
+.app-drawbar {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 2px;
+  background: var(--bg);
+}
+/* The strip under the bar (its avatar's turn ring would peek out at the left). */
+.app-player:has(> .app-drawbar) > .pstrip {
+  visibility: hidden;
+}
+/* The first-use tip floats over the panel below: the strip goes over it. */
+.app-player:has(.drawbar-tip) {
+  z-index: 30;
+}
+/*
+ * A narrow strip (small phones, the landscape side column): the toggle is a pencil alone, and with
+ * the chip there too the chip says only "Back" (or "Final"), so "Unrated" keeps its place clear of
+ * both. (The bar fits itself to its width: DrawBar.css.)
+ */
+@container player (max-width: 360px) {
+  .app-player:has(> .app-draw) > .app-chip {
+    right: 50px;
+  }
+  .app-player:has(> .app-draw) .pstrip {
+    padding-right: 48px;
+  }
+  .app-draw .draw-toggle {
+    width: 40px;
+    padding: 0;
+  }
+  .app-draw .draw-toggle-label {
+    display: none;
+  }
+  .app-player:has(> .app-draw) > .app-chip .app-chip-more {
+    display: none;
+  }
+}
+/* "You (2000) Unrated" with the chip and the toggle side by side: "Unrated" goes to the second row. */
+@container player (max-width: 440px) {
+  .app-player:has(> .app-chip):has(> .app-draw) .pstrip-top > .pstrip-unrated {
+    display: none;
+  }
+  .app-player:has(> .app-chip):has(> .app-draw) .pstrip-caps-unrated {
+    display: block;
+  }
+}
+
 /* ---------------------------------------------------------------- coach / review panel */
 
 .app-panel {
@@ -399,6 +469,15 @@
   }
   .app-panel > .review {
     max-height: none;
+  }
+  /* Draw mode's tip goes above the bar (over the move list), not over the toolbar below it. */
+  .app-drawbar .drawbar-tip {
+    top: auto;
+    bottom: calc(100% + 8px);
+  }
+  .app-drawbar .drawbar-tip::before {
+    top: auto;
+    bottom: -5px;
   }
   /* The floating summary hangs from the top of the column (over the opponent strip) rather than
      growing up from the panel's bottom edge past the top of the screen, so its header (accuracy,

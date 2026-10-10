@@ -32,7 +32,7 @@ import {
   studySteps,
   type StudyLine,
 } from './model';
-import { OpeningBoard, squaresOf } from './OpeningBoard';
+import { OpeningBoard, OpeningDrawControls, squaresOf } from './OpeningBoard';
 import { EvalHiddenNote, GLOSSARY, MoveStrip, ShareBar, StarGlyph, Teaser, Term, WarnGlyph, type PageContext } from './parts';
 import { useEval, verdictFor } from './useEval';
 
@@ -184,32 +184,36 @@ function LineBody({ ctx, page, line }: { ctx: PageContext; page: LinePageState; 
           lastMove={squaresOf(off ? off.uci : step.uci)}
           session={`line:${page.key ?? 0}`}
           evaluation={ctx.evalHidden ? null : evaluation}
+          drawable
           onMove={onMove}
         />
       </div>
 
       <div class="op-learn-side">
-        <div class="op-position" data-id="position-name" aria-live="polite">
-          {off ? (
-            <span class="op-position-name">
-              <span class="op-position-family">Out of the book</span>
-              <span class="op-position-var">after {step.label ?? 'the start'}</span>
-            </span>
-          ) : name ? (
-            <span class="op-position-name">
-              <span class="op-position-family">{name.family}</span>
-              {name.variation && <span class="op-position-var">{name.variation}</span>}
-            </span>
-          ) : (
-            <span class="op-position-name">
-              <span class="op-position-family">Starting position</span>
-            </span>
-          )}
-          {verdict && (
-            <span class="op-position-eval" data-id="eval-words">
-              {evalWords(verdict)}
-            </span>
-          )}
+        <div class="op-position-row">
+          <div class="op-position" data-id="position-name" aria-live="polite">
+            {off ? (
+              <span class="op-position-name">
+                <span class="op-position-family">Out of the book</span>
+                <span class="op-position-var">after {step.label ?? 'the start'}</span>
+              </span>
+            ) : name ? (
+              <span class="op-position-name">
+                <span class="op-position-family">{name.family}</span>
+                {name.variation && <span class="op-position-var">{name.variation}</span>}
+              </span>
+            ) : (
+              <span class="op-position-name">
+                <span class="op-position-family">Starting position</span>
+              </span>
+            )}
+            {verdict && (
+              <span class="op-position-eval" data-id="eval-words">
+                {evalWords(verdict)}
+              </span>
+            )}
+          </div>
+          <OpeningDrawControls />
         </div>
         {ctx.evalHidden && <EvalHiddenNote />}
 

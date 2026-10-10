@@ -6,7 +6,7 @@
  * Family Sharing on; see src/native/purchases.ts). `FEATURE_TIERS` below is the one place that says
  * which features need it. Everything else is always free and has no gate: every bot at any Elo, the
  * rating, the evaluation bar and graph, move-quality labels and badges, accuracy numbers, takebacks
- * and Retry.
+ * and Retry, and the explorer without its engine.
  *
  * `paywallEnabled` (src/native/platform.ts) is true in the App Store app and in a web build made
  * with VITE_PAYWALL=1 (which uses a mock store, for tests). Otherwise, as in the PWA, everything is
@@ -37,6 +37,7 @@ export type ProFeature =
   | 'bestMoveArrows'
   | 'reviewDetails'
   | 'explorer'
+  | 'explorerEngine'
   | 'openingGuides'
   | 'openingDrills';
 
@@ -57,8 +58,10 @@ export const FEATURE_TIERS: Readonly<Record<ProFeature, Tier>> = {
   bestMoveArrows: 'pro',
   /** Game Review's key moments and per-move explanations (accuracy and counts stay free). */
   reviewDetails: 'pro',
-  /** The explorer: try moves for both sides, with the engine's eval, arrows and ratings. */
-  explorer: 'pro',
+  /** The explorer: try moves for both sides on the board, without the engine (pure rules). */
+  explorer: 'free',
+  /** The engine in the explorer: its eval, best moves, arrows, move ratings and Reply. */
+  explorerEngine: 'pro',
   /**
    * The Openings section's guide text: summaries, both sides' plans, traps, key variations and the
    * "why" of each move. Browsing, searching, the move tree, stepping through any line and playing
@@ -113,8 +116,13 @@ export const FEATURE_INFO: Readonly<Record<ProFeature, FeatureInfo>> = {
   },
   explorer: {
     title: 'Explorer',
-    detail: 'Test your ideas with the engine’s verdict',
+    detail: 'Try moves for both sides before you play them',
     context: 'Try moves before you play them.',
+  },
+  explorerEngine: {
+    title: 'Engine in the explorer',
+    detail: 'The engine’s verdict on the moves you try',
+    context: 'See what the engine thinks of the moves you try.',
   },
   openingGuides: {
     title: 'Opening lessons',
@@ -134,6 +142,7 @@ const FEATURE_ORDER: readonly ProFeature[] = [
   'hint',
   'showBest',
   'explorer',
+  'explorerEngine',
   'bestMoveArrows',
   'reviewDetails',
   'openingGuides',

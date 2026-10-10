@@ -26,8 +26,12 @@ optional one-time "Pro" purchase for the coaching features. See [iOS app](#ios-a
 - **Hints, Show best and Retry** to learn from your mistakes during the game.
 - **Rate opponent’s moves** (an option): see whether the computer found the best move, with the same
   ratings and explanations you get for yours.
-- **An explorer** to try moves before you play them: move for both sides, and the engine rates
+- **An explorer** to try moves before you play them: move for both sides on the board, on your own
+  (during a game the engine is off, so the game stays rated), or with the engine switched on: it rates
   each move, shows the evaluation and its best move, and can answer for the other side.
+- **Draw on the board** with your finger: arrows and circles in four colors to sketch the moves you
+  are thinking about, in your game, the explorer, Game Review and the Openings section. It is no help
+  from the computer, so your game stays rated.
 - **Game Review** after the game: accuracy for both sides, key moments, and coaching for every move
   of both players.
 - **Openings** for beginners: 3,815 named lines (Italian Game, Sicilian Defense…) to search, browse
@@ -86,8 +90,9 @@ The first time you open the app, and whenever you tap **New**, the **New game** 
 - **Choose options:** Coach, Evaluation bar, Best-move arrows, Rate opponent’s moves, Takebacks and
   Sound.
 
-Then tap **Play**. Move by dragging a piece or by tapping it and then its destination square. The
-bar at the bottom has **New** (a new game), **Undo** (take back your last move), **Hint**,
+Then tap **Play**. Move by dragging a piece or by tapping it and then its destination square.
+**Draw**, on your strip under the board, lets you draw arrows and circles instead (see
+[Drawing on the board](#drawing-on-the-board)). The bar at the bottom has **New** (a new game), **Undo** (take back your last move), **Hint**,
 **Explore** (see [The explorer](#the-explorer)), **Flip** (turn the board around), **Coach** (coach
 on or off) and **Menu**. When the game ends, a sheet shows the result the way chess players write
 it, from White's side (1–0 when White won, 0–1 when Black won, ½–½ for a draw), with White on the
@@ -149,24 +154,40 @@ Can you recapture?"
 
 ## The explorer
 
-**Explore** (in the bar at the bottom) lets you try moves before you make them. It opens on the
-position on the board: the current one, or an earlier one you are looking at, also after the game
-and in Game Review. A blue frame around the board, an **Exploring** tag and the blue explorer panel
-show that this is not your game; tap the tag to go back to the game.
+**Explore** (in the bar at the bottom) lets you try moves before you make them. It opens at once on
+the position on the board: the current one, or an earlier one you are looking at, also after the
+game and in Game Review. A blue frame around the board, an **Exploring** tag and the blue explorer
+panel show that this is not your game; tap the tag to go back to the game.
 
-- **Move for both sides** on the board. The move list shows your line ("From 15… Nf6: 16. Nf3 Nc6
-  17. Bb5"); tap a move to go back to it.
-- The **evaluation bar** follows the explored position, and the engine's best moves for the side to
-  move are drawn as arrows (**Arrows on** in the panel switches them off, **Arrows off** back on).
-- **Each move gets a rating**, like your moves in the game: an icon on the board and in the list, and
-  in the panel the verdict, the evaluation and the coach's short explanation, for example
-  "16. Nf3 — Excellent · +0.4". **Best here** names the engine's choice in the position.
+- **Move for both sides** on the board: tap a piece to see where it can go (the dots), then tap its
+  square. The move list shows your line ("From 15… Nf6: 16. Nf3 Nc6 17. Bb5"); tap a move to go back
+  to it.
+- **The engine is off during a game**, so you work out the moves yourself and your game stays rated:
+  no evaluation (the evaluation bar reads "Engine off"), no arrows, no move ratings, no best move and
+  no Reply (its button stays in the bar, dimmed). The panel shows the move on the board and "Engine
+  off: try moves for both sides. Your game stays rated." ("This game is already unrated." when it is).
+  Checkmate, stalemate and draws still show: those are the rules, not the engine.
+- **The Engine switch** in the panel turns the engine on (on a short phone, and in landscape when the
+  panel is a single row, it sits beside the row). In a game that still counts for your rating it asks
+  first ("Turn on the engine?": **Turn on** or **Keep off**), and turning it on makes the game
+  unrated; switching it off again does not undo that. In an unrated game, after the game and in Game Review it turns on at once, and
+  after the game and in Game Review the explorer opens with it on. Switched off again, everything the
+  engine shows disappears at once (a game it made unrated stays unrated). Once you switch it on in a
+  game, the explorer opens with it on for the rest of that game, until you switch it off.
+- With the engine on:
+  - The **evaluation bar** follows the explored position, and the engine's best moves for the side to
+    move are drawn as arrows (**Arrows on** in the panel switches them off, **Arrows off** back on).
+  - **Each move gets a rating** (also the moves you made before switching it on), like your moves in
+    the game: an icon on the board and in the list, and in the panel the verdict, the evaluation and
+    the coach's short explanation, for example "16. Nf3 — Excellent · +0.4". **Best here** names the
+    engine's choice in the position. The position on the board comes first: when you switch the engine
+    on after a long line, its evaluation, arrows and best move show before the earlier moves are rated.
+  - **Reply** in the bar at the bottom plays the engine's best move for the side to move.
 - The bar at the bottom has **Reset** (clears your line and goes back to where you started),
-  **Flip**, **Back**, **Forward**, **Reply** (the engine plays the best move for the side to move) and
-  **Exit**.
+  **Flip**, **Back**, **Forward**, **Reply** (with the engine on) and **Exit**.
 - A position that would end the game ends the line too: checkmate, stalemate, or a draw by
   repetition (counting your game's moves before it), the 50-move rule or too little material. The
-  panel says so ("Threefold repetition: a draw.") and the evaluation is 0.0.
+  panel says so ("Threefold repetition: a draw."), and with the engine on the evaluation is 0.0.
 - **Play 16. Nf3**: when you started on your turn in the game, this plays the first move of your
   line in the game, and closes the explorer.
 - Your game never changes while you explore. If it was your opponent's turn, it plays on: the panel
@@ -175,9 +196,35 @@ show that this is not your game; tap the tag to go back to the game.
   go in or out of the explorer, so it never lands in the other one. **Exit** brings you back to the
   game as you left it. The explorer is not saved: if iOS closes the app, the game comes back without
   it.
-- In a game that still counts for your rating, the first **Explore** asks first: "Exploring uses the
-  engine, so it makes this game unrated." It opens on the position you asked about, even if your
-  opponent has moved meanwhile. After the game and in Game Review it does not change anything.
+
+## Drawing on the board
+
+**Draw** (the pencil on the player strip under the board) lets you sketch the moves you are
+thinking about, as with a pen on a real board: during your game (on your turn or your opponent's),
+in the explorer, after the game, in Game Review, and on the boards of the Openings section (Learn
+and Explore by moves).
+
+- **Drag from one square to another** for an arrow; it shows while you drag, and lifting your finger
+  on the square you started from, or off the board, draws nothing. **Tap a square** for a circle.
+  Drawing the same arrow or circle again takes it off; in another color, it changes color. Your
+  arrows are dashed, so they never look like the engine's arrows (which are solid) where both show.
+  A drawing whose position changes before you lift your finger (your opponent moved) is not drawn.
+- While Draw is on, the board moves no pieces: a frame in the color you draw with goes around it,
+  and the strip under the board becomes the **Draw bar**: four colors (green, red, blue, orange),
+  **Clear** (takes off the drawings on the position on the board) and **Done** (back to moving pieces;
+  your drawings stay). When your opponent has moved and it is your turn, the bar shows the pulsing
+  turn dot and **Done** pulses. Until your first drawing, a tip under the bar says how to draw.
+- Drawings belong to a **position**: after a move the board shows that position's drawings (usually
+  none), and going back to an earlier move shows its drawings again. The explorer shares them with the
+  game, so an arrow drawn on your game's position is there when you explore from it, and the other way
+  round. They last until you start a new game (they are not saved).
+- Draw turns off when a sheet opens (the Menu, New game…), when you open or leave the explorer, start
+  or end Game Review, take a move back, ask for a hint, or when the game ends (unless you are in the
+  explorer: then it stays on until you leave it). **Escape** also leaves it (before leaving the
+  explorer), and in the Openings section the **Done** at the top leaves Draw first (a second tap
+  closes the section). Flip and stepping through the moves keep it on.
+- Drawing is free (also in the App Store app) and never makes a game unrated: it is your own thinking,
+  not the computer's.
 
 ## Openings
 
@@ -314,15 +361,16 @@ gains more than beating a weaker one.
 
 **Rated and unrated games.** A game counts for your rating unless you use help:
 
-- A **takeback** (Undo), a **hint**, **Retry**, **best-move arrows**, the **explorer** or **Rate
-  opponent’s moves** make the game unrated. The coach and the evaluation bar are fine in rated games.
-- In a rated game, the first hint, takeback, Retry or Explore asks you to confirm, and so does
-  switching on Rate opponent’s moves in the Menu. While a takeback or Retry is waiting for your
-  answer, your opponent holds its reply; if you cancel, it plays on (it also plays on while you
-  explore or answer about Rate opponent’s moves). Switching best-move arrows on (in the Menu, or when
-  starting the game) makes it unrated at once, and a game started with best-move arrows or Rate
-  opponent’s moves on is unrated from the start. Both are settings: they stay on for your next games
-  (a Rematch too) until you switch them off.
+- A **takeback** (Undo), a **hint**, **Retry**, **best-move arrows**, the **engine in the explorer**
+  or **Rate opponent’s moves** make the game unrated. The coach, the evaluation bar, the explorer
+  with its engine off and drawing on the board are fine in rated games.
+- In a rated game, the first hint, takeback or Retry asks you to confirm, and so does switching on
+  the explorer's engine or Rate opponent’s moves in the Menu. While a takeback or Retry is waiting for
+  your answer, your opponent holds its reply; if you cancel, it plays on (it also plays on while you
+  explore or answer about the explorer's engine or Rate opponent’s moves). Switching best-move
+  arrows on (in the Menu, or when starting the game) makes it unrated at once, and a game started
+  with best-move arrows or Rate opponent’s moves on is unrated from the start. Both are settings: they
+  stay on for your next games (a Rematch too) until you switch them off.
 - A game that plays an opening (see [Playing an opening](#playing-an-opening)) is unrated from the
   start: the computer's first moves are scripted.
 - An **Unrated** tag on your player strip shows when a game no longer counts.
@@ -464,7 +512,7 @@ Requires Node 24 (chessground declares `engines.node >= 24`).
 ```sh
 npm ci                 # install
 npm run dev            # dev server with hot reload (http://localhost:5173)
-npm test               # unit tests (Vitest: about 1,040 tests in 54 files; the calibration test is skipped)
+npm test               # unit tests (Vitest: about 1,090 tests in 57 files; the calibration test is skipped)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
 npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting
@@ -503,11 +551,13 @@ the device runs low on space). iPhone only, portrait, iOS 16.4 or later.
 
 - **Free:** every opponent at any level, your rating, the evaluation bar and graph, the move ratings
   and badges (also of the opponent's moves, with Rate opponent’s moves), accuracy, takebacks and
-  Retry, PGN export, and in the Openings section searching, browsing, stepping through any line, the
-  move tree and playing openings.
+  Retry, the explorer with its engine off (trying moves for both sides), drawing on the board, PGN
+  export, and in the Openings section searching, browsing, stepping through any line, the move tree
+  and playing openings.
 - **Pro:** the coach's explanations (the "why", also of the opponent's moves), Hint, Show best, the
-  explorer, best-move arrows, Game Review's key moments and per-move comments, and the Openings
-  section's guides (why each move is played, plans, traps) and drills with saved progress.
+  engine in the explorer (its evaluation, arrows, move ratings and Reply; its switch shows a lock),
+  best-move arrows, Game Review's key moments and per-move comments, and the Openings section's guides
+  (why each move is played, plans, traps) and drills with saved progress.
 
 The split is `FEATURE_TIERS` in `src/game/entitlements.ts`. The web app has no paywall: everything in
 it is unlocked. A web build made with `VITE_PAYWALL=1` locks Pro behind a mock store, for testing the

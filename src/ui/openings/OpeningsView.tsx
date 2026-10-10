@@ -31,6 +31,7 @@ import { DrillPage } from './DrillPage';
 import { FamiliesPage, FamilyPage } from './FamilyPage';
 import { HomePage } from './HomePage';
 import { LinePage } from './LinePage';
+import { leaveSectionDraw } from './OpeningBoard';
 import { loadOpeningsData, resolveLine, type OpeningStart } from './model';
 import type { PageContext } from './parts';
 import { PlaySheet, type PlaySetup } from './PlaySheet';
@@ -167,7 +168,8 @@ function NavBar({ title, onBack, backLabel, onClose }: { title: string; onBack: 
         {title}
       </h1>
       <div class="op-nav-side op-nav-side--end">
-        <button type="button" class="op-nav-done" data-id="openings-done" onClick={onClose}>
+        {/* In Draw mode (Learn, Tree) it leaves Draw mode first, as Escape does: the Draw bar has its own Done. */}
+        <button type="button" class="op-nav-done" data-id="openings-done" onClick={() => leaveSectionDraw() || onClose()}>
           Done
         </button>
       </div>

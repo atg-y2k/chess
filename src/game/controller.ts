@@ -37,6 +37,7 @@ import {
 } from '../rating/rating';
 import type { GameRecord } from '../rating/types';
 import { answerFreeLines, mentionsMove, repetitionExplanation } from './coach';
+import { NO_DRAWINGS, clearOn, drawOn, positionKey, type DrawColor, type UserShape } from './drawings';
 import { getEntitlements, type Entitlements, type ProFeature } from './entitlements';
 import {
   back as explorerBackOf,
@@ -56,8 +57,10 @@ import {
 import {
   clearGame,
   createGameId,
+  loadDrawTipSeen,
   loadGame,
   loadSettings,
+  saveDrawTipSeen,
   saveGame,
   saveSettings,
   type KeyValueStorage,
@@ -370,13 +373,21 @@ export class GameController {
   private unwatchLocks: () => void;
   /** The game view the explorer left (restored on exit), and the game's result at that time. */
   private explorerView: { viewIndex: number | null; flipped: boolean; outcome: GameOutcome | null } | null = null;
-  /** Bumped whenever an explorer opens or closes, so its late analyses are dropped. */
+  /**
+   * Bumped whenever an explorer opens or closes, or its engine is switched off, so its late
+   * analyses are dropped.
+   */
   private explorerSession = 0;
+  /** The game (id) in which the explorer's engine was switched on: its next explorer opens with it on. */
+  private explorerEngineGame: string | null = null;
   /** Rating the explored moves (background, in line order). */
   private explorerRating: Promise<void> | null = null;
   /** The explorer's "Engine reply" waiting for analysis, and the explorer it was asked in. */
   private explorerReplyTask: { session: number; task: Promise<void> } | null = null;
-  /** Withdraws the open explorer's analysis requests when it closes (see `dropExplorer`). */
+  /**
+   * Withdraws the open explorer's analysis requests when it closes or its engine is switched off
+   * (see `dropExplorer`, `setExplorerEngine`).
+   */
   private explorerAbort: AbortController | null = null;
   /**
    * The game ended while exploring or while the Openings section was open: the game-over sheet
@@ -385,6 +396,8 @@ export class GameController {
   private deferredGameOver = false;
   /** Stops following the Openings section (see `onOpeningsClosed`). */
   private unwatchOpenings: () => void;
+  /** Stops following the paywall (it ends Draw mode). */
+  private unwatchPaywall: () => void;
   /** Bumped by every game start, so an opening game still waiting for its data never replaces a newer game. */
   private startTicket = 0;
 
@@ -411,7 +424,11 @@ export class GameController {
     this.store = this.s;
     this.unwatchLocks = this.entitlements.locked.subscribe((locked) => this.onLocksChanged(locked));
     this.unwatchOpenings = openingsOpen.subscribe((open) => {
-      if (!open) this.onOpeningsClosed();
+      if (open) this.exitDraw();
+      else this.onOpeningsClosed();
+    });
+    this.unwatchPaywall = this.entitlements.paywall.subscribe((p) => {
+      if (p.open) this.exitDraw();
     });
   }
 
@@ -428,8 +445,9 @@ export class GameController {
 
   /**
    * Pro features became locked (at start, or after a refund) or unlocked. A hint or Show best
-   * that is now locked is closed, and best-move arrows are switched off while they are locked, so
-   * buying Pro later does not switch them on in the middle of a rated game.
+   * that is now locked is closed, the explorer's engine is switched off, and best-move arrows are
+   * switched off while they are locked, so buying Pro later does not switch them on in the middle
+   * of a rated game.
    */
   private onLocksChanged(locked: ReadonlySet<ProFeature>): void {
     const s = this.s;
@@ -441,7 +459,17 @@ export class GameController {
     const m = s.coachMode.value;
     if (m.kind === 'hint' && locked.has('hint')) this.dismissHint();
     else if (m.kind === 'showBest' && locked.has('showBest')) this.backFromShowBest();
+    // A question about help that is now locked (the explorer's engine, a hint) has no answer left:
+    // it goes, and a bot reply it held goes ahead.
+    const asked = s.pendingAssist.value?.kind;
+    if (
+      (asked === 'exploreEngine' && (locked.has('explorerEngine') || locked.has('explorer'))) ||
+      (asked === 'hint' && locked.has('hint'))
+    ) {
+      this.closeSheet();
+    }
     if (locked.has('explorer')) this.exitExplorer();
+    else if (locked.has('explorerEngine')) this.setExplorerEngine(false);
     this.updateWatch();
   }
 
@@ -472,6 +500,7 @@ export class GameController {
     this.cancelOnlineRetry();
     this.unwatchLocks();
     this.unwatchOpenings();
+    this.unwatchPaywall();
     this.teardown();
   }
 
@@ -595,6 +624,7 @@ export class GameController {
     this.save();
     this.abortBot();
     this.dropExplorer();
+    this.exitDraw();
     this.epoch++;
     batch(() => {
       s.error.value = {
@@ -656,6 +686,9 @@ export class GameController {
     this.epoch++;
     this.clearFailed();
     this.dropExplorer();
+    this.exitDraw();
+    // Another game's drawings go (the same game again, after an engine failure, keeps them).
+    if (s.game.value?.id !== game.id) s.drawings.value = NO_DRAWINGS;
     this.bot = this.makeBot(game.id);
     this.botReady = this.bot.newGame(game.botElo).catch((e: unknown) => console.warn('[game] bot newGame failed', e));
     this.analysis?.watch(null);
@@ -802,6 +835,7 @@ export class GameController {
     this.abandonCurrent();
     this.abortBot();
     this.dropExplorer();
+    this.exitDraw();
     this.analysis.cancelAll();
     // Forget the live target: a new game on the position already watched (a new game or rematch
     // before the first move) must emit its analysis again, or the eval bar and arrows stay blank.
@@ -857,6 +891,7 @@ export class GameController {
     batch(() => {
       s.game.value = game;
       s.plies.value = plies;
+      s.drawings.value = NO_DRAWINGS;
       s.startEval.value = null;
       s.viewIndex.value = null;
       s.flipped.value = false;
@@ -1082,14 +1117,18 @@ export class GameController {
     this.epoch++;
     const record = this.recordResult(g, outcome, (opts.rated ?? true) && !g.assisted);
     // Ended by the bot's move while the player explores (the explorer says so) or while the
-    // Openings section covers the game: the game-over sheet waits until it closes.
+    // Openings section covers the game: the game-over sheet waits until it closes, and Draw mode
+    // stays on there (the explorer carries on undisturbed; leaving it ends Draw mode).
     const deferred = !!s.explorer.value || openingsOpen.peek();
     if (deferred) this.deferredGameOver = true;
+    else this.exitDraw();
     batch(() => {
       s.outcome.value = outcome;
       s.ratingChange.value = { before: record.ratingBefore, after: record.ratingAfter, rated: record.rated };
       s.phase.value = 'over';
       if (!deferred) s.sheet.value = 'gameOver';
+      // A question about help in the game that just ended (the explorer's engine) has no point now.
+      else if (s.sheet.value === 'assist') s.sheet.value = null;
       s.viewIndex.value = null;
       s.coachMode.value = { kind: 'idle' };
       s.pendingAssist.value = null;
@@ -1130,6 +1169,7 @@ export class GameController {
     const target = this.undoTarget();
     if (target === null) return false;
     const s = this.s;
+    this.exitDraw();
     this.truncate(target);
     this.markAssisted();
     batch(() => {
@@ -1294,16 +1334,19 @@ export class GameController {
   }
 
   /**
-   * A hint, takeback, Retry, the explorer or rating the opponent's moves makes a rated game
-   * unrated, so the first one in a rated game opens the 'assist' sheet to confirm
+   * A hint, takeback, Retry, the engine in the explorer or rating the opponent's moves makes a
+   * rated game unrated, so the first one in a rated game opens the 'assist' sheet to confirm
    * (`confirmAssist()` runs it, `closeSheet()` cancels). In an unrated game it runs at once. While
    * a takeback (Undo, Retry) waits for the answer, the bot's reply is put on hold, as an unrated
    * takeback cancels it at once: otherwise a reply that ends the game would drop the takeback and
-   * record the rated loss the player was taking back. (The explorer and the opponent's ratings can
-   * be asked for on the bot's turn: the bot goes on thinking meanwhile.)
+   * record the rated loss the player was taking back. (The explorer's engine and the opponent's
+   * ratings can be asked for on the bot's turn: the bot goes on thinking meanwhile.) The question
+   * is dropped when the game ends, a new game starts or, for the explorer's engine, the explorer
+   * closes.
    */
   private requestAssist(a: PendingAssist): void {
     const s = this.s;
+    this.exitDraw();
     if (s.game.value?.assisted === false) {
       if (a.kind === 'undo' || a.kind === 'retry') this.abortBot();
       batch(() => {
@@ -1330,8 +1373,12 @@ export class GameController {
   private runAssist(a: PendingAssist): void {
     if (a.kind === 'undo') this.undo();
     else if (a.kind === 'hint') void this.hint();
-    else if (a.kind === 'explore') this.explore(a.base);
-    else if (a.kind === 'rateOpponent') {
+    else if (a.kind === 'exploreEngine') {
+      // Locked meanwhile (a refund): the paywall, and the game stays as it is.
+      if (!this.s.explorer.value || !this.entitlements.requirePro('explorerEngine')) return;
+      this.markAssisted();
+      this.setExplorerEngine(true);
+    } else if (a.kind === 'rateOpponent') {
       this.markAssisted(); // first, so setSettings does not ask again
       this.setSettings({ rateOpponent: true });
     } else if (a.index !== undefined) this.retryMove(a.index);
@@ -1352,6 +1399,9 @@ export class GameController {
   runAction(id: CoachActionId): void {
     const s = this.s;
     const m = s.coachMode.value;
+    // What changes the board or leaves it (Show best, Retry, the review, a new game…) ends Draw mode;
+    // going back to the game, closing a hint or trying the analysis again keeps it.
+    if (id !== 'backToGame' && id !== 'dismissHint' && id !== 'retryAnalysis') this.exitDraw();
     switch (id) {
       case 'unlock':
         this.entitlements.openPaywall(s.coach.value.actions.find((a) => a.id === 'unlock')?.feature ?? null);
@@ -1618,6 +1668,7 @@ export class GameController {
   }
 
   openSheet(name: SheetName): void {
+    this.exitDraw();
     batch(() => {
       if (name !== 'assist') this.s.pendingAssist.value = null;
       this.s.sheet.value = name;
@@ -1632,6 +1683,73 @@ export class GameController {
       this.s.sheet.value = null;
     });
     this.requestBotMove();
+  }
+
+  // -----------------------------------------------------------------------------------------------
+  // Draw mode (the player's own arrows and circles on the board; see game/drawings.ts)
+
+  /**
+   * The Draw toggle: Draw mode on, where the board takes arrows and circles instead of moves (the
+   * game's board, the explorer's and the review's), or off again. Free, and never help: it changes
+   * nothing in the game or its rating. Until the first drawing on this device, a tip says how.
+   */
+  toggleDraw(): void {
+    if (this.s.drawMode.value) this.exitDraw();
+    else this.enterDraw();
+  }
+
+  private enterDraw(): void {
+    const s = this.s;
+    if (!s.draw.value) return; // no game on the board
+    // The tip shows each time until the first drawing on this device.
+    const tip = !loadDrawTipSeen(this.storage);
+    batch(() => {
+      s.drawMode.value = true;
+      s.drawTip.value = tip;
+    });
+  }
+
+  /**
+   * Leaves Draw mode (the Draw bar's Done, Escape; also a sheet, the paywall or the Openings section
+   * opening, the explorer opening or closing, a new game, the game's end, the review, and the
+   * actions that make or take back a move). The drawings stay on their positions.
+   */
+  exitDraw(): void {
+    const s = this.s;
+    if (!s.drawMode.value && !s.drawTip.value) return;
+    batch(() => {
+      s.drawMode.value = false;
+      s.drawTip.value = false;
+    });
+  }
+
+  /** The Draw bar's colors. */
+  setDrawColor(color: DrawColor): void {
+    this.s.drawColor.value = color;
+  }
+
+  /**
+   * A drawing on the position on the board (Board `onDraw`, in Draw mode): added, or taken off
+   * when the same squares are drawn again in the same color (another color recolors it). `fen`,
+   * the position the gesture was drawn on, must still be the one on the board (a move that landed
+   * meanwhile drops it). The first drawing on the device retires the first-use tip.
+   */
+  drawShape(shape: UserShape, fen?: string): void {
+    const s = this.s;
+    if (!s.drawMode.value || !s.draw.value) return;
+    const board = s.board.value.fen;
+    if (fen !== undefined && positionKey(fen) !== positionKey(board)) return;
+    if (s.drawTip.value) saveDrawTipSeen(this.storage); // done once: the tip has made its point
+    batch(() => {
+      s.drawings.value = drawOn(s.drawings.value, board, shape);
+      s.drawTip.value = false;
+    });
+  }
+
+  /** The Draw bar's Clear: the drawings on the position on the board go (the other positions keep theirs). */
+  clearDrawings(): void {
+    const s = this.s;
+    s.drawings.value = clearOn(s.drawings.value, s.board.value.fen);
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -1693,22 +1811,18 @@ export class GameController {
   }
 
   /**
-   * Toolbar "Explore": opens the explorer on the position on the board (see `explore`); pressed
-   * while exploring, it closes it. While the explorer is locked (Pro) it opens the paywall instead.
-   * In a rated game in progress it asks first, as exploring makes the game unrated (see
-   * `requestAssist`); after the game and in the review it opens at once, with no effect on the
-   * rating.
+   * Toolbar "Explore": opens the explorer on the position on the board at once (see `explore`);
+   * pressed while exploring, it closes it. It never asks and never changes the rating: only the
+   * explorer's engine does (`toggleExplorerEngine`). (Were the explorer itself Pro in
+   * FEATURE_TIERS, it would open the paywall while locked.)
    */
   requestExplore(): void {
-    const s = this.s;
-    if (s.explorer.value) {
+    if (this.s.explorer.value) {
       this.exitExplorer();
       return;
     }
     if (!this.canExplore() || !this.entitlements.requirePro('explorer')) return;
-    // The position asked about, even if the bot moves while the question is open.
-    if (s.phase.value === 'playing' && !s.outcome.value) this.requestAssist({ kind: 'explore', base: this.explorerBase() });
-    else this.explore();
+    this.explore();
   }
 
   /** Where an explorer opened now would start: the position on the board, and the game then. */
@@ -1719,32 +1833,88 @@ export class GameController {
 
   /**
    * Opens the explorer on the position on the board: the live one, or the earlier one being
-   * browsed. Either side may then move on the board (`explorerMove`); the eval bar, the engine's
-   * arrows and "Best here" follow the explorer's position, and each explored move is rated in the
-   * background like the game's moves. The game itself never changes, and its bot goes on playing.
-   * A game in progress becomes assisted (unrated): `requestExplore()` asks first, and the explorer
-   * then opens on the position it asked about (`base`), even when the bot has moved meanwhile (the
-   * panel says so, as for an explorer opened on the bot's turn). Returns whether the explorer
-   * opened (not while it is locked, Pro).
+   * browsed. Either side may then move on the board (`explorerMove`). The game itself never
+   * changes, its bot goes on playing (the panel then says what was played in the game since), and
+   * its rating is untouched.
+   *
+   * Its engine (`store.explorerEngine`) starts off during a game in progress, unless it was
+   * switched on in this game before (`explorerEngineGame`), and on after the game and in the review
+   * (when allowed, Pro). With the engine on, the eval bar, the engine's arrows and "Best here"
+   * follow the explorer's position and each explored move is rated in the background like the
+   * game's moves; off, nothing is asked of the engine about the explored positions. Returns whether
+   * the explorer opened.
    */
-  explore(base?: ExplorerBase): boolean {
+  explore(): boolean {
     const s = this.s;
     if (!this.canExplore() || !this.entitlements.isAllowed('explorer')) return false;
-    const plies = s.plies.value;
-    const fenAt = (k: number) => (k === 0 ? s.game.value!.startFen : plies[k - 1]?.fenAfter);
-    // A base from this game's moves (the question cannot outlive them, but be sure).
-    const from = base && base.gamePlies <= plies.length && fenAt(base.baseIndex) === base.baseFen ? base : this.explorerBase();
-    this.markAssisted(); // only a game in progress
+    const g = s.game.value!;
+    const from = this.explorerBase();
+    const inProgress = s.phase.value === 'playing' && !s.outcome.value;
+    const engine = (!inProgress || this.explorerEngineGame === g.id) && this.entitlements.isAllowed('explorerEngine');
+    this.exitDraw();
     this.explorerSession++;
     this.explorerAbort = new AbortController();
     this.explorerView = { viewIndex: s.viewIndex.value, flipped: s.flipped.value, outcome: s.outcome.value };
     this.deferredGameOver = false;
     batch(() => {
       s.explorer.value = startExplorer({ ...from, session: this.explorerSession });
+      s.explorerEngine.value = engine;
       s.explorerReplying.value = false;
     });
     this.updateWatch();
     return true;
+  }
+
+  /**
+   * The explorer panel's Engine switch. Switching it on shows the engine's evaluation, arrows,
+   * "Best here" and the ratings of the explored moves (all of them, rated now), and offers Reply.
+   * In a rated game in progress that is help, so it asks first (the 'assist' sheet, see
+   * `requestAssist`) and makes the game unrated; in an unrated game, after the game and in the
+   * review it switches on at once. While it is locked (Pro) it opens the paywall instead, with no
+   * question. Switching it off hides all of that at once and withdraws the explorer's searches; a
+   * game it made unrated stays unrated.
+   */
+  toggleExplorerEngine(): void {
+    const s = this.s;
+    if (!s.explorer.value) return;
+    if (s.explorerEngine.value && this.entitlements.isAllowed('explorerEngine')) {
+      this.setExplorerEngine(false);
+      return;
+    }
+    if (!this.entitlements.requirePro('explorerEngine')) return;
+    if (this.ratedGameInProgress()) this.requestAssist({ kind: 'exploreEngine' });
+    else this.setExplorerEngine(true);
+  }
+
+  /**
+   * Switches the open explorer's engine on (when allowed) or off. On: the watch follows the
+   * explorer's position and the explored moves are rated; in a game in progress it is remembered,
+   * so the next explorer in this game opens with it on. Off: the explorer's searches are withdrawn
+   * (as on Exit) and its late results dropped, the watch goes back to the game, and the next
+   * explorer opens with it off again.
+   */
+  private setExplorerEngine(on: boolean): void {
+    const s = this.s;
+    if (!s.explorer.value) return;
+    if (on) {
+      if (!this.entitlements.isAllowed('explorerEngine') || s.explorerEngine.value) return;
+      const g = s.game.value;
+      if (g && s.phase.value === 'playing') this.explorerEngineGame = g.id;
+      s.explorerEngine.value = true;
+      this.updateWatch();
+      this.kickExplorerRatings();
+      return;
+    }
+    if (!s.explorerEngine.value) return;
+    this.explorerEngineGame = null; // the next explorer in this game opens with it off too
+    this.explorerSession++;
+    this.explorerAbort?.abort();
+    this.explorerAbort = new AbortController();
+    batch(() => {
+      s.explorerEngine.value = false;
+      s.explorerReplying.value = false;
+    });
+    this.updateWatch();
   }
 
   /**
@@ -1761,6 +1931,7 @@ export class GameController {
     const covered = openingsOpen.peek();
     const gameOver = this.deferredGameOver && !!s.outcome.value && !covered;
     const stillDeferred = this.deferredGameOver && covered;
+    this.exitDraw();
     this.dropExplorer();
     this.deferredGameOver = stillDeferred;
     batch(() => {
@@ -1784,6 +1955,7 @@ export class GameController {
     this.explorerView = null;
     this.deferredGameOver = false;
     if (s.explorer.value) s.explorer.value = null;
+    if (s.explorerEngine.value) s.explorerEngine.value = false;
     if (s.explorerReplying.value) s.explorerReplying.value = false;
   }
 
@@ -1843,9 +2015,10 @@ export class GameController {
    * from the analysis already at hand when that reached depth 12 (the live search usually has),
    * else from an annotation search (depth 14 within ANNOTATE_NODES, which the rating of the move
    * reuses). Dropped when the explorer has moved on meanwhile. A reply asked for in an explorer
-   * since closed never stands in for this one's.
+   * since closed never stands in for this one's. Only with the explorer's engine on.
    */
   explorerReply(): Promise<void> {
+    this.exitDraw();
     const pending = this.explorerReplyTask;
     if (pending && pending.session === this.explorerSession) return pending.task;
     const entry = { session: this.explorerSession, task: Promise.resolve() };
@@ -1862,7 +2035,7 @@ export class GameController {
     const s = this.s;
     const svc = this.analysis;
     const x = s.explorer.value;
-    if (!svc || !x || s.explorerDraw.value || !this.entitlements.isAllowed('explorer')) return;
+    if (!svc || !x || s.explorerDraw.value || !this.explorerEngineOn()) return;
     const fen = explorerFen(x);
     const session = this.explorerSession;
     const signal = this.explorerAbort?.signal;
@@ -1912,35 +2085,76 @@ export class GameController {
         if (x) this.setExplorer(clearFailedRatings(x));
         return;
       }
+      case 'engine':
+        this.toggleExplorerEngine();
+        return;
     }
+  }
+
+  /** The open explorer's engine is on (its switch, and allowed: Pro). */
+  private explorerEngineOn(): boolean {
+    const s = this.s;
+    return !!s.explorer.value && s.explorerEngine.value && this.entitlements.isAllowed('explorerEngine');
   }
 
   /**
    * Rates the explored moves in the background, one at a time and in line order (a move's rating
    * uses the previous one's), so the explorer never has more than one search in the analysis queue
-   * and the game's own annotations keep their turn.
+   * and the game's own annotations keep their turn. Only with the explorer's engine on.
    */
   private kickExplorerRatings(): void {
-    if (this.explorerRating || !this.analysis || !this.s.explorer.value) return;
+    const x = this.s.explorer.value;
+    if (this.explorerRating || !this.analysis || !this.explorerEngineOn() || !x?.moves.some((m) => !m.rating && !m.failed)) return;
     const session = this.explorerSession;
+    let failed = false;
     const task: Promise<void> = this.runExplorerRatings(session)
-      .catch((e: unknown) => console.error('[game] explorer rating failed', e))
+      .catch((e: unknown) => {
+        failed = true;
+        console.error('[game] explorer rating failed', e);
+      })
       .finally(() => {
         if (this.explorerRating !== task) return;
         this.explorerRating = null;
-        // A new explorer opened while this one waited for the engine: rate its moves now.
-        if (session !== this.explorerSession) this.kickExplorerRatings();
+        // Moves tried, a new explorer opened or the engine switched on again while this one
+        // finished: rate what is left now. (Never again in the same explorer after a run that
+        // failed: it would only fail again, at once and without end.)
+        if (!failed || session !== this.explorerSession) this.kickExplorerRatings();
       });
     this.explorerRating = task;
   }
 
+  /**
+   * The explored moves not rated yet, in line order. Each turn first makes sure of the position on
+   * the board (an `ensure` the cache answers at once once it is known): it is the watched position,
+   * so its search streams to the eval bar, the arrows and "Best here", which would otherwise wait
+   * for every earlier move's rating (a long line tried with the engine off, then switched on).
+   */
   private async runExplorerRatings(session: number): Promise<void> {
     for (;;) {
       const x = this.s.explorer.value;
-      if (!x || session !== this.explorerSession || !this.analysis) return;
-      const index = x.moves.findIndex((m) => !m.rating && !m.failed);
+      const svc = this.analysis;
+      if (!x || session !== this.explorerSession || !svc || !this.explorerEngineOn()) return;
+      if (!x.moves.some((m) => !m.rating && !m.failed)) return;
+      try {
+        await svc.ensure(explorerFen(x), { ...ANNOTATE, signal: this.explorerAbort?.signal });
+      } catch (e) {
+        console.warn('[game] explorer: analysis failed', e);
+      }
+      const now = this.s.explorer.value;
+      if (!now || session !== this.explorerSession || this.analysis !== svc || !this.explorerEngineOn()) return;
+      const index = now.moves.findIndex((m) => !m.rating && !m.failed);
       if (index < 0) return;
-      await this.rateExplored(session, x, index);
+      const path = movePath(now, index);
+      try {
+        await this.rateExplored(session, now, index);
+      } catch (e) {
+        // A rating that throws fails like a search that did ("Try again"), and the run goes on.
+        console.error('[game] explorer rating failed', e);
+        const later = this.s.explorer.value;
+        if (later && session === this.explorerSession && movePath(later, index) === path) {
+          this.s.explorer.value = setRating(later, index, path, { failed: true });
+        }
+      }
     }
   }
 
@@ -2053,6 +2267,7 @@ export class GameController {
     const g = s.game.value;
     if (!g || (s.phase.value !== 'over' && s.phase.value !== 'review')) return Promise.resolve();
     if (s.phase.value === 'review' && this.reviewTask) return this.reviewTask;
+    this.exitDraw();
     batch(() => {
       s.phase.value = 'review';
       s.sheet.value = null;
@@ -2075,6 +2290,7 @@ export class GameController {
   exitReview(): void {
     const s = this.s;
     if (s.phase.value !== 'review') return;
+    this.exitDraw();
     batch(() => {
       s.phase.value = 'over';
       s.coachMode.value = { kind: 'idle' };
@@ -2303,8 +2519,9 @@ export class GameController {
     if (!svc) return;
     const s = this.s;
     const x = s.explorer.value;
-    if (x) {
-      // Exploring: the eval bar, the arrows and "Best here" follow the explorer's position.
+    if (x && this.explorerEngineOn()) {
+      // Exploring with the engine: the eval bar, the arrows and "Best here" follow the explorer's
+      // position. (With it off, the watch stays on the game's, as if not exploring.)
       svc.watch(explorerFen(x));
       return;
     }

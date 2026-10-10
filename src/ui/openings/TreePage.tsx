@@ -12,7 +12,7 @@ import { children, moveLabel, nameAt, type TreeMove } from '../../openings/tree'
 import { linePage, treeAdvance, treeTo, updatePage, type TreePage as TreePageState } from '../../openings/session';
 import { IconChevronLeft, IconFlip } from '../icons';
 import { commonWord, evalWords, learnTarget, MISTAKE_NOTE, playTarget, resolveLine, treePosition } from './model';
-import { OpeningBoard, squaresOf } from './OpeningBoard';
+import { OpeningBoard, OpeningDrawControls, squaresOf } from './OpeningBoard';
 import { EvalHiddenNote, GLOSSARY, ShareBar, StarGlyph, Term, WarnGlyph, type PageContext } from './parts';
 import { useEval, verdictFor } from './useEval';
 
@@ -58,20 +58,24 @@ export function TreePage({ ctx, page }: { ctx: PageContext; page: TreePageState 
           lastMove={squaresOf(pos.uci.at(-1))}
           session={`tree:${page.key ?? 0}`}
           evaluation={ctx.evalHidden ? null : evaluation}
+          drawable
           onMove={onMove}
         />
       </div>
       <div class="op-learn-side">
-        <div class="op-position" data-id="position-name" aria-live="polite">
-          <span class="op-position-name">
-            <span class="op-position-family">{name ? name.family : depth ? 'Unnamed position' : 'Starting position'}</span>
-            {name?.variation && <span class="op-position-var">{name.variation}</span>}
-          </span>
-          {verdict && (
-            <span class="op-position-eval" data-id="eval-words">
-              {evalWords(verdict)}
+        <div class="op-position-row">
+          <div class="op-position" data-id="position-name" aria-live="polite">
+            <span class="op-position-name">
+              <span class="op-position-family">{name ? name.family : depth ? 'Unnamed position' : 'Starting position'}</span>
+              {name?.variation && <span class="op-position-var">{name.variation}</span>}
             </span>
-          )}
+            {verdict && (
+              <span class="op-position-eval" data-id="eval-words">
+                {evalWords(verdict)}
+              </span>
+            )}
+          </div>
+          <OpeningDrawControls />
         </div>
         {ctx.evalHidden && <EvalHiddenNote />}
 

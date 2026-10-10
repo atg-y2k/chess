@@ -1,8 +1,9 @@
 /**
- * The explorer in the controller and the store: entering and leaving never changes the game,
- * the rated-game question and the assisted mark, Pro gating, "Play" committing the first move,
- * the bot moving in the game meanwhile, the engine's reply, and the ratings of explored moves
- * (with the fake engine).
+ * The explorer in the controller and the store: entering and leaving never changes the game nor
+ * its rating, the engine off during a game (nothing asked of the engine, nothing shown) and its
+ * switch (the rated-game question and the assisted mark, per-game memory), Pro gating, "Play"
+ * committing the first move, the bot moving in the game meanwhile, the engine's reply, and the
+ * ratings of explored moves (with the fake engine, and a scripted UCI engine for the searches).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,10 +23,13 @@ import { START_FEN, fenKey } from '../../src/chess/utils';
 import { ANNOTATE_DEPTH, GameController, type BotLike } from '../../src/game/controller';
 import { PRO_CACHE_KEY, createEntitlements, type Entitlements } from '../../src/game/entitlements';
 import { explorerFen } from '../../src/game/explorer';
-import { GAME_KEY, loadGame } from '../../src/game/persistence';
+import { GAME_KEY, loadGame, saveGame, type SavedGame } from '../../src/game/persistence';
+import { EXPLORER_ENGINE_OFF, EXPLORER_ENGINE_OFF_TIP } from '../../src/game/store';
 import { DEFAULT_SETTINGS, type GameSettings, type PromotionPiece } from '../../src/game/types';
 import { assistPrompt } from '../../src/ui/ConfirmSheet';
-import { MemoryStorage, RecordingSound, ScriptedBot, fakeEngineSet, scoreMoves } from '../helpers/fakeEngine';
+import { StockfishEngine } from '../../src/engine/StockfishEngine';
+import { FakeEngine, MemoryStorage, RecordingSound, ScriptedBot, fakeEngineSet, scoreMoves } from '../helpers/fakeEngine';
+import { ScriptedUciTransport } from '../helpers/uciTransport';
 import { FakePurchases } from './fakePurchases';
 
 const controllers: GameController[] = [];
@@ -83,11 +87,67 @@ function explore(c: GameController, ucis: string[]): void {
   for (const uci of ucis) expect(c.explorerMove(...uciArgs(uci)), `explored ${uci}`).toBe(true);
 }
 
-/** Enters the explorer in a rated game in progress (answering the question). */
-function enterConfirmed(c: GameController): void {
+/** Opens the explorer (it never asks). */
+function enter(c: GameController): void {
   c.requestExplore();
-  if (c.store.sheet.value === 'assist') c.confirmAssist();
+  expect(c.store.sheet.value).toBeNull();
   expect(c.store.explorer.value).not.toBeNull();
+}
+
+/** Switches the explorer's engine on, unless it is (answering the question in a rated game). */
+function engineOn(c: GameController): void {
+  if (!c.store.explorerEngine.value) c.runExplorerAction('engine');
+  if (c.store.sheet.value === 'assist') c.confirmAssist();
+  expect(c.store.explorerEngine.value).toBe(true);
+}
+
+/** A controller whose analysis engine is a real StockfishEngine on a scripted UCI transport. */
+async function setupUci(bot: BotLike) {
+  const transport = new ScriptedUciTransport();
+  const analysis = new StockfishEngine(() => transport, { name: 'analysis' });
+  const botEngine = new FakeEngine('bot');
+  let n = 0;
+  const controller = new GameController({
+    createEngines: async () => {
+      await analysis.init();
+      return {
+        analysis,
+        bot: botEngine,
+        mode: 'dual',
+        terminate() {
+          analysis.terminate();
+          botEngine.terminate();
+        },
+      };
+    },
+    onlineEvents: null,
+    storage: new MemoryStorage(),
+    sound: new RecordingSound(),
+    thinkDelay: false,
+    createId: () => `game-${++n}`,
+    rng: () => 0.3,
+    createBot: () => bot,
+  });
+  controllers.push(controller);
+  await controller.boot();
+  return { controller, store: controller.store, transport };
+}
+
+/** Nothing of the engine's shows in the explorer: eval, arrows, Best here, ratings, Reply. */
+function expectNoEngine(store: GameController['store']): void {
+  expect(store.explorerEngine.value).toBe(false);
+  expect(store.evalBar.value).toMatchObject({ off: true, label: '', whiteWinProb: 0.5 });
+  expect(store.board.value.arrows).toEqual([]);
+  expect(store.board.value.badge).toBeUndefined();
+  expect(store.moveList.value.showClassIcons).toBe(false);
+  expect(store.moveList.value.plies.every((p) => !p.classification)).toBe(true);
+  const panel = store.explorerPanel.value!;
+  expect(panel).toMatchObject({ verdict: null, evalLabel: null, busy: false, engine: { on: false } });
+  expect(panel.cls).toBeUndefined();
+  expect(panel.best ?? '').not.toMatch(/^Best here/);
+  expect(panel.actions.map((a) => a.id)).not.toContain('arrows');
+  expect(panel.actions.map((a) => a.id)).not.toContain('retryRating');
+  expect(store.toolbar.value.explorerReply).toEqual({ disabled: true }); // in its place, off
 }
 
 beforeEach(() => {
@@ -153,35 +213,111 @@ describe('explorer: entering and leaving', () => {
     expect(store.plies.value).toBe(plies);
   });
 
-  it('a rated game in progress asks first; confirming makes it unrated, cancelling changes nothing', async () => {
-    const { controller, store, storage } = await setup({ bot: new ScriptedBot(['e7e5']) });
+  it('a rated game: Explore opens at once and keeps it rated; the Engine switch asks, Keep off changes nothing, Turn on makes it unrated', async () => {
+    const { controller, store, storage } = await setup({ bot: new ScriptedBot(['e7e5', 'b8c6']) });
     controller.newGame(settings());
     await playAll(controller, ['e2e4']);
     controller.requestExplore();
-    expect(store.sheet.value).toBe('assist');
-    expect(store.sheets.value.assist).toEqual({ kind: 'explore' });
-    expect(assistPrompt('explore').message).toBe('Exploring uses the engine, so it makes this game unrated: win or lose, your rating stays the same.');
-    expect(store.explorer.value).toBeNull();
-    controller.closeSheet();
-    expect(store.game.value?.assisted).toBe(false);
-    expect(store.explorer.value).toBeNull();
-
-    controller.requestExplore();
-    controller.confirmAssist();
-    expect(store.sheet.value).toBeNull();
+    expect(store.sheet.value).toBeNull(); // no question
     expect(store.explorer.value?.fromLive).toBe(true);
+    expect(store.explorerEngine.value).toBe(false);
+    expect(store.game.value?.assisted).toBe(false);
+    expect(store.bottomPlayer.value.unrated).toBeUndefined();
+    expect(store.explorerPanel.value).toMatchObject({
+      title: 'White to move',
+      engine: { on: false, locked: false },
+      lines: [`${EXPLORER_ENGINE_OFF} Your game stays rated.`, EXPLORER_ENGINE_OFF_TIP],
+      best: null,
+      actions: [],
+    });
+    explore(controller, ['g1f3', 'b8c6']);
+    await controller.idle();
+    expect(store.game.value?.assisted).toBe(false);
+    expect(loadGame(storage)?.assisted).toBe(false);
+
+    // The switch asks first.
+    controller.runExplorerAction('engine');
+    expect(store.sheet.value).toBe('assist');
+    expect(store.sheets.value.assist).toEqual({ kind: 'exploreEngine' });
+    expect(assistPrompt('exploreEngine')).toEqual({
+      title: 'Turn on the engine?',
+      message:
+        'The engine’s evaluation, best moves and move ratings will show while you explore. Turning it on makes this game unrated: win or lose, your rating stays the same. Switching it off again won’t undo that.',
+      confirmLabel: 'Turn on',
+      cancelLabel: 'Keep off',
+    });
+    controller.closeSheet(); // Keep off
+    expect(store.explorerEngine.value).toBe(false);
+    expect(store.game.value?.assisted).toBe(false);
+    expect(store.explorer.value?.moves).toHaveLength(2); // still exploring, line kept
+
+    controller.runExplorerAction('engine');
+    controller.confirmAssist(); // Turn on
+    expect(store.sheet.value).toBeNull();
+    expect(store.explorerEngine.value).toBe(true);
     expect(store.game.value?.assisted).toBe(true);
     expect(store.bottomPlayer.value.unrated).toBe(true);
     expect(loadGame(storage)?.assisted).toBe(true);
-    controller.exitExplorer();
-    controller.requestExplore(); // already unrated: no question
+    expect(store.explorerPanel.value?.engine).toEqual({ on: true, locked: false });
+    // Off again: the game stays unrated; on again, at once (no question now).
+    controller.runExplorerAction('engine');
+    expect(store.explorerEngine.value).toBe(false);
+    expect(store.game.value?.assisted).toBe(true);
+    expect(store.explorerPanel.value?.lines).toEqual([`${EXPLORER_ENGINE_OFF} This game is already unrated.`, EXPLORER_ENGINE_OFF_TIP]);
+    controller.runExplorerAction('engine');
     expect(store.sheet.value).toBeNull();
-    expect(store.explorer.value).not.toBeNull();
+    expect(store.explorerEngine.value).toBe(true);
     controller.requestExplore(); // pressed again: closes
     expect(store.explorer.value).toBeNull();
   });
 
-  it('after the game and in the review: no question and no effect on the rating', async () => {
+  it('the engine question is dropped when the explorer closes, the game ends or a new game starts', async () => {
+    const bot = new ScriptedBot(['d8h4']);
+    const { controller, store } = await setup({ bot });
+    controller.newGame(settings(), { startFen: 'rnbqkbnr/pppp1ppp/8/4p3/8/5P2/PPPPP1PP/RNBQKBNR w KQkq - 0 2' });
+    await controller.idle();
+    enter(controller);
+    controller.runExplorerAction('engine');
+    expect(store.sheet.value).toBe('assist');
+    controller.exitExplorer();
+    expect(store.sheet.value).toBeNull();
+    expect(store.pendingAssist.value).toBeNull();
+    controller.confirmAssist(); // a late tap does nothing
+    expect(store.game.value?.assisted).toBe(false);
+
+    // The game ends (the bot mates) while the question is open.
+    bot.manual = true;
+    expect(controller.playerMove('g2', 'g4')).toBe(true);
+    await vi.waitFor(() => expect(bot.heldCount).toBe(1));
+    enter(controller);
+    controller.runExplorerAction('engine');
+    expect(store.sheet.value).toBe('assist');
+    bot.release();
+    await vi.waitFor(() => expect(store.phase.value).toBe('over'));
+    expect(store.sheet.value).toBeNull();
+    expect(store.pendingAssist.value).toBeNull();
+    expect(store.ratingChange.value?.rated).toBe(true);
+    expect(store.explorerEngine.value).toBe(false);
+    controller.runExplorerAction('engine'); // the game is over: at once, no rating effect
+    expect(store.sheet.value).toBeNull();
+    expect(store.explorerEngine.value).toBe(true);
+    controller.exitExplorer();
+    expect(store.sheet.value).toBe('gameOver');
+
+    // A new game started from the question's place.
+    controller.newGame(settings());
+    await controller.idle();
+    enter(controller);
+    controller.runExplorerAction('engine');
+    expect(store.sheet.value).toBe('assist');
+    controller.newGame(settings());
+    expect(store.pendingAssist.value).toBeNull();
+    expect(store.sheet.value).toBeNull();
+    expect(store.explorer.value).toBeNull();
+    expect(store.game.value?.assisted).toBe(false);
+  });
+
+  it('after the game and in the review: the engine is on, no question and no effect on the rating', async () => {
     const { controller, store } = await setup({ bot: new ScriptedBot(['e7e5', 'b8c6']) });
     controller.newGame(settings());
     await playAll(controller, ['e2e4', 'g1f3']);
@@ -194,9 +330,15 @@ describe('explorer: entering and leaving', () => {
     controller.requestExplore();
     expect(store.sheet.value).toBeNull();
     expect(store.explorer.value).toMatchObject({ fromLive: true, baseIndex: 4 });
+    expect(store.explorerEngine.value).toBe(true);
+    expect(store.explorerPanel.value?.engine).toEqual({ on: true, locked: false });
     expect(controller.canReloadNow()).toBe(false); // the explorer is not saved
     explore(controller, ['f1c4', 'f8c5']);
     await controller.idle();
+    expect(store.explorer.value!.moves.every((m) => m.rating)).toBe(true);
+    // Off after the game: just the moves (and no word about the rating).
+    controller.runExplorerAction('engine');
+    expect(store.explorerPanel.value).toMatchObject({ lines: [EXPLORER_ENGINE_OFF, EXPLORER_ENGINE_OFF_TIP], verdict: null, evalLabel: null });
     controller.exitExplorer();
     expect(controller.canReloadNow()).toBe(true);
     expect(store.game.value?.assisted).toBe(false);
@@ -208,6 +350,7 @@ describe('explorer: entering and leaving', () => {
     controller.requestExplore();
     expect(store.sheet.value).toBeNull();
     expect(store.explorer.value).toMatchObject({ baseIndex: 1, fromLive: false });
+    expect(store.explorerEngine.value).toBe(true);
     expect(store.explorerPanel.value?.from).toBe('1. e4');
     expect(store.review.value).not.toBeNull(); // the review is still there underneath
     explore(controller, ['c7c5']);
@@ -250,7 +393,7 @@ describe('explorer: entering and leaving', () => {
     expect(store.board.value.session).not.toBe(first);
   });
 
-  it('asked on the bot’s turn, it opens on that position even when the bot moved before the answer', async () => {
+  it('on the bot’s turn: it opens at once there, and the engine question does not hold the bot', async () => {
     const bot = new ScriptedBot(['e7e5']);
     bot.manual = true;
     const { controller, store } = await setup({ bot });
@@ -258,13 +401,16 @@ describe('explorer: entering and leaving', () => {
     expect(controller.playerMove('e2', 'e4')).toBe(true);
     await vi.waitFor(() => expect(bot.heldCount).toBe(1));
     const asked = store.displayedFen.value;
-    controller.requestExplore();
+    enter(controller);
+    expect(store.explorer.value).toMatchObject({ baseFen: asked, baseIndex: 1, fromLive: true, gamePlies: 1 });
+    controller.runExplorerAction('engine');
     expect(store.sheet.value).toBe('assist');
     bot.release();
     await vi.waitFor(() => expect(store.plies.value).toHaveLength(2));
     expect(store.sheet.value).toBe('assist');
     controller.confirmAssist();
-    expect(store.explorer.value).toMatchObject({ baseFen: asked, baseIndex: 1, fromLive: true, gamePlies: 1 });
+    expect(store.explorerEngine.value).toBe(true);
+    expect(store.game.value?.assisted).toBe(true);
     expect(store.board.value.fen).toBe(asked);
     expect(store.explorerPanel.value?.notice).toBe('Pip played 1… e5 in your game.');
     explore(controller, ['c7c5']);
@@ -298,44 +444,103 @@ describe('explorer: Pro', () => {
     return { ...s, entitlements, purchases };
   }
 
-  it('locked: Explore shows a lock and opens the paywall, with no question and no rating effect', async () => {
-    const { controller, store, entitlements, purchases } = await locked();
+  it('locked: the explorer is free (engine off); its Engine switch shows a lock and opens the paywall, with no question', async () => {
+    const { controller, store, entitlements, purchases, engines } = await locked();
     controller.newGame(settings());
-    expect(store.toolbar.value.explore).toMatchObject({ disabled: false, locked: true });
+    expect(controller.playerMove('e2', 'e4')).toBe(true);
+    await controller.idle();
+    expect(store.toolbar.value.explore).toEqual({ disabled: false });
     controller.requestExplore();
-    expect(entitlements.paywall.value).toEqual({ open: true, feature: 'explorer' });
-    expect(store.sheet.value).toBeNull();
-    expect(store.explorer.value).toBeNull();
-    expect(controller.explore()).toBe(false); // the direct call is gated too
-    expect(store.game.value?.assisted).toBe(false);
+    expect(entitlements.paywall.value.open).toBe(false);
+    expect(store.explorer.value).not.toBeNull();
+    expect(store.explorerPanel.value?.engine).toEqual({ on: false, locked: true });
+    const from = engines.analysis.searches.length;
+    explore(controller, ['g1f3', 'b8c6']);
+    await controller.idle();
+    expect(store.board.value.dests.size).toBeGreaterThan(0);
 
+    controller.runExplorerAction('engine');
+    expect(entitlements.paywall.value).toEqual({ open: true, feature: 'explorerEngine' });
+    expect(store.sheet.value).toBeNull();
+    expect(store.explorerEngine.value).toBe(false);
+    expect(store.game.value?.assisted).toBe(false);
+    await controller.idle();
+    const explored = new Set(store.explorer.value!.moves.map((m) => fenKey(m.fenAfter)));
+    expect(engines.analysis.searches.slice(from).filter((x) => explored.has(fenKey(x.fen)))).toEqual([]);
+    expect(store.explorer.value!.moves.every((m) => !m.rating)).toBe(true);
+    entitlements.closePaywall();
+
+    // Bought: the switch asks about the rating like any help in a rated game.
     const bought = entitlements.buy();
     purchases.purchases[0].resolve('purchased');
     await bought;
     entitlements.closePaywall();
-    expect(store.toolbar.value.explore.locked).toBeUndefined();
-    controller.requestExplore();
+    expect(store.explorerPanel.value?.engine).toEqual({ on: false, locked: false });
+    controller.runExplorerAction('engine');
     expect(store.sheet.value).toBe('assist');
+    controller.confirmAssist();
+    expect(store.explorerEngine.value).toBe(true);
+    await controller.idle();
+    expect(store.explorer.value!.moves.every((m) => m.rating)).toBe(true);
   });
 
-  it('a refund while exploring closes the explorer', async () => {
-    const { controller, store, purchases } = await locked(true);
+  it('after the game with the engine locked: the explorer opens with it off', async () => {
+    const { controller, store } = await locked();
     controller.newGame(settings());
-    enterConfirmed(controller);
+    expect(controller.playerMove('e2', 'e4')).toBe(true);
+    await controller.idle();
+    controller.resign();
+    controller.closeSheet();
+    enter(controller);
+    expect(store.explorerEngine.value).toBe(false);
+    expect(store.explorerPanel.value?.engine).toEqual({ on: false, locked: true });
+    expect(store.evalBar.value).toMatchObject({ visible: true, off: true, label: '' });
+  });
+
+  it('a refund while exploring switches the engine off (the explorer stays)', async () => {
+    const { controller, store, purchases } = await locked(true);
+    controller.newGame(settings({ showBestMoves: true }));
+    enter(controller);
+    engineOn(controller);
     explore(controller, ['e2e4']);
     purchases.emit(false);
-    expect(store.explorer.value).toBeNull();
-    expect(store.board.value.fen).toBe(START_FEN);
+    expect(store.explorer.value).not.toBeNull();
+    expect(store.explorerEngine.value).toBe(false);
+    expect(store.explorerPanel.value?.engine).toEqual({ on: false, locked: true });
+    expect(store.board.value.arrows).toEqual([]);
+    expect(store.board.value.fen).toBe(explorerFen(store.explorer.value!));
+  });
+
+  it('a refund while “Turn on the engine?” is open drops the question; a late Turn on opens the paywall', async () => {
+    const { controller, store, entitlements, purchases } = await locked(true);
+    controller.newGame(settings());
+    enter(controller);
+    controller.runExplorerAction('engine');
+    expect(store.sheet.value).toBe('assist');
+    expect(store.pendingAssist.value).toEqual({ kind: 'exploreEngine' });
+    purchases.emit(false);
+    expect(store.sheet.value).toBeNull();
+    expect(store.pendingAssist.value).toBeNull();
+    expect(store.explorer.value).not.toBeNull();
+    expect(store.explorerPanel.value?.engine).toEqual({ on: false, locked: true });
+    controller.confirmAssist(); // a late tap: nothing asked any more
+    expect(store.game.value?.assisted).toBe(false);
+    expect(store.explorerEngine.value).toBe(false);
+    expect(entitlements.paywall.value.open).toBe(false);
+    // Its switch now opens the paywall, with no question.
+    controller.runExplorerAction('engine');
+    expect(store.sheet.value).toBeNull();
+    expect(entitlements.paywall.value).toMatchObject({ open: true, feature: 'explorerEngine' });
   });
 });
 
 describe('explorer: playing an explored move in the game', () => {
-  it('"Play" commits exactly the first explored move through the normal move path, then the bot replies', async () => {
+  it('"Play" commits exactly the first explored move through the normal move path, then the bot replies (the game stays rated)', async () => {
     const bot = new ScriptedBot(['e7e5', 'b8c6']);
     const { controller, store, sound } = await setup({ bot });
     controller.newGame(settings());
     await playAll(controller, ['e2e4']);
-    enterConfirmed(controller);
+    enter(controller);
     expect(store.explorerPlayable.value).toBeNull(); // nothing explored yet
     explore(controller, ['g1f3', 'b8c6', 'f1b5']);
     controller.explorerGoTo(1);
@@ -353,6 +558,7 @@ describe('explorer: playing an explored move in the game', () => {
     await controller.idle();
     expect(bot.calls.length).toBe(calls + 1);
     expect(store.plies.value.map((p) => p.san)).toEqual(['e4', 'e5', 'Nf3', 'Nc6']);
+    expect(store.game.value?.assisted).toBe(false);
   });
 
   it('not from an earlier position, nor on the bot’s turn', async () => {
@@ -386,10 +592,8 @@ describe('explorer: the game goes on meanwhile', () => {
     controller.newGame(settings());
     expect(controller.playerMove('e2', 'e4')).toBe(true);
     await vi.waitFor(() => expect(bot.heldCount).toBe(1));
-    controller.requestExplore();
-    expect(store.sheet.value).toBe('assist');
-    expect(bot.heldCount).toBe(1); // the bot keeps thinking while the question is open
-    controller.confirmAssist();
+    enter(controller);
+    expect(bot.heldCount).toBe(1); // the bot keeps thinking
     const x = store.explorer.value!;
     expect(x.fromLive).toBe(true);
     expect(store.explorerPanel.value?.notice).toBe('Pip is thinking about its move in your game…');
@@ -437,13 +641,204 @@ describe('explorer: the game goes on meanwhile', () => {
   });
 });
 
+describe('explorer: engine off (the default during a game)', () => {
+  it('asks the engine nothing about the explored positions (no position/go for them) and shows nothing of it', async () => {
+    const { controller, store, transport } = await setupUci(new ScriptedBot(['e7e5', 'b8c6']));
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    await controller.idle();
+    const from = transport.sent.length;
+    enter(controller);
+    explore(controller, ['g1f3', 'b8c6', 'f1b5', 'a7a6']);
+    const explored = new Set(store.explorer.value!.moves.map((m) => fenKey(m.fenAfter)));
+    controller.stepBack();
+    controller.explorerGoTo(1);
+    controller.stepForward();
+    controller.explorerReset();
+    explore(controller, ['d2d4', 'd7d5', 'c2c4']);
+    for (const m of store.explorer.value!.moves) explored.add(fenKey(m.fenAfter));
+    await controller.explorerReply(); // no engine: plays nothing
+    expect(store.explorer.value!.moves).toHaveLength(3);
+    await controller.idle();
+    await new Promise((r) => setTimeout(r, 50)); // the live watch's turn
+    expectNoEngine(store);
+    expect(store.explorer.value!.moves.every((m) => !m.rating && !m.failed)).toBe(true);
+    // The engine searched the game's positions (its annotations and watch), but no explored one.
+    expect(transport.searchedFens().length).toBeGreaterThan(0);
+    const searched = transport.searchedFens(from);
+    expect(searched.filter((k) => explored.has(k))).toEqual([]);
+    expect(transport.positionFens(from).filter((k) => explored.has(k))).toEqual([]);
+    expect(searched.every((k) => k === fenKey(store.liveFen.value))).toBe(true);
+    expect(store.game.value?.assisted).toBe(false);
+
+    // Switched on: the explored position is searched now.
+    engineOn(controller);
+    await controller.idle();
+    await vi.waitFor(() => expect(transport.searchedFens(from).filter((k) => explored.has(k)).length).toBeGreaterThan(0));
+  });
+
+  it('shows nothing even for positions the engine already knows (the game’s watch, the analysis cache)', async () => {
+    const { controller, store, engines } = await setup({ bot: new ScriptedBot(['e7e5', 'b8c6']) });
+    controller.newGame(settings({ showBestMoves: true })); // arrows on in the game: none in the explorer
+    await playAll(controller, ['e2e4', 'g1f3']);
+    await controller.idle();
+    // The game's live position: the watch analyzed it, and the explorer starts there.
+    await vi.waitFor(() => expect(store.live.value?.key).toBe(fenKey(store.liveFen.value)));
+    expect(store.board.value.arrows?.length).toBeGreaterThan(0);
+    enter(controller);
+    expect(store.board.value.fen).toBe(store.liveFen.value);
+    expectNoEngine(store);
+    expect(store.explorerPanel.value?.best).toBeNull();
+    // A position the cache holds (the game's after 1… e5, annotated): explored again, still nothing.
+    controller.exitExplorer();
+    controller.goTo(1);
+    const searches = engines.analysis.searches.length;
+    enter(controller);
+    explore(controller, ['e7e5', 'g1f3']);
+    await controller.idle();
+    expect(store.explorer.value!.moves.map((m) => m.fenAfter)).toEqual([store.plies.value[1].fenAfter, store.plies.value[2].fenAfter]);
+    expectNoEngine(store);
+    expect(store.explorer.value!.moves.every((m) => !m.rating)).toBe(true);
+    const explored = new Set(store.explorer.value!.moves.map((m) => fenKey(m.fenAfter)));
+    expect(engines.analysis.searches.slice(searches).filter((x) => explored.has(fenKey(x.fen)))).toEqual([]);
+    controller.exitExplorer();
+  });
+
+  it('a checkmate, stalemate or draw still shows (the rules, not the engine), with captures on the strips', async () => {
+    const { controller, store } = await setup({ bot: new ScriptedBot(['e7e5']) });
+    controller.newGame(settings({ playerColor: 'b' }), {
+      startFen: 'rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq g3 0 2',
+    });
+    await controller.idle();
+    enter(controller);
+    explore(controller, ['d8h4']);
+    expectNoEngine(store);
+    expect(store.explorerPanel.value).toMatchObject({ title: '2… Qh4#', best: 'Checkmate: Black wins.' });
+    expect(store.board.value).toMatchObject({ check: true, lastMove: ['d8', 'h4'] });
+    expect(store.board.value.movableColor).toBeUndefined();
+    controller.stepBack();
+    explore(controller, ['b8c6', 'g4g5', 'c6d4', 'e2e3', 'd4f3']); // Nxf3: a capture
+    expect(store.topPlayer.value.captured.length + store.bottomPlayer.value.captured.length).toBe(1);
+    expect(store.explorerDraw.value).toBeNull();
+    expect(store.board.value.dests.size).toBeGreaterThan(0); // legal-move dots
+  });
+
+  it('switching it on rates every explored move so far; off withdraws the explorer’s searches at once', async () => {
+    const { controller, store, engines } = await setup({ bot: new ScriptedBot(['e7e5', 'b8c6']) });
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    await controller.idle();
+    enter(controller);
+    explore(controller, ['g1f3', 'b8c6', 'f1b5']);
+    await controller.idle();
+    expect(store.explorer.value!.moves.every((m) => !m.rating)).toBe(true);
+    engineOn(controller);
+    expect(store.game.value?.assisted).toBe(true);
+    await controller.idle();
+    expect(store.explorer.value!.moves.every((m) => m.rating)).toBe(true);
+    const fen = explorerFen(store.explorer.value!);
+    await vi.waitFor(() => expect(store.live.value?.key).toBe(fenKey(fen)));
+    expect(store.board.value.arrows?.length).toBeGreaterThan(0);
+    expect(store.board.value.badge?.square).toBe('b5');
+    expect(store.explorerPanel.value?.best).toMatch(/^Best here: /);
+    expect(store.moveList.value.showClassIcons).toBe(true);
+    expect(store.toolbar.value.explorerReply.disabled).toBe(false);
+
+    // Off: everything hides at once, the ratings stay (for when it is on again).
+    controller.runExplorerAction('engine');
+    expectNoEngine(store);
+    expect(store.explorer.value!.moves.every((m) => m.rating)).toBe(true);
+    expect(store.game.value?.assisted).toBe(true); // stays unrated
+
+    // A slow search of an explored position is withdrawn when the engine goes off.
+    engineOn(controller);
+    const c = new Chess(explorerFen(store.explorer.value!));
+    const slow = new Set([fenKey(c.move('a6').after), fenKey(c.move('Ba4').after)]);
+    const search = engines.analysis.search.bind(engines.analysis);
+    vi.spyOn(engines.analysis, 'search').mockImplementation((f, opts) => {
+      engines.analysis.delayMs = slow.has(fenKey(f)) ? 5_000 : 0;
+      return search(f, opts);
+    });
+    explore(controller, ['a7a6', 'b5a4']);
+    void controller.explorerReply();
+    expect(store.explorerReplying.value).toBe(true);
+    controller.runExplorerAction('engine');
+    expect(store.explorerReplying.value).toBe(false);
+    const from = engines.analysis.searches.length;
+    controller.exitExplorer();
+    expect(controller.playerMove('g1', 'f3')).toBe(true);
+    // The game's move is rated at once: the explorer's searches gave way.
+    await vi.waitFor(() => expect(store.plies.value[2]?.classification).toBeDefined(), { timeout: 2_000 });
+    expect(engines.analysis.searches.slice(from).filter((x) => slow.has(fenKey(x.fen)))).toEqual([]);
+    vi.mocked(engines.analysis.search).mockRestore();
+    engines.analysis.delayMs = 0;
+    await controller.idle();
+  });
+
+  it('remembers in this game that it was switched on (or off again); a new game starts with it off', async () => {
+    const { controller, store } = await setup({ bot: new ScriptedBot(['e7e5', 'b8c6', 'g8f6']) });
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    enter(controller);
+    engineOn(controller); // asks, then on
+    controller.exitExplorer();
+    enter(controller);
+    expect(store.explorerEngine.value).toBe(true); // at once, no question
+    expect(store.sheet.value).toBeNull();
+    controller.runExplorerAction('engine'); // off
+    controller.exitExplorer();
+    enter(controller);
+    expect(store.explorerEngine.value).toBe(false);
+    controller.runExplorerAction('engine'); // the game is unrated already: on at once
+    expect(store.sheet.value).toBeNull();
+    expect(store.explorerEngine.value).toBe(true);
+    controller.exitExplorer();
+    controller.rematch();
+    await controller.idle();
+    enter(controller);
+    expect(store.explorerEngine.value).toBe(false);
+    expect(store.game.value?.assisted).toBe(false);
+  });
+
+  it('an older save made unrated by the explorer loads unrated, and the explorer opens with its engine off', async () => {
+    const storage = new MemoryStorage();
+    const old: SavedGame = {
+      version: 1,
+      id: 'old-1',
+      startFen: START_FEN,
+      moves: ['e2e4', 'e7e5'],
+      playerColor: 'w',
+      botId: 'pip',
+      botElo: 100,
+      botName: 'Pip',
+      assisted: true, // as when opening the explorer made a game unrated
+      startedAt: '2026-09-01T10:00:00.000Z',
+      annotations: {},
+    };
+    expect(saveGame(old, storage)).toBe(true);
+    const { controller, store } = await setup({ bot: new ScriptedBot(['b8c6']), storage });
+    expect(store.phase.value).toBe('playing');
+    expect(store.game.value).toMatchObject({ id: 'old-1', assisted: true });
+    expect(store.bottomPlayer.value.unrated).toBe(true);
+    enter(controller);
+    expect(store.explorerEngine.value).toBe(false);
+    expect(store.explorerPanel.value?.lines?.[0]).toBe(`${EXPLORER_ENGINE_OFF} This game is already unrated.`);
+    controller.runExplorerAction('engine'); // unrated already: no question
+    expect(store.sheet.value).toBeNull();
+    expect(store.explorerEngine.value).toBe(true);
+  });
+});
+
 describe('explorer: engine', () => {
   it('watches the explored position (eval bar, arrows, Best here), and the game’s again after Exit', async () => {
     const { controller, store } = await setup({ bot: new ScriptedBot(['e7e5']) });
     controller.newGame(settings({ showBestMoves: true, showEvalBar: false }));
     await playAll(controller, ['e2e4']);
     controller.requestExplore();
-    expect(store.evalBar.value.visible).toBe(true); // shown while exploring, even when off for the game
+    expect(store.evalBar.value).toMatchObject({ visible: false, off: true }); // as the game's, while the engine is off
+    engineOn(controller);
+    expect(store.evalBar.value.visible).toBe(true); // shown with the explorer's engine, even when off for the game
+    expect(store.evalBar.value.off).toBeUndefined();
     explore(controller, ['g1f3']);
     const fen = explorerFen(store.explorer.value!);
     await vi.waitFor(() => expect(store.live.value?.key).toBe(fenKey(fen)));
@@ -467,6 +862,7 @@ describe('explorer: engine', () => {
     controller.newGame(settings({ showBestMoves: true }));
     await playAll(controller, ['e2e4']);
     controller.requestExplore();
+    engineOn(controller);
     explore(controller, ['g1f3']);
     engines.analysis.script = ['g8f6'];
     // A fresh position: not analyzed deeply yet, so it asks for an annotation search.
@@ -491,6 +887,7 @@ describe('explorer: engine', () => {
     vi.mocked(classifyMove).mockClear();
     vi.mocked(explainMove).mockClear();
     controller.requestExplore();
+    engineOn(controller);
     explore(controller, ['f1c4']);
     expect(store.explorerPanel.value).toMatchObject({ title: '3. Bc4', verdict: 'Checking…', busy: true });
     explore(controller, ['g8f6']); // Black's move: neutral wording
@@ -546,6 +943,7 @@ describe('explorer: engine', () => {
     controller.newGame(settings({ showBestMoves: true }));
     expect(controller.playerMove('e2', 'e4')).toBe(true);
     controller.requestExplore(); // at once, while the game's first ply is being analyzed
+    engineOn(controller);
     explore(controller, ['e7e5', 'g1f3', 'b8c6', 'f1b5', 'a7a6']);
     await controller.idle();
     expect(store.explorer.value!.moves.every((m) => m.rating)).toBe(true);
@@ -563,6 +961,7 @@ describe('explorer: engine', () => {
     await playAll(controller, ['e2e4']);
     await controller.idle();
     controller.requestExplore();
+    engineOn(controller);
     // Cut the rating's searches short below the annotation depth (aborted, not at a node budget).
     const search = engines.analysis.search.bind(engines.analysis);
     vi.spyOn(engines.analysis, 'search').mockImplementation(async (fen, opts) => {
@@ -580,6 +979,56 @@ describe('explorer: engine', () => {
     expect(store.explorer.value!.moves[0].rating).toBeDefined();
   });
 
+  it('a rating that throws fails once (Try again) and is not retried without end', async () => {
+    const { controller, store } = await setup({ bot: new ScriptedBot(['e7e5']) });
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    await controller.idle();
+    enter(controller);
+    engineOn(controller);
+    await controller.idle();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(classifyMove).mockImplementationOnce(() => {
+      throw new Error('odd position');
+    });
+    const calls = vi.mocked(classifyMove).mock.calls.length;
+    explore(controller, ['g1f3']);
+    await controller.idle();
+    expect(vi.mocked(classifyMove).mock.calls.length - calls).toBe(1);
+    expect(errors).toHaveBeenCalledTimes(1);
+    expect(store.explorer.value!.moves[0]).toMatchObject({ failed: true });
+    expect(store.explorerPanel.value!.actions.map((a) => a.id)).toContain('retryRating');
+    errors.mockRestore();
+    // Try again: rated this time, and the next move too.
+    controller.runExplorerAction('retryRating');
+    explore(controller, ['b8c6']);
+    await controller.idle();
+    expect(store.explorer.value!.moves.every((m) => m.rating)).toBe(true);
+  });
+
+  it('switched on after a long line: the position on the board is analyzed first, before the backlog of ratings', async () => {
+    const { controller, store, engines } = await setup({ bot: new ScriptedBot(['e7e5']) });
+    controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    await controller.idle();
+    enter(controller);
+    const line = ['g1f3', 'b8c6', 'f1b5', 'a7a6', 'b5a4', 'g8f6', 'e1g1', 'f8e7', 'f1e1', 'b7b5', 'a4b3', 'd7d6'];
+    explore(controller, line);
+    const fen = explorerFen(store.explorer.value!);
+    engines.analysis.delayMs = 15;
+    const from = engines.analysis.searches.length;
+    engineOn(controller);
+    await vi.waitFor(() => expect(store.explorerPanel.value?.best).toMatch(/^Best here: /), { timeout: 5_000, interval: 2 });
+    // Only the position on the board was searched (the live watch, which its ensure joined).
+    const rated = store.explorer.value!.moves.filter((m) => m.rating).length;
+    expect(rated).toBeLessThan(2);
+    expect(engines.analysis.searches.slice(from).map((x) => fenKey(x.fen))).toContain(fenKey(fen));
+    expect(store.evalBar.value.thinking).toBeFalsy();
+    await controller.idle();
+    engines.analysis.delayMs = 0;
+    expect(store.explorer.value!.moves.every((m) => m.rating)).toBe(true);
+  });
+
   it('a third repetition (counting the game’s positions) is a draw: 0.0, no more moves, no reply, no best move', async () => {
     // The game: 1. Nf3 Nf6 2. Ng1 Ng8, back to the start position (its second time).
     const bot = new ScriptedBot(['g8f6', 'f6g8', 'g8f6', 'f6g8']);
@@ -587,6 +1036,7 @@ describe('explorer: engine', () => {
     controller.newGame(settings({ showBestMoves: true }));
     await playAll(controller, ['g1f3', 'f3g1']);
     controller.requestExplore();
+    engineOn(controller);
     explore(controller, ['g1f3', 'g8f6', 'f3g1']);
     expect(store.explorerDraw.value).toBeNull();
     expect(store.board.value.movableColor).toBe('black');
@@ -615,6 +1065,7 @@ describe('explorer: engine', () => {
     controller.closeSheet();
     expect(store.evalBar.value.label).toBe('0.0');
     controller.requestExplore();
+    engineOn(controller);
     expect(store.explorerDraw.value).toBe('Threefold repetition');
     expect(store.evalBar.value.label).toBe('0.0');
     expect(store.explorerPanel.value?.best).toBe('Threefold repetition: a draw.');
@@ -626,6 +1077,7 @@ describe('explorer: engine', () => {
     controller.newGame(settings({ showBestMoves: true }), { startFen: '4k3/8/8/8/8/8/3n4/4K2R w - - 99 80' });
     await controller.idle();
     controller.requestExplore();
+    engineOn(controller);
     explore(controller, ['h1h2']); // the 100th half-move without a capture or a pawn move
     expect(store.explorerDraw.value).toBe('50-move rule');
     expect(store.explorerPanel.value?.best).toBe('50-move rule: a draw.');
@@ -636,6 +1088,7 @@ describe('explorer: engine', () => {
     controller.newGame(settings({ showBestMoves: true }), { startFen: '4k3/8/8/8/8/8/3r4/4K3 w - - 0 1' });
     await controller.idle();
     controller.requestExplore();
+    engineOn(controller);
     explore(controller, ['e1d2']);
     expect(store.explorerDraw.value).toBe('Insufficient material');
     expect(store.board.value.movableColor).toBeUndefined();
@@ -656,6 +1109,7 @@ describe('explorer: engine', () => {
       return search(fen, opts);
     });
     controller.requestExplore();
+    engineOn(controller);
     explore(controller, ['g1f3', 'b8c6', 'f1b5']);
     void controller.explorerReply(); // an annotation search of the explored position
     expect(store.explorerReplying.value).toBe(true);
@@ -679,11 +1133,13 @@ describe('explorer: engine', () => {
     await controller.idle();
     engines.analysis.delayMs = 20;
     controller.requestExplore();
+    engineOn(controller);
     explore(controller, ['g1f3']);
     const first = controller.explorerReply();
     expect(store.explorerReplying.value).toBe(true);
     controller.exitExplorer();
     controller.requestExplore();
+    engineOn(controller);
     explore(controller, ['d2d4']);
     expect(store.toolbar.value.explorerReply.disabled).toBe(false);
     const second = controller.explorerReply();
@@ -703,6 +1159,7 @@ describe('explorer: engine', () => {
     });
     await controller.idle();
     controller.requestExplore();
+    engineOn(controller);
     explore(controller, ['d8h4']);
     expect(store.board.value.movableColor).toBeUndefined();
     expect(store.board.value.check).toBe(true);

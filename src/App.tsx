@@ -18,6 +18,7 @@ import { copyText } from './clipboard';
 import { rememberedEngineMode, resetEngineMode } from './engine/createEngines';
 import type { GameController, OpeningGameOptions } from './game/controller';
 import { PRO_NAME } from './game/entitlements';
+import { DRAW_TIP } from './game/drawings';
 import type { ReadonlyStore, ToolbarId } from './game/store';
 import type { GameSettings, PromotionPiece } from './game/types';
 import { closeOpenings, openingsOpen, openOpenings, popPage } from './openings/session';
@@ -27,6 +28,7 @@ import { applyTheme, loadTheme, saveTheme, watchSystemTheme, type ThemePref } fr
 import { Board } from './ui/Board';
 import { CoachPanel } from './ui/CoachPanel';
 import { ConfirmSheet, assistPrompt } from './ui/ConfirmSheet';
+import { DrawBar, DrawToggle } from './ui/DrawBar';
 import { EvalBar } from './ui/EvalBar';
 import { EvalGraph } from './ui/EvalGraph';
 import { ExplorerPanel } from './ui/ExplorerPanel';
@@ -53,7 +55,7 @@ import { NewGameSheet } from './ui/NewGameSheet';
 import { LockedIcon, PaywallSheet } from './ui/PaywallSheet';
 import { PlayerStrip } from './ui/PlayerStrip';
 import { ReviewPanel } from './ui/ReviewPanel';
-import { trapTab, useEscapeLayer } from './ui/Sheet';
+import { hasOpenLayer, trapTab, useEscapeLayer } from './ui/Sheet';
 import { Toolbar, type ToolbarItem } from './ui/Toolbar';
 import './App.css';
 
@@ -166,14 +168,18 @@ export function App({ controller: c, offline }: AppProps) {
 
   const exportPgn = () => void sharePgn(c, notify);
 
-  // Desktop / keyboard: ← → step through the moves.
+  // Desktop / keyboard: ← → step through the moves. Not while a layer is open over the game (a
+  // sheet, the paywall, which is not in `s.sheet`, the Openings section): its own Escape goes first.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || s.sheet.value || openingsOpen.value) return;
+      if (hasOpenLayer() || c.entitlements.paywall.value.open) return;
       const el = e.target instanceof Element ? e.target : null;
       if (el?.closest('input, textarea, select, [role="slider"], [contenteditable]')) return;
       if (e.key === 'ArrowLeft') c.stepBack();
       else if (e.key === 'ArrowRight') c.stepForward();
+      // Escape leaves Draw mode first, then the explorer.
+      else if (e.key === 'Escape' && s.drawMode.value) c.exitDraw();
       else if (e.key === 'Escape' && s.explorer.value) c.exitExplorer();
       else return;
       e.preventDefault();
@@ -198,6 +204,7 @@ export function App({ controller: c, offline }: AppProps) {
         <BoardArea c={c} />
         <Player store={s} which="bottom">
           <BackChip c={c} />
+          <DrawControls c={c} />
         </Player>
         <PanelArea c={c} summary={reviewSummary} />
         {graphVisible && <GraphArea c={c} />}
@@ -250,7 +257,9 @@ function BackChip({ c }: { c: GameController }) {
   if (!backChipShown(s)) return null;
   return (
     <button type="button" class="app-chip" data-id="back-to-game" onClick={() => c.backToLive()}>
-      {phase === 'playing' ? 'Back to game' : 'Final position'}
+      {/* A narrow strip with the Draw toggle beside the chip says only "Back" / "Final" (App.css). */}
+      {phase === 'playing' ? 'Back' : 'Final'}
+      <span class="app-chip-more">{phase === 'playing' ? ' to game' : ' position'}</span>
       <IconChevronRight size={16} />
     </button>
   );
@@ -264,6 +273,49 @@ function backChipShown(s: ReadonlyStore): boolean {
     (phase === 'playing' || phase === 'over') &&
     s.coachMode.value.kind !== 'showBest' &&
     !s.explorer.value
+  );
+}
+
+/**
+ * Draw mode's controls on the strip under the board: the Draw toggle (a pencil pill at its right
+ * end, where it is one tap away on either side's turn, in the explorer and in the review), and
+ * while Draw mode is on the Draw bar over the whole strip (colors, Clear, Done), so nothing moves
+ * and nothing covers the board. The first time, a tip under the bar says how to draw.
+ */
+function DrawControls({ c }: { c: GameController }) {
+  const d = c.store.draw.value;
+  const on = !!d?.on;
+  const ref = useRef<HTMLDivElement>(null);
+  const was = useRef(on);
+  // The toggle and the bar replace each other: focus that would be lost with the one that went
+  // (a keyboard, a screen reader) moves to the other one.
+  useLayoutEffect(() => {
+    if (was.current === on) return;
+    was.current = on;
+    const lost = !document.activeElement || document.activeElement === document.body;
+    if (lost) ref.current?.querySelector<HTMLElement>(on ? '[aria-checked="true"]' : '[data-id="draw"]')?.focus({ preventScroll: true });
+  }, [on]);
+  if (!d) return null;
+  if (!d.on) {
+    return (
+      <div class="app-draw" ref={ref}>
+        <DrawToggle onClick={() => c.toggleDraw()} />
+      </div>
+    );
+  }
+  return (
+    <div class="app-drawbar" ref={ref}>
+      <DrawBar
+        color={d.color}
+        colors={d.colors}
+        canClear={d.canClear}
+        tip={d.tip ? DRAW_TIP : null}
+        yourMove={d.yourMove}
+        onColor={(color) => c.setDrawColor(color)}
+        onClear={() => c.clearDrawings()}
+        onDone={() => c.exitDraw()}
+      />
+    </div>
   );
 }
 
@@ -293,7 +345,7 @@ function BoardArea({ c }: { c: GameController }) {
     <div class="app-board">
       <EvalBarSlot store={s} />
       <div class="app-board-cell">
-        <Board {...board} onMove={onMove} />
+        <Board {...board} onMove={onMove} onDraw={(shape, fen) => c.drawShape(shape, fen)} />
       </div>
     </div>
   );
@@ -302,7 +354,9 @@ function BoardArea({ c }: { c: GameController }) {
 function EvalBarSlot({ store }: { store: ReadonlyStore }) {
   const ev = store.evalBar.value;
   if (!ev.visible) return null;
-  return <EvalBar whiteWinProb={ev.whiteWinProb} label={ev.label} orientation={ev.orientation} thinking={ev.thinking} />;
+  return (
+    <EvalBar whiteWinProb={ev.whiteWinProb} label={ev.label} orientation={ev.orientation} thinking={ev.thinking} off={ev.off} />
+  );
 }
 
 /**
@@ -359,6 +413,12 @@ function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean>
     content = (
       <ExplorerPanel
         {...explorer}
+        onEngine={() => {
+          // A floated panel goes away, so what the switch changed (the "Unrated" pill on the strip,
+          // the eval bar, the board's arrows) is in sight; the row keeps the switch.
+          setPeek(false);
+          c.runExplorerAction('engine');
+        }}
         collapsed={tight && !peek}
         onToggleCollapsed={tight ? () => setPeek((p) => !p) : undefined}
         actions={explorer.actions.map((a) => ({
@@ -492,7 +552,7 @@ function openingFamilyOf(name: string): string {
 /**
  * Toolbar per phase. Playing: New, Undo, Hint, Explore, Flip, Coach, Menu. Finished: New, Flip, ‹,
  * ›, Explore, Menu, Review. Review: Report (the summary), Flip, ‹, ›, Explore, Menu, Close.
- * Exploring: Reset, Flip, Back, Forward, Engine reply, Exit.
+ * Exploring: Reset, Flip, Back, Forward, Engine reply (disabled with the explorer's engine off), Exit.
  */
 function Tools({ c, summary }: { c: GameController; summary: Signal<boolean> }) {
   const s = c.store;
@@ -767,7 +827,7 @@ function Openings({ c }: { c: GameController }) {
   // The phase changes when the engine starts (or restarts), and the analysis service with it.
   const phase = s.phase.value;
   // During a rated game the section shows no engine evaluation (it would be live help on the
-  // game's positions, which only an unrated game may have: see the explorer's rule).
+  // game's positions, which only an unrated game may have: see the explorer's engine).
   const g = s.game.value;
   const ratedGame = phase === 'playing' && !!g && !g.assisted;
   // Read when the Play sheet opens (so a game's every move does not re-render the section).

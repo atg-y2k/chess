@@ -20,6 +20,8 @@ export const GAME_KEY = 'chesscoach.game';
 /** localStorage key of the settings. The value is `{ version: 1, settings: GameSettings }`. */
 export const SETTINGS_KEY = 'chesscoach.settings';
 const SETTINGS_VERSION = 1;
+/** localStorage key set once Draw mode's first-use tip has shown on this device. */
+export const DRAW_TIP_KEY = 'chesscoach.draw-tip';
 
 /** The subset of the Web Storage API used here (localStorage or an in-memory stand-in). */
 export type KeyValueStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -38,8 +40,9 @@ export interface SavedGame {
   botElo: number;
   botName: string;
   /**
-   * Takebacks, hints, Retry, the explorer, best-move arrows or the opponent's move ratings were
-   * used (the game will not be rated).
+   * Takebacks, hints, Retry, the engine in the explorer, best-move arrows or the opponent's move
+   * ratings were used (the game will not be rated). Only the flag is saved, not which help it was
+   * (so games saved when opening the explorer itself made them unrated load as unrated, as they were).
    */
   assisted: boolean;
   /** ISO timestamp. */
@@ -338,6 +341,16 @@ export function saveSettings(s: GameSettings, storage: KeyValueStorage | null = 
 export function loadSettings(storage: KeyValueStorage | null = defaultStorage()): GameSettings {
   const raw = read(storage, SETTINGS_KEY);
   return sanitizeSettings(isObject(raw) && isObject(raw.settings) ? raw.settings : raw);
+}
+
+/** Draw mode's first-use tip has already shown on this device (never throws; no storage: not yet). */
+export function loadDrawTipSeen(storage: KeyValueStorage | null = defaultStorage()): boolean {
+  return read(storage, DRAW_TIP_KEY) === true;
+}
+
+/** Remembers that Draw mode's tip has shown (never throws; a failing storage only shows it again). */
+export function saveDrawTipSeen(storage: KeyValueStorage | null = defaultStorage()): void {
+  write(storage, DRAW_TIP_KEY, true);
 }
 
 /**

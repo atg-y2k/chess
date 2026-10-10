@@ -1,5 +1,6 @@
 /**
- * Chessboard (chessground) with coach arrows, a classification badge and a promotion picker.
+ * Chessboard (chessground) with coach arrows, a classification badge, a promotion picker, and the
+ * player's own drawings (Draw mode: arrows and circles drawn by touch, see `drawColor`).
  *
  * The chessground instance is created once and updated with `cg.set()` when props change. The
  * board is width-driven: it fills its parent's width as a square (rounded down to whole device
@@ -12,12 +13,14 @@ import { Chessground } from '@lichess-org/chessground';
 import type { Api } from '@lichess-org/chessground/api';
 import type { Config } from '@lichess-org/chessground/config';
 import type { DrawBrush, DrawBrushes, DrawShape } from '@lichess-org/chessground/draw';
-import type { Dests, Key } from '@lichess-org/chessground/types';
+import type { BrushColor, Dests, Key } from '@lichess-org/chessground/types';
 import '@lichess-org/chessground/assets/chessground.base.css';
 import '@lichess-org/chessground/assets/chessground.cburnett.css';
 import type { Arrow, ArrowBrush, MoveClass } from '../analysis/types';
+import type { DrawColor, UserShape } from '../game/drawings';
 import type { PromotionPiece } from '../game/types';
 import { classBadgeSvg } from './ClassIcon';
+import { endGesture, gestureShape, moveGesture, startGesture, type BoardRect, type DrawGesture } from './draw';
 import { IconClose } from './icons';
 import './Board.css';
 
@@ -44,6 +47,20 @@ export interface BoardProps {
    * when the position stays the same, so it never ends up in the other one.
    */
   session?: string;
+  /** The player's own drawings on this position (arrows and circles), drawn under the engine's arrows. */
+  shapes?: readonly UserShape[];
+  /**
+   * Draw mode, in this color (null or absent: off). The board then moves no pieces: a drag from one
+   * square to another draws an arrow (shown while dragging; ending on the start square or off the
+   * board draws nothing), a tap on a square a circle, each reported to `onDraw` (the parent adds it
+   * to `shapes`, or takes it off when it is already there). A second finger cancels the gesture.
+   */
+  drawColor?: DrawColor | null;
+  /**
+   * A finished drawing, with the FEN it was drawn on (the board's `fen` when the finger went down).
+   * A gesture whose position, session or side changed before the finger lifted draws nothing.
+   */
+  onDraw?: (shape: UserShape, fen: string) => void;
   /**
    * A user move. Accept it by passing the new `fen` (in the same task, e.g. synchronously from a
    * store update); if `fen` is still unchanged shortly afterwards, the board snaps back to it.
@@ -70,6 +87,21 @@ const ARROW_STYLE: Record<ArrowBrush, { lineWidth: number; opacity: number }> = 
   // Opening practice's guide: light, under any engine arrow.
   line: { lineWidth: 10, opacity: 0.6 },
 };
+
+/**
+ * Hex fallbacks for the `--draw-*` tokens: the player's own drawings, deeper and more opaque than
+ * the engine's arrows. Their arrows are also dashed (Board.css, by the `draw-` brush key), so they
+ * never look like the engine's, whatever the color.
+ */
+const DRAW_HEX: Record<DrawColor, string> = {
+  green: '#15a34a',
+  red: '#e03131',
+  blue: '#2563eb',
+  orange: '#f59f00',
+};
+
+/** The player's drawings: a little narrower than the engine's best move, and nearly opaque. */
+const DRAW_STYLE = { lineWidth: 11, opacity: 0.92 };
 
 /** Draw order: the most important arrow last, so it ends up on top. */
 const ARROW_ORDER: Record<ArrowBrush, number> = { line: 0, alt: 1, played: 2, threat: 3, best: 4 };
@@ -129,18 +161,28 @@ function readToken(el: Element, name: string, fallback: string): string {
   return getComputedStyle(el).getPropertyValue(name).trim() || fallback;
 }
 
-/** Chessground brushes for our arrow kinds; the default brush names map onto the same colours. */
+/**
+ * Chessground brushes: the player's drawings under their color names (the `--draw-*` tokens; the
+ * brush key `draw-<color>` names the arrowhead marker, which Board.css uses to dash their arrows),
+ * and our arrow kinds (the engine's, the `--arrow-*` tokens).
+ */
 function makeBrushes(el: Element): DrawBrushes {
-  const brush = (kind: ArrowBrush, key: string = kind): DrawBrush => ({
-    key,
+  const brush = (kind: ArrowBrush): DrawBrush => ({
+    key: kind,
     color: readToken(el, `--arrow-${kind}`, ARROW_HEX[kind]),
     ...ARROW_STYLE[kind],
   });
+  const user = (color: DrawColor): DrawBrush => ({
+    key: `draw-${color}`,
+    color: readToken(el, `--draw-${color}`, DRAW_HEX[color]),
+    ...DRAW_STYLE,
+  });
   return {
-    green: brush('best', 'green'),
-    red: brush('threat', 'red'),
-    blue: brush('alt', 'blue'),
-    yellow: brush('played', 'yellow'),
+    green: user('green'),
+    red: user('red'),
+    blue: user('blue'),
+    orange: user('orange'),
+    yellow: user('orange'), // chessground's own default name (unused here)
     best: brush('best'),
     alt: brush('alt'),
     threat: brush('threat'),
@@ -162,6 +204,11 @@ function buildShapes(arrows: Arrow[] | undefined, badge: BoardProps['badge'], ex
     shapes.push({ orig: b.square as Key, customSvg: { html: classBadgeSvg(b.cls) } });
   }
   return shapes;
+}
+
+/** The player's drawings as chessground shapes (a fresh array: chessground keeps the one it is given). */
+function userShapes(shapes: readonly UserShape[] | undefined): DrawShape[] {
+  return (shapes ?? []).map((s) => ({ orig: s.orig as Key, dest: s.dest as Key | undefined, brush: s.brush }));
 }
 
 /** Tints the last move's squares in the badge colour when the badge sits on the move's destination. */
@@ -190,7 +237,7 @@ function decorationConfig(p: BoardProps): Config {
   return {
     orientation: p.orientation,
     highlight: { custom: badgeHighlight(p) },
-    drawable: { autoShapes: buildShapes(p.arrows, p.badge, p.extraBadges) },
+    drawable: { autoShapes: buildShapes(p.arrows, p.badge, p.extraBadges), shapes: userShapes(p.shapes) },
   };
 }
 
@@ -278,6 +325,7 @@ export function Board(props: BoardProps) {
         visible: true,
         brushes: makeBrushes(el),
         autoShapes: buildShapes(p.arrows, p.badge, p.extraBadges),
+        shapes: userShapes(p.shapes),
       },
     });
     cgRef.current = cg;
@@ -351,7 +399,21 @@ export function Board(props: BoardProps) {
     props.badge?.square,
     props.badge?.cls,
     extraBadgesKey,
+    props.shapes,
   ]);
+
+  // Draw mode: a piece the user had picked up, or an open promotion picker, is dropped (the board
+  // takes drawings now); chessground's move settings stay as they are, so moving works again after.
+  const drawing = !!props.drawColor && !!props.onDraw;
+  useLayoutEffect(() => {
+    const cg = cgRef.current;
+    if (!drawing || !cg) return;
+    if (cg.state.selected || cg.state.draggable.current) cg.cancelMove();
+    if (promoRef.current) {
+      setPromo(null);
+      resync();
+    }
+  }, [drawing]);
 
   const choosePromotion = (piece: PromotionPiece) => {
     const p = promoRef.current;
@@ -370,6 +432,16 @@ export function Board(props: BoardProps) {
     <div class="board-host" ref={hostRef}>
       <div class="board" ref={rootRef}>
         <div class="board-cg cg-wrap" ref={cgElRef} />
+        {drawing && (
+          <DrawLayer
+            cg={cgRef}
+            color={props.drawColor!}
+            orientation={props.orientation}
+            position={`${props.session ?? ''} ${props.fen}`}
+            fen={props.fen}
+            onDraw={(shape, fen) => propsRef.current.onDraw?.(shape, fen)}
+          />
+        )}
         {promo && (
           <PromotionPicker
             promo={promo}
@@ -380,6 +452,143 @@ export function Board(props: BoardProps) {
         )}
       </div>
     </div>
+  );
+}
+
+interface DrawLayerProps {
+  cg: { current: Api | null };
+  color: DrawColor;
+  orientation: BoardColor;
+  /** The board's session and FEN ("<session> <fen>"): a gesture in progress is dropped when it changes. */
+  position: string;
+  /** The board's FEN (what a drawing is drawn on). */
+  fen: string;
+  onDraw: (shape: UserShape, fen: string) => void;
+}
+
+/**
+ * Draw mode's touch layer over the board: it takes every pointer (so chessground sees no touch
+ * and moves no piece) and turns one-finger gestures into drawings (src/ui/draw.ts). The shape being
+ * drawn is shown as chessground's own "current" drawing: lighter while dragging, and an existing
+ * one it would take off is dimmed. A second finger cancels the gesture until every finger is up.
+ */
+function DrawLayer({ cg, color, orientation, position, fen, onDraw }: DrawLayerProps) {
+  const elRef = useRef<HTMLDivElement>(null);
+  const gestureRef = useRef<DrawGesture | null>(null);
+  /** Pointers down on the layer, and whether more than one went down (multi-touch: ignored). */
+  const pointersRef = useRef(new Set<number>());
+  const blockedRef = useRef(false);
+  /** The board (session and FEN, and side) the gesture in progress started on. */
+  const startedOnRef = useRef('');
+  const live = useRef({ color, orientation, position, fen });
+  live.current = { color, orientation, position, fen };
+  const boardNow = () => `${live.current.orientation} ${live.current.position}`;
+
+  /** chessground's view of the board (its squares), else the layer's own box. */
+  const rect = (): BoardRect => {
+    const api = cg.current;
+    const r = api?.state.dom.bounds() ?? elRef.current?.getBoundingClientRect();
+    return r ?? { left: 0, top: 0, width: 0, height: 0 };
+  };
+
+  /** Shows the shape the gesture would draw now (none: hides it). */
+  const preview = (g: DrawGesture | null, x = 0, y = 0) => {
+    const api = cg.current;
+    if (!api) return;
+    const shape = g ? gestureShape(g, live.current.color) : null;
+    const d = api.state.drawable;
+    const was = d.current;
+    if (!shape) {
+      if (!was) return;
+      d.current = undefined;
+    } else {
+      const dest = shape.dest as Key | undefined;
+      if (was && was.orig === shape.orig && was.dest === dest && was.brush === shape.brush) return;
+      // Any brush name works here (chessground's type only lists its four defaults).
+      const brush = shape.brush as BrushColor;
+      d.current = { orig: shape.orig as Key, dest, mouseSq: (dest ?? shape.orig) as Key, pos: [x, y], brush, snapToValidMove: false };
+    }
+    api.state.dom.redraw();
+  };
+
+  const cancel = () => {
+    gestureRef.current = null;
+    preview(null);
+  };
+
+  // A new position, side or session (a move in the game, Flip) ends a gesture in progress, and its
+  // preview goes with the render that changed the board; so does leaving Draw mode.
+  useLayoutEffect(() => cancel, [position, orientation]);
+
+  const down = (e: PointerEvent) => {
+    e.preventDefault(); // no compatibility mouse events, focus or text selection
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // Every finger on the layer is followed to its end (captured), so a second one is always seen.
+    pointersRef.current.add(e.pointerId);
+    try {
+      elRef.current?.setPointerCapture(e.pointerId);
+    } catch {
+      /* the pointer is already gone */
+    }
+    if (pointersRef.current.size > 1) {
+      blockedRef.current = true;
+      cancel();
+      return;
+    }
+    const g = startGesture(e.pointerId, e.clientX, e.clientY, rect(), live.current.orientation);
+    if (!g) return;
+    gestureRef.current = g;
+    startedOnRef.current = boardNow();
+    preview(g, e.clientX, e.clientY);
+  };
+
+  const move = (e: PointerEvent) => {
+    const g = gestureRef.current;
+    if (!g || g.pointerId !== e.pointerId || blockedRef.current) return;
+    if (startedOnRef.current !== boardNow()) {
+      cancel(); // the board changed under the finger (before the effect below has run)
+      return;
+    }
+    const next = moveGesture(g, e.clientX, e.clientY, rect(), live.current.orientation);
+    gestureRef.current = next;
+    preview(next, e.clientX, e.clientY);
+  };
+
+  const up = (e: PointerEvent) => {
+    const g = gestureRef.current;
+    // A gesture is drawn only on the board it started on: the bot's move, Flip or a step in the
+    // explorer just before the finger lifted drops it (the effect below runs only after a paint).
+    const done = !!g && g.pointerId === e.pointerId && !blockedRef.current && startedOnRef.current === boardNow();
+    const shape = done ? endGesture(g!, e.clientX, e.clientY, rect(), live.current.orientation, live.current.color) : null;
+    const drawnOn = live.current.fen;
+    if (g && g.pointerId === e.pointerId) cancel();
+    release(e);
+    if (shape) onDraw(shape, drawnOn);
+  };
+
+  const release = (e: PointerEvent) => {
+    pointersRef.current.delete(e.pointerId);
+    if (pointersRef.current.size === 0) blockedRef.current = false;
+  };
+
+  const abort = (e: PointerEvent) => {
+    if (gestureRef.current?.pointerId === e.pointerId) cancel();
+    release(e);
+  };
+
+  return (
+    <div
+      class="board-draw"
+      ref={elRef}
+      data-color={color}
+      aria-hidden="true"
+      onPointerDown={down}
+      onPointerMove={move}
+      onPointerUp={up}
+      onPointerCancel={abort}
+      onLostPointerCapture={abort}
+      onContextMenu={(e) => e.preventDefault()}
+    />
   );
 }
 

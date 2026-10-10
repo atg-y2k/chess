@@ -14,6 +14,11 @@ export interface EvalBarProps {
   orientation: 'white' | 'black';
   /** Subtle pulse while analysis is shallow. */
   thinking?: boolean;
+  /**
+   * No engine here (the explorer with its engine off): a neutral bar that says "Engine off" instead
+   * of an evaluation, so the board keeps its place and size.
+   */
+  off?: boolean;
 }
 
 /**
@@ -30,7 +35,16 @@ export function isLongEvalText(text: string): boolean {
   return text.replace(/[.\-]/g, '').length >= 3;
 }
 
-export function EvalBar({ whiteWinProb, label, orientation, thinking }: EvalBarProps) {
+export function EvalBar({ whiteWinProb, label, orientation, thinking, off = false }: EvalBarProps) {
+  if (off) {
+    return (
+      <div class="evalbar evalbar-off" role="img" aria-label="Evaluation: engine off" title="Engine off">
+        <span class="evalbar-off-text" aria-hidden="true">
+          Engine off
+        </span>
+      </div>
+    );
+  }
   const p = Number.isFinite(whiteWinProb) ? Math.min(1, Math.max(0, whiteWinProb)) : 0.5;
   const whiteBottom = orientation === 'white';
   const whiteBetter = p >= 0.5;
