@@ -15,6 +15,15 @@ import type { Arrow, ArrowBrush, Classification, Explanation, MoveClass } from '
 import { detectSacrifice } from './sacrifice';
 import { scoreToWin } from './winprob';
 import {
+  aboutAsGood,
+  aboutEqual,
+  bestWasSentence,
+  equalAlternatives,
+  isNearBest,
+  nearBestSentence,
+  withAlternatives,
+} from './nearEqual';
+import {
   VALUE,
   between,
   effectiveAttackers,
@@ -595,7 +604,7 @@ function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove, opts: L
         l.pv.length > 0 &&
         l.pv[0] !== uci &&
         l.score.kind === 'cp' &&
-        l.score.value >= cpScore - SAME_CP &&
+        l.score.value >= cpScore - REPLY_SLACK_CP &&
         materialOutcome(fen, l.pv, me).net <= out.net - 1,
     );
   // Nor when the opponent need not give the material up: another reply that the engine scores
@@ -847,19 +856,23 @@ function clearlyWorseNow(now: Move, line: Line, lines?: readonly PvLine[]): bool
   return see(now.after, now.to, other(now.color)) > (now.captured ? VALUE[now.captured] : 0);
 }
 
-/** `alt` is about as good as `main` or better (same thresholds as "about as good" in `compareLines`). */
+/**
+ * `alt` is about as good as `main` or better (analysis/nearEqual.ts, as "about as good" in
+ * `compareLines`), except that two mates for the same side count as equally good whatever their
+ * distance: a follow-up that mates at once, only more slowly, is not "clearly worse", and a reply
+ * that is mated sooner is still a reply that loses (as before the near-equal rule).
+ */
 function asGood(alt: Score, main: Score): boolean {
-  const a = scoreToWin(alt);
-  const m = scoreToWin(main);
-  return a >= m || (m - a < SAME_GAP && cpGap(alt, main) <= SAME_CP);
+  if (alt.kind === 'mate' && main.kind === 'mate' && (alt.value > 0) === (main.value > 0)) return true;
+  return aboutAsGood(alt, main);
 }
 
 /**
- * An alternative reply (`alt`, the replier's point of view) is about as good for the replier as the
- * principal one: at most `SAME_CP` worse, or the same mate.
+ * An alternative reply (`alt`, the replier's point of view) concedes no more than the principal
+ * one: at most `REPLY_SLACK_CP` worse, or about as good (the same mate).
  */
 function replyAsGood(alt: Score, principal: Score): boolean {
-  if (alt.kind === 'cp' && principal.kind === 'cp') return alt.value >= principal.value - SAME_CP;
+  if (alt.kind === 'cp' && principal.kind === 'cp') return alt.value >= principal.value - REPLY_SLACK_CP;
   return asGood(alt, principal);
 }
 
@@ -907,6 +920,12 @@ export interface ExplainBestMoveOptions {
    * advantage", or "keeps the balance" with "Nf3 and c4 are about as good".
    */
   lines?: readonly PvLine[];
+  /**
+   * Default true. False: do not rank the move against the other lines (the caller lists them): a
+   * quiet move still "keeps the balance", but is never "the only move", "more precise than Nf3" or
+   * "about as good" as others.
+   */
+  compare?: boolean;
 }
 
 /**
@@ -924,7 +943,10 @@ export function explainBestMove(fen: string, line: PvLine, opts: ExplainBestMove
     let headline = `${r.san} ${r.reason}.`;
     let details = r.details;
     let motifs = r.motifs;
-    const cmp = compareLines(fen, { pv: line.pv, score: line.score }, opts.lines, v);
+    const full = compareLines(fen, { pv: line.pv, score: line.score }, opts.lines, v);
+    // Unranked (`compare: false`): only what the move keeps, from its own score.
+    const cmp: Comparison | null =
+      full && opts.compare === false ? { reason: keepsReason(line.score, v), detail: null, only: false, motifs: [] } : full;
     if (cmp && r.fallback) {
       // Nothing concrete about the move itself: say how it compares with the alternatives.
       headline = r.title === 'Check' ? `${r.san} gives check and ${cmp.reason}.` : `${r.san} ${cmp.reason}.`;
@@ -1001,9 +1023,10 @@ function fallbackExplanation(p: ExplainMoveInput): Explanation {
   const san = cl.playedMoveSan;
   const best = cl.bestMoveSan && cl.bestMoveSan !== san ? cl.bestMoveSan : null;
   const bad = BAD.includes(cl.cls);
+  const alternatives = equalAlternatives(cl, p.moveUci).map((m) => m.san);
   return {
     headline: bad ? `There was a better move than ${san}.` : `${san} is a reasonable move.`,
-    details: best && bad ? [`Best was ${best}.`] : [],
+    details: best && bad ? [bestWasSentence(best, { alternatives })] : [],
     arrows: best && bad ? arrow(cl.bestMoveUci, 'best') : [],
   };
 }
@@ -1044,9 +1067,12 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     }
     return bestReasonMemo;
   };
-  const bestSentence = (lead: string) => {
+  // The moves about as good as the best (analysis/nearEqual.ts), named with it: "Best was c5 (c6 was about as good).",
+  // unless the sentence gives a reason.
+  const alternatives = equalAlternatives(cl, moveUci).map((m) => m.san);
+  const bestWas = () => {
     const br = bestReason();
-    return br && !br.fallback ? `${withWhich(`${lead} ${bestSan}`, br.reason)}.` : `${lead} ${bestSan}.`;
+    return bestWasSentence(bestSan!, { reason: br && !br.fallback ? br.reason : null, alternatives });
   };
   const arrows: Arrow[] = [];
   type Maybe = string | null | undefined | false;
@@ -1082,7 +1108,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
       if (!isBest) arrows.push(...arrow(bestUci, 'best'));
       return done(
         'This is stalemate, so the game ends in a draw.',
-        [`${Opp} has no legal moves but is not in check.`, !isBest && bestSan && bestSentence('Best was')],
+        [`${Opp} has no legal moves but is not in check.`, !isBest && bestSan && bestWas()],
         'Stalemate',
         ['stalemate'],
       );
@@ -1340,7 +1366,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     motifs = [...(neg ? [neg.kind] : []), ...(useReply ? rr.motifs : [])];
   }
   if (!isBest && bestSan) {
-    details.push(bestSentence('Best was'));
+    details.push(bestWas());
     arrows.push(...arrow(bestUci, 'best'));
   }
   return done(headline, details, title, motifs);
@@ -1364,7 +1390,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
               ? 'The position was already lost.'
               : null;
         arrows.push(...arrow(reply?.pv[0], 'threat'), ...(bestSan ? arrow(bestUci, 'best') : []));
-        const details = [...lost.details, still, bestSan && bestSentence('Best was')];
+        const details = [...lost.details, still, bestSan && bestWas()];
         // The class ("excellent") would contradict this text: flag it for the UI.
         return done(lost.headline, details, lost.title, lost.motifs, { concedes: 'material' });
       }
@@ -1398,16 +1424,31 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
       details.push(`${bestSan} was even quicker: mate in ${iHadMate}.`);
       arrows.push(...arrow(bestUci, 'best'));
     } else if (!isBest && bestSan && (cl.cls === 'good' || neg)) {
-      const br = bestReason();
-      const same =
-        !!br &&
-        !!r &&
-        (br.reason === r.reason ||
-          r.details.includes(`It ${br.reason}.`) ||
-          br.motifs.some((k) => TACTICAL_KINDS.includes(k as MotifKind) && r.motifs.includes(k)));
-      const better = br && !br.fallback && !same;
-      details.push(better ? `${bestSan} was better: it ${br.reason}.` : `${bestSan} was slightly more accurate.`);
-      arrows.push(...arrow(bestUci, 'best'));
+      if (isNearBest(cl, moveUci)) {
+        // About as good as the best (analysis/nearEqual.ts): no correction, the difference is noise
+        // ("Your Nxd5 was fine: …"; nothing at all when it scored at least as well as the best).
+        const near = nearBestSentence(cl, moveUci, v.you ? 'you' : 'neutral');
+        if (near) {
+          details.push(near);
+          arrows.push(...arrow(bestUci, 'best'));
+        }
+      } else {
+        const br = bestReason();
+        const same =
+          !!br &&
+          !!r &&
+          (br.reason === r.reason ||
+            r.details.includes(`It ${br.reason}.`) ||
+            br.motifs.some((k) => TACTICAL_KINDS.includes(k as MotifKind) && r.motifs.includes(k)));
+        const better = br && !br.fallback && !same;
+        // The moves about as good as the best are named only without a reason (see `bestWasSentence`).
+        details.push(
+          better
+            ? `${bestSan} was better: it ${br.reason}.`
+            : withAlternatives(`${bestSan} was slightly more accurate.`, alternatives),
+        );
+        arrows.push(...arrow(bestUci, 'best'));
+      }
     }
     if (sac) details.push(sac);
     else if (cl.cls === 'great' && onlyMove && !headline.includes('the only move')) {
@@ -1558,10 +1599,13 @@ function onlyGoodMove(lines: readonly PvLine[]): boolean {
   return !!a && !!b && scoreToWin(a.score) - scoreToWin(b.score) >= ONLY_GAP;
 }
 
-/** Moves this close in expected score (and within `SAME_CP`) are "about as good". */
-const SAME_GAP = 0.02;
-/** In a decided position expected scores barely move: also require the evaluations to be this close. */
-const SAME_CP = 50;
+/**
+ * How much worse (centipawns) another engine line may score and still win nothing less: the
+ * material a line wins "does not show" when another line that wins nothing scores within this, and
+ * an opponent's reply within this of the principal one is as good a choice for it. Not the coach's
+ * "about as good" between moves (analysis/nearEqual.ts).
+ */
+const REPLY_SLACK_CP = 50;
 
 /** How a move compares with the other engine lines (see `compareLines`). */
 interface Comparison {
@@ -1596,7 +1640,7 @@ function compareLines(fen: string, line: Line, lines: readonly PvLine[] | undefi
   }
   const reason = keepsReason(score, v);
   const same = others
-    .filter((l) => w - scoreToWin(l.score) < SAME_GAP && cpGap(score, l.score) <= SAME_CP)
+    .filter((l) => aboutEqual(l.score, score))
     .map((l) => uciToSan(fen, l.pv[0]))
     .filter((x): x is string => !!x)
     .slice(0, 2);
@@ -1605,12 +1649,6 @@ function compareLines(fen: string, line: Line, lines: readonly PvLine[] | undefi
   }
   const nextSan = uciToSan(fen, next.pv[0]);
   return { reason, detail: nextSan ? `It is more precise than ${nextSan}.` : null, only: false, motifs: [] };
-}
-
-/** Centipawn distance between two scores (mates count as far apart unless identical). */
-function cpGap(a: Score, b: Score): number {
-  if (a.kind === 'cp' && b.kind === 'cp') return Math.abs(a.value - b.value);
-  return a.kind === b.kind && a.value === b.value ? 0 : Infinity;
 }
 
 /** What a quiet best move keeps, from its expected score: "keeps the balance", "keeps your advantage". */

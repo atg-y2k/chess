@@ -8,8 +8,9 @@
  */
 import { batch } from '@preact/signals';
 import { Chess, type Move } from 'chess.js';
-import { classifyMove } from '../analysis/classify';
+import { classifyMove, nearBestRecheck, type ClassifyMoveInput } from '../analysis/classify';
 import { explainBestMove, explainMove, type PrevMove } from '../analysis/explain';
+import { ALTERNATIVES_SUFFIX, alternativesSentence, equalAlternatives } from '../analysis/nearEqual';
 import type { Classification, Explanation } from '../analysis/types';
 import { resultScore } from '../analysis/winprob';
 import { BotPlayer } from '../bot/BotPlayer';
@@ -36,7 +37,7 @@ import {
   updateGameRecord,
 } from '../rating/rating';
 import type { GameRecord } from '../rating/types';
-import { answerFreeLines, mentionsMove, repetitionExplanation } from './coach';
+import { answerFreeLines, mentionsMove, nearBestShowLines, repetitionExplanation } from './coach';
 import { NO_DRAWINGS, clearOn, drawOn, positionKey, type DrawColor, type UserShape } from './drawings';
 import { getEntitlements, type Entitlements, type ProFeature } from './entitlements';
 import {
@@ -237,6 +238,9 @@ const bookClassification = (san: string): Classification => ({
 const uciOf = (m: Pick<Move, 'from' | 'to' | 'promotion'>): string => m.from + m.to + (m.promotion ?? '');
 /** Explanation details that spell out a variation ("Engine line: …"); "Show best" has its own. */
 const LINE_DETAIL = /^(Engine line|Main line|Key line|The finish):/;
+/** The best move's comparison with the other engine lines ("c6 and g6 are about as good."). */
+const ABOUT_AS_GOOD = /about as good\.$/;
+const escapeRegExp = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const prevMoveOf = (p: Pick<Ply, 'uci' | 'captured'>): PrevMove => ({
   to: p.uci.slice(2, 4),
   ...(p.captured ? { captured: p.captured } : {}),
@@ -1549,6 +1553,13 @@ export class GameController {
     const saved = ply.explanation;
     const played = human ? `You played ${ply.san}.` : `${g.bot.name} played ${ply.san}.`;
     const why = saved?.headline;
+    // The played move was about as good as the best (analysis/nearEqual.ts): the engine's top
+    // choices with their evaluations and the played move's ("Your Nxd5: +0.8, close behind."), no
+    // correction. Otherwise the moves about as good as the best are named after its explanation.
+    const near = nearBestShowLines(ply, human ? 'Your' : `${g.bot.name}’s`);
+    const alternatives = equalAlternatives(cl, ply.uci).map((m) => m.san);
+    const namesAlternatives = (ls: readonly string[]) =>
+      !alternatives.length || alternatives.every((a) => ls.some((l) => mentionsMove(l, a)));
     const lines: string[] = [];
     if (line) {
       const e = explainBestMove(ply.fenBefore, line, {
@@ -1556,7 +1567,23 @@ export class GameController {
         perspective: human ? 'you' : 'neutral',
         // All engine lines, as the hint and the feedback on a best move use them (same wording).
         lines: before?.lines,
+        // The near-equal list above ranks the moves: no "only move" or "more precise than c5" here.
+        ...(near.length ? { compare: false } : {}),
       });
+      const san = pvToSan(ply.fenBefore, line.pv, 8);
+      // "Best line" when the best move was clearly better, "Engine line" when several were about as good.
+      const bestLine = san.length > 1 ? `${near.length ? 'Engine line' : 'Best line'}: ${formatLine(ply.fenBefore, san)}` : null;
+      // The variation below already shows the line: skip the explanation's own copy. Which moves
+      // are about as good is said once: by the list (near), or by "c5 was about as good." from
+      // `equalBest`, which leaves out the moves the played one matched (see Classification).
+      const details = (bestLine ? e.details.filter((d) => !LINE_DETAIL.test(d)) : e.details).filter(
+        (d) => !ABOUT_AS_GOOD.test(d),
+      );
+      if (near.length) {
+        lines.push(...near, e.headline, ...details.slice(0, 2));
+        if (bestLine) lines.push(bestLine);
+        return { bestUci, bestSan, lines, explained: true };
+      }
       // What was wrong with the played move, unless it only restates the best move, which the
       // lines above already explain: "Best was X …", "You missed X, which wins a rook.", "You
       // missed a forced mate in 2." (A missed chance that does not name the move still says what
@@ -1567,27 +1594,41 @@ export class GameController {
           (!!bestSan && mentionsMove(why, bestSan)) ||
           (saved?.motifs?.includes('missedMate') ?? false));
       const playedLine = why && !restatesBest ? `${played} ${why}` : played;
-      const san = pvToSan(ply.fenBefore, line.pv, 8);
-      const bestLine = san.length > 1 ? `Best line: ${formatLine(ply.fenBefore, san)}` : null;
-      // The "Best line" below already shows the variation: skip the explanation's own copy.
-      const details = bestLine ? e.details.filter((d) => !LINE_DETAIL.test(d)) : e.details;
-      lines.push(e.headline, ...details.slice(0, 2), playedLine);
+      lines.push(e.headline, ...details.slice(0, 2));
+      // "c6 was about as good." unless the explanation already names them.
+      const also = namesAlternatives(lines) ? null : alternativesSentence(alternatives);
+      if (also) lines.push(also);
+      lines.push(playedLine);
       if (bestLine) lines.push(bestLine);
       return { bestUci, bestSan, lines, explained: true };
     }
-    // No engine lines: what the saved explanation says. Its "Best was X, which …" becomes the
-    // reason for X ("X wins a rook."), as the engine explanation would put it first.
-    const reason = saved?.details
-      .map((d) => /^Best was (\S+?), which (.+)$/.exec(d))
-      .find((mm) => mm && (!bestSan || mm[1] === bestSan));
-    if (reason) lines.push(`${reason[1]} ${reason[2]}`);
-    lines.push(why && !why.startsWith('Best was') ? `${played} ${why}` : played);
+    // No engine lines: what the saved explanation says.
     const bestLineSan = saved?.bestLineSan ?? [];
-    const bestLine =
-      bestLineSan.length > 1 && (!bestSan || bestLineSan[0] === bestSan)
-        ? `Best line: ${formatLine(ply.fenBefore, bestLineSan)}`
-        : null;
-    const details = (saved?.details ?? []).filter((d) => !d.startsWith('Best was') && !(bestLine && LINE_DETAIL.test(d)));
+    const savedLine =
+      bestLineSan.length > 1 && (!bestSan || bestLineSan[0] === bestSan) ? formatLine(ply.fenBefore, bestLineSan) : null;
+    if (near.length) {
+      // The saved text's own "Your Nxd5 was fine: …" is what the list above says.
+      lines.push(...near);
+      if (savedLine) lines.push(`Engine line: ${savedLine}`);
+      return { bestUci, bestSan, lines, explained: false };
+    }
+    const bestLine = savedLine ? `Best line: ${savedLine}` : null;
+    // The saved notes on the best move become the reason for it ("X wins a rook."), as the engine
+    // explanation would put it first: "Best was X, which …" or "X was better: it …" (without the
+    // alternatives, which get their own line). Those notes and "X was slightly more accurate …"
+    // are left out below: the title and these lines say it.
+    const notes = (saved?.details ?? []).map((d) => d.replace(ALTERNATIVES_SUFFIX, ''));
+    const noteOn = (d: string) =>
+      /^Best was /.exec(d) ?? (bestSan ? new RegExp(`^${escapeRegExp(bestSan)} was (better|slightly more accurate)\\b`).exec(d) : null);
+    const reason = notes
+      .map((d) => /^Best was (\S+?), which (.+)$/.exec(d) ?? /^(\S+?) was better: it (.+)$/.exec(d))
+      .find((mm) => mm && (!bestSan || mm[1] === bestSan));
+    const also = alternativesSentence(alternatives);
+    if (reason) lines.push(`${reason[1]} ${reason[2]}`);
+    if (reason && also) lines.push(also);
+    lines.push(why && !why.startsWith('Best was') ? `${played} ${why}` : played);
+    if (!reason && also) lines.push(also);
+    const details = notes.filter((d) => !noteOn(d) && !(bestLine && LINE_DETAIL.test(d)));
     lines.push(...details.slice(0, 2));
     if (bestLine) lines.push(bestLine);
     return { bestUci, bestSan, lines, explained: false };
@@ -2220,7 +2261,7 @@ export class GameController {
     // A third repetition (counting the game's positions up to the starting one) is a draw.
     const line = [...plies.slice(0, now.baseIndex), ...now.moves.slice(0, index + 1)];
     const repetition = isThirdRepetition(g.startFen, line, line.length - 1);
-    const classification = classifyMove({
+    const input: ClassifyMoveInput = {
       fenBefore: m.fenBefore,
       moveUci: m.uci,
       before,
@@ -2230,7 +2271,10 @@ export class GameController {
       playerRating: human ? s.profile.value.rating : g.botElo,
       prevMove: prevMove ? { to: prevMove.to } : undefined,
       prevFenBefore: prev?.fenBefore,
-    });
+    };
+    const bestAfter = await this.secondOpinion(svc, input, signal);
+    if (!alive()) return;
+    const classification = classifyMove({ ...input, ...(bestAfter ? { bestAfter } : {}) });
     const explanation = repetition
       ? repetitionExplanation(m.san, classification, { human, botName: g.bot.name })
       : explainMove({
@@ -2242,7 +2286,8 @@ export class GameController {
           prevMove,
           perspective: human ? 'you' : 'neutral',
         });
-    s.explorer.value = setRating(now, index, path, {
+    // The second opinion took a search: other ratings may have landed meanwhile.
+    s.explorer.value = setRating(s.explorer.value!, index, path, {
       rating: {
         classification,
         explanation,
@@ -2444,7 +2489,7 @@ export class GameController {
     // The engine sees positions, not the game: a third repetition ends the game in a draw, which
     // it cannot know. Classify the move against that result (a terminal draw for classifyMove).
     const repetition = isThirdRepetition(g.startFen, plies, index);
-    const classification = classifyMove({
+    const input: ClassifyMoveInput = {
       fenBefore: ply.fenBefore,
       moveUci: ply.uci,
       before,
@@ -2454,7 +2499,10 @@ export class GameController {
       playerRating: human ? s.profile.value.rating : g.botElo,
       prevMove: prevMove ? { to: prevMove.to } : undefined,
       prevFenBefore: prev?.fenBefore,
-    });
+    };
+    const bestAfter = await this.secondOpinion(svc, input);
+    if (!current()) return 'stale';
+    const classification = classifyMove({ ...input, ...(bestAfter ? { bestAfter } : {}) });
     const explanation = repetition
       ? repetitionExplanation(ply.san, classification, { human, botName: g.bot.name })
       : explainMove({
@@ -2466,9 +2514,11 @@ export class GameController {
           prevMove,
           perspective: human ? 'you' : 'neutral',
         });
-    const next = plies.slice();
+    // The second opinion took a search: moves may have been played meanwhile.
+    const latest = s.plies.value;
+    const next = latest.slice();
     next[index] = {
-      ...plies[index],
+      ...latest[index],
       evalWhite: repetition ? { kind: 'cp', value: 0 } : toWhitePov(afterScore, ply.fenAfter),
       evalDepth: after.depth,
       classification,
@@ -2477,9 +2527,9 @@ export class GameController {
     };
     // The first move after the ones the game started with (opening practice): the position before
     // it gets its eval (the graph's point, and the review's accuracy starts there).
-    if (index > 0 && index === preplayedOf(g) && !plies[index - 1].evalWhite) {
+    if (index > 0 && index === preplayedOf(g) && !latest[index - 1].evalWhite) {
       const sb = whiteScore(before);
-      if (sb) next[index - 1] = { ...plies[index - 1], evalWhite: sb, evalDepth: before.depth };
+      if (sb) next[index - 1] = { ...latest[index - 1], evalWhite: sb, evalDepth: before.depth };
     }
     batch(() => {
       s.plies.value = next;
@@ -2491,6 +2541,30 @@ export class GameController {
     this.save();
     this.updateReviewProgress();
     return 'done';
+  }
+
+  /**
+   * The second opinion on whether a move was about as good as the engine's best (analysis/
+   * nearEqual.ts, `nearBestRecheck`): when the move's own search puts it a little outside the band
+   * of the best line, the position after the best move is searched the same way (depth 14, MultiPV
+   * 3, within ANNOTATE_NODES), so the two moves are compared like with like. Undefined when not
+   * needed, or when that search fails or is cut short: the move is then judged without it (and
+   * corrected, as before the second opinion existed).
+   */
+  private async secondOpinion(
+    svc: AnalysisService,
+    input: ClassifyMoveInput,
+    signal?: AbortSignal,
+  ): Promise<AnalysisResult | undefined> {
+    const fen = nearBestRecheck(input);
+    if (!fen) return undefined;
+    try {
+      const r = await svc.ensure(fen, { ...ANNOTATE, ...(signal ? { signal } : {}) });
+      return r.aborted && !r.terminal && r.depth < ANNOTATE_DEPTH ? undefined : r;
+    } catch (e) {
+      console.warn('[game] second opinion failed', e);
+      return undefined;
+    }
   }
 
   /** Fills in opening names once the book has loaded. */

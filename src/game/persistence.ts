@@ -284,7 +284,8 @@ function sanitizeAnnotations(raw: unknown, plies: number): Record<number, PlyAnn
     const a: PlyAnnotation = {};
     if (isScore(value.evalWhite)) a.evalWhite = value.evalWhite;
     if (isFiniteNumber(value.evalDepth) && value.evalDepth >= 0) a.evalDepth = value.evalDepth;
-    if (isClassification(value.classification)) a.classification = value.classification;
+    const classification = sanitizeClassification(value.classification);
+    if (classification) a.classification = classification;
     const explanation = sanitizeExplanation(value.explanation);
     if (explanation) a.explanation = explanation;
     if (typeof value.isBook === 'boolean') a.isBook = value.isBook;
@@ -309,6 +310,24 @@ function isClassification(v: unknown): v is Classification {
     (v.bestMoveSan === null || typeof v.bestMoveSan === 'string') &&
     typeof v.playedMoveSan === 'string'
   );
+}
+
+/**
+ * A valid classification, with its optional near-equal fields (`equalBest`, `nearBest`, `aboveBest`
+ * with `nearBest`) kept only when well formed (a malformed one is dropped: the coach then words the move as older saves).
+ */
+function sanitizeClassification(v: unknown): Classification | null {
+  if (!isClassification(v)) return null;
+  const c = { ...v } as Classification & Record<string, unknown>;
+  if ('nearBest' in c && typeof c.nearBest !== 'boolean') delete c.nearBest;
+  if ('aboveBest' in c && (typeof c.aboveBest !== 'boolean' || c.nearBest !== true)) delete c.aboveBest;
+  if ('equalBest' in c) {
+    const isMove = (m: unknown) =>
+      isObject(m) && typeof m.san === 'string' && typeof m.uci === 'string' && (!('score' in m) || isScore(m.score));
+    const ok = Array.isArray(c.equalBest) && c.equalBest.length > 0 && c.equalBest.every(isMove);
+    if (!ok) delete c.equalBest;
+  }
+  return c;
 }
 
 /** Keeps an explanation with a valid headline/details; drops malformed optional fields. */

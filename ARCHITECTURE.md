@@ -43,6 +43,8 @@ src/
     types.ts               CONTRACT: MoveClass, Classification, Arrow, Explanation
     winprob.ts             centipawns/mate -> win probability, score formatting
     classify.ts            chess.com-style move classification
+    nearEqual.ts           "about as good": the near-equal rule (calibrated constants) and the words built on it
+                           ("Best was X (Y and Z were about as good).", "Your Nxd5 was fine: X was only slightly better.")
     sacrifice.ts           sacrifice detection for Brilliant
     accuracy.ts            per-move and per-game accuracy (lichess formulas)
     see.ts                 attackers / static exchange evaluation helpers (see, exchangeCounts, hangingPieces)
@@ -303,10 +305,38 @@ export function classifyMove(p: {
   playerRating?: number;           // rating tiers for "brilliant" / "great"
   prevMove?: { to: string };       // the opponent's previous move (a recapture is never "great")
   prevFenBefore?: string;          // position before the opponent's previous move: ignoring a fresh threat can count as a sacrifice
+  bestAfter?: AnalysisResult;      // the second opinion: analysis of the position after before.lines[0] (see nearBestRecheck)
 }): Classification;
 //   The played move's score comes from `before.lines` when the move is among them (same search), else from `after`.
 //   A forced mate that the deeper `after` search finds, for either side, replaces a centipawn score from `before`,
 //   so the class agrees with the explanation, which describes that mate.
+//   It also records near-equal awareness (analysis/nearEqual.ts): `equalBest`, the before-lines about as good as the
+//   best one (best first, the best included, at most 3; for a move that was not about as good, without the moves it
+//   matched), `nearBest`, whether the played move was (absent when its evaluation is unknown; never for a weak class),
+//   and `aboveBest` (with nearBest: it scored at least as well as the best, e.g. a mate or a draw the best line lacks).
+//   The played move is first compared with the best line: its own line when listed, else its `after` search. Just
+//   outside the band (at most NEAR_EQUAL_RECHECK_CP behind), or for a listed move its `after` search puts that far
+//   below the best line, the second opinion decides: its `after` search against `bestAfter` (like with like). The
+//   class itself does not depend on any of this.
+export function nearBestRecheck(p): string | null; // the FEN to search for `bestAfter` when the verdict needs it, else null
+// analysis/nearEqual.ts — THE definition of "about as good" (feedback, Show best, review, explorer ratings, hints)
+export const NEAR_EQUAL_CP = 25;         // against the best line (a listed move's line, or a move's own search): 25 cp...
+export const NEAR_EQUAL_SEARCH_CP = 30;  // ...the second opinion, two searches of their own (after each move): 30 cp...
+export const NEAR_EQUAL_RECHECK_CP = 60; // ...asked when the first comparison fails by at most this...
+export const NEAR_EQUAL_WIN = 0.02;      // ...or expected scores < 0.02 apart (EP_THRESHOLDS.excellent)...
+export const NEAR_EQUAL_MAX_CP = 50;     // ...while at most 50 cp apart (four pawns are never "about as good")
+export const NEAR_EQUAL_MAX = 3;
+export function aboutEqual(a: Score, b: Score, bandCp?: number): boolean;   // mates: only the same mate
+export function aboutAsGood(move: Score, best: Score, bandCp?: number): boolean; // or better (a faster mate)
+export function nearEqualLines(lines: readonly PvLine[], max?: number): PvLine[];
+export function isNearBest(cl, playedUci: string): boolean;                 // nearBest, and not the best move itself
+/** THE "Best was X" sentence: "Best was c5.", "Best was c5 (c6 and g6 were about as good).", "Best was c5, which wins a
+ *  knight." (the alternatives only without a reason: a parenthesis after it would read as part of it) */
+export function bestWasSentence(bestSan: string, opts?: { reason?: string | null; alternatives?: readonly string[] }): string;
+/** For a near-best move: "c5 is one of the engine’s top choices, with c6 and g6." (listed) or "Your Nxd5 was fine: c6, c5
+ *  and g6 were only slightly better." ("Nxd5 was fine: …" with voice 'neutral'); null for `aboveBest` (nothing to add). */
+export function nearBestSentence(cl, playedUci: string, voice?: 'you' | 'neutral'): string | null;
+export function bestMoveNote(cl, playedUci: string, voice?: 'you' | 'neutral'): string | null; // near: nearBestSentence, else bestWasSentence
 // analysis/types.ts (excerpt)
 export interface Explanation {
   headline: string; details: string[];     // one short sentence + 0-3 more
@@ -342,7 +372,12 @@ export function explainBestMove(fen: string, line: PvLine, opts?: {
   perspective?: Perspective;
   lines?: readonly PvLine[];       // all engine lines for fen (MultiPV, best first): lets a quiet move be described by
                                    // how it compares ("keeps a small edge. g3 and Bf4 are about as good.")
+  compare?: boolean;               // default true; false: no ranking against the lines ("only move", "more precise
+                                   // than", "about as good"), only what the move keeps (Show best for a near-best move)
 }): Explanation;
+//   "About as good" between lines is nearEqual.ts's rule (25 cp, or under 0.02 expected score up to 50 cp): the hint's
+//   "g3 is about as good" now also covers 22-25 cp near equality, which was "more precise" before. Judging follow-ups
+//   ("X prepares Y") and the opponent's replies, any two mates for the same side still count as equally good.
 export function describeThreat(fen: string, opts?: { perspective?: Perspective }): Explanation | null; // what the side NOT to move threatens (null-move)
 
 // rating/rating.ts
@@ -378,14 +413,26 @@ export interface SavedGame {
   /** The first `preplayed` moves were played before the game started ('skip'): book moves, never analyzed. */
   preplayed?: number;
 }   // unknown extra fields survive sanitizing (the controller also stores `startEval`); an explanation's `concedes`
-    // must be 'material' or 'mate', else it is dropped
+    // must be 'material' or 'mate', else it is dropped; a classification's `nearBest` must be a boolean, its
+    // `aboveBest` a boolean with nearBest true, and its `equalBest` a non-empty list of { san, uci, score? }, else
+    // they are dropped (older saves have none)
 export function saveGame(g: SavedGame): boolean; export function loadGame(): SavedGame | null; export function clearGame(): void;
 export function saveSettings(s: GameSettings): void; export function loadSettings(): GameSettings;
 export function requestPersistentStorage(): Promise<boolean>;
 // game/coach.ts
 export function offersShowBest(cl: Pick<Classification, 'cls' | 'bestMoveUci'>, playedUci: string): boolean; // not a top class, or a Brilliant that isn't the top move
 export const RETRY_CLASSES: ReadonlySet<MoveClass>;  // mistake, miss, blunder
-export function answerFreeLines(e: Explanation | undefined | null, cl: Classification): string[]; // text that does not give the better move away (while Retry is offered)
+export function answerFreeLines(e: Explanation | undefined | null, cl: Classification): string[]; // text that does not give the better move (or one of
+                                                     // `equalBest`) away (while Retry is offered)
+/** Show best's title: "Top choices" ("Top choice") when the played move was about as good (isNearBest), "Slightly
+ *  better: c6" for an Excellent or Good move that was not (no `concedes`; not for older saves), else "Best was c6". */
+export function showBestTitle(ply, bestSan: string | null): string;
+/** Show best's first lines for a near-best move: "c6 +0.6 · c5 +0.7 · g6 +0.7" (equalBest, eval-bar convention) and the
+ *  played move from its own side: "Your Nxd5: +0.9, close behind." ("…, at least as good." for aboveBest) / "Pip’s
+ *  Nxd5: …" / "Your c5 is one of them."; [] otherwise. */
+export function nearBestShowLines(ply, owner: string): string[];
+/** mentionsMove, except that a pawn move written as a square ("d4") does not count after "on", "to", "the" … */
+export function namesMove(text: string, san: string): boolean;
 export function mentionsMove(text: string, san: string): boolean;
 export function classSentence(san: string, cls: MoveClass): string; // "3. Qxf7+ is a blunder"
 export function moveLabel(ply: Pick<Ply, 'fenBefore' | 'san' | 'color' | 'index'>): string; // "12. Nf3" / "12… Nf6"
@@ -420,7 +467,9 @@ export function legalDests(fen): Map<string, string[]>;
 export function movePath(x, index): string;   // the UCI line up to move `index`: a late rating must still match it
 export function setRating(x, index, path, r: { rating } | { failed: true }): Explorer; export function clearFailed(x): Explorer;
 // game/store.ts
-export function explanationLines(e: Explanation | undefined | null, bestSan?: string | null): string[]; // adds "Best was X." unless a line already names X
+export function explanationLines(e: Explanation | undefined | null, bestSan?: string | null, move?: { cl: Classification; playedUci: string; voice?: 'you' | 'neutral' }): string[];
+// adds a note on X unless a line already names it: "Best was X." (with `move`: its alternatives, or for a near-best
+// move "Your Nxd5 was fine: X was only slightly better.", nothing for `aboveBest`; nearEqual.ts `bestMoveNote`)
 // game/sound.ts
 export type SoundKind = 'move' | 'capture' | 'check' | 'castle' | 'promote' | 'gameStart' | 'gameEnd' | 'illegal' | 'notify';
 export function unlockAudio(): void; export function setSoundEnabled(on: boolean): void; export function playSound(kind: SoundKind): void;
@@ -848,7 +897,26 @@ way the feedback on that move does. When the position's engine lines are no long
 restart or a restore), *Show best* shows the saved explanation at once with a spinner, analyzes the
 position again (the `showBest` coach mode's `pending`; `idle()` waits for it) and then fills in the best move's
 explanation and "Best line"; a late result is dropped if the player has moved on. "You played X."
-leaves out the move's own explanation when it only repeats the best move's. Browsing earlier moves
+leaves out the move's own explanation when it only repeats the best move's. **Near-equal moves**
+(analysis/nearEqual.ts): at the coach's budget the order of moves a few centipawns apart is noise
+(after 1.d4 d5 2.c4 Nf6 3.cxd5 it puts 3...c6 first where a depth-24 search prefers 3...g6), so a move
+about as good as the best (`Classification.nearBest`, not the best itself) is not corrected: its
+explanation says "Your Nxd5 was fine: c6, c5 and g6 were only slightly better." ("Nxd5 was fine: …" for
+the opponent's move; "c5 is one of the engine’s top choices, with c6 and g6." when the engine listed it;
+nothing when it scored at least as well, `aboveBest`), the review adds that instead of "Best was X." (and
+draws the best move and the alternatives, no arrow for `aboveBest`), and *Show best* is titled "Top choices"
+with the moves and their evaluations ("c6 +0.6 · c5 +0.7 · g6 +0.7", then the played move from its own side:
+"Your Nxd5: +0.9, close behind." or "…, at least as good."), the best move's explanation without ranking
+(`explainBestMove`'s `compare: false`: no "only move" or "more precise than", the list ranks them) and
+"Engine line: …". Just outside the band, `annotate` and the explorer's ratings first search the position
+after the best move (`secondOpinion`, classify.ts `nearBestRecheck`, one more depth-14 search; a failed or cut
+short one is skipped). A clearly worse move keeps its correction and names the alternatives ("Best was c6
+(c5 and g6 were about as good)."; one helper, `bestWasSentence`, words every "Best was"; not after a reason),
+and *Show best* adds them ("c5 and g6 were about as good.") unless its explanation already does; its title is
+"Slightly better: c6" for an Excellent or Good move (no `concedes`), else "Best was c6". Its arrows: the played
+move, the best one ('best') and the alternatives ('alt'). While Retry is offered none of these moves is named
+(`answerFreeLines`; a line that only names a pawn move's square, "your knight on d4", stays: `namesMove`);
+with Show best locked (Pro) nothing names them. Browsing earlier moves
 while a hint is open shows the history view; the hint comes back at the live position (the Hint
 button is not highlighted meanwhile). A move whose explanation has `concedes` (a Good / Excellent
 move that gives something away) gets `verdictTitle`'s neutral title and no class icon in the coach,
@@ -1372,7 +1440,7 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
 
 ## Tests
 
-- `npm test`: Vitest unit tests in node, about 1,090 tests in 57 files (the one test in
+- `npm test`: Vitest unit tests in node, about 1,140 tests in 60 files (the one test in
   `tests/bot/calibration.slow.test.ts` is skipped unless `CALIBRATE=1`, see `npm run calibrate`). They
   cover pure logic, the engine layer against scripted transports, the controller against a fake
   engine and a scripted bot (`tests/helpers/fakeEngine.ts`), the store's view models, UI helpers, the
@@ -1387,6 +1455,14 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   StockfishEngine over a scripted UCI transport, `tests/helpers/uciTransport.ts`, and nothing shown even
   for positions the engine knows; the switch, its question and when it is dropped (a refund too), per-game
   memory, Pro; the position on the board analyzed before a backlog of ratings; a rating that throws failing once);
+  `tests/analysis/nearEqual.test.ts` and `tests/game/nearEqual.controller.test.ts` near-equal awareness (the rule
+  and its constants, the second opinion, `equalBest` / `nearBest` / `aboveBest` from fixed engine lines, every
+  wording, the Kieseritzky 5...Be7, a mate or repetition draw above the best line, and the user's 3...Nxd5 case,
+  also at the edges of the band seen with the real engine, through the controller: feedback, Show best's title,
+  lines and arrows, the opponent's move, Game Review, the explorer, Retry, Pro locked, a restored game and an older
+  save; the fake engine's `fixed` lines), and `tests/analysis/nearEqual.engine.test.ts` the user's case with the real
+  engine in three histories that put 3...Nxd5 outside the band of the best line (kept "about as good" by the second
+  opinion);
   `tests/game/opponent.test.ts` the opponent's move ratings (the view models with the coach and the
   setting on or off, the two rows, rated games and the question, Show best, the Pro gating, the review
   unchanged); `tests/game/opening.test.ts` and `opening.controller.test.ts` opening practice (`lineProgress` with

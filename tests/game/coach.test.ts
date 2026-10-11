@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { Chess } from 'chess.js';
 import type { Classification, Explanation } from '../../src/analysis/types';
-import { answerFreeLines, concession, mentionsMove, recaptureTip, repetitionExplanation, verdictTitle } from '../../src/game/coach';
+import {
+  answerFreeLines,
+  concession,
+  mentionsMove,
+  namesMove,
+  nearBestShowLines,
+  recaptureTip,
+  repetitionExplanation,
+  showBestTitle,
+  verdictTitle,
+} from '../../src/game/coach';
+import type { Ply } from '../../src/game/types';
 
 const cl = (over: Partial<Classification> = {}): Classification => ({
   cls: 'blunder',
@@ -24,6 +35,22 @@ describe('mentionsMove', () => {
     expect(mentionsMove('After e4 the centre is open.', 'e4')).toBe(true);
     expect(mentionsMove('Castling long with O-O-O.', 'O-O')).toBe(false);
     expect(mentionsMove('Nf3 develops.', 'Nf3')).toBe(true);
+  });
+});
+
+describe('namesMove', () => {
+  it('a pawn move written as a square counts only where it names the move, not the square', () => {
+    expect(namesMove('This hangs your knight on d4.', 'd4')).toBe(false);
+    expect(namesMove('The pawn to d4 is pinned.', 'd4')).toBe(false);
+    expect(namesMove('Best was d4.', 'd4')).toBe(true);
+    expect(namesMove('You missed d4, which forks the knights.', 'd4+')).toBe(true);
+    expect(namesMove('d4 was needed.', 'd4')).toBe(true);
+    // Both: the square, then the move.
+    expect(namesMove('Your knight on d4 hangs: d4 was better.', 'd4')).toBe(true);
+    // Every other move as mentionsMove.
+    expect(namesMove('Best was Bb5, which pins the knight on c6.', 'Bb5')).toBe(true);
+    expect(namesMove('Black plays exd4 and wins a knight.', 'd4')).toBe(false);
+    expect(namesMove('Black plays exd4 and wins a knight.', 'exd4')).toBe(true);
   });
 });
 
@@ -65,6 +92,110 @@ describe('answerFreeLines', () => {
   it('never returns nothing', () => {
     expect(answerFreeLines(undefined, cl({ cls: 'mistake' }))).toEqual(['There was a clearly better move here.']);
   });
+
+  it('names none of the moves about as good as the best one either', () => {
+    const near = cl({
+      cls: 'mistake',
+      equalBest: [
+        { san: 'Qxh5', uci: 'd1h5' },
+        { san: 'Bxh5', uci: 'e2h5' },
+      ],
+    });
+    const e: Explanation = {
+      headline: 'This hangs your bishop on a6.',
+      details: ['Bxh5 also wins the knight.', 'Best was Qxh5, which wins a knight (Bxh5 was about as good).'],
+      motifs: ['hanging'],
+    };
+    expect(answerFreeLines(e, near)).toEqual(['This hangs your bishop on a6.']);
+  });
+
+  it('keeps a line that only names the square of a pawn move about as good as the best (1.e4 e5 2.Nf3 Nc6 3.Nd4??)', () => {
+    // Lines Bb5 +0.32, d4 +0.29, Bc4 +0.14: d4 is one of the moves about as good as Bb5.
+    const nd4 = cl({
+      cls: 'blunder',
+      bestMoveUci: 'f1b5',
+      bestMoveSan: 'Bb5',
+      playedMoveSan: 'Nd4',
+      equalBest: [
+        { san: 'Bb5', uci: 'f1b5' },
+        { san: 'd4', uci: 'd2d4' },
+        { san: 'Bc4', uci: 'f1c4' },
+      ],
+    });
+    const e: Explanation = {
+      headline: 'This hangs your knight on d4.',
+      details: ['Black plays exd4 and wins a knight.', 'Best was Bb5, which develops the bishop.', 'd4 was needed to keep the center.'],
+      motifs: ['hanging'],
+    };
+    // The headline names d4 as a square: it stays. A line naming d4 as a move does not.
+    expect(answerFreeLines(e, nd4)).toEqual(['This hangs your knight on d4.', 'Black plays exd4 and wins a knight.']);
+  });
+});
+
+describe('Show best for a move about as good as the best (near-equal awareness)', () => {
+  // 1.d4 d5 2.c4 Nf6 3.cxd5 Nxd5 (Black): c6, c5 and g6 about as good; Nxd5 28 cp behind by its own search.
+  const fenBefore = 'rnbqkb1r/ppp1pppp/5n2/3P4/3P4/8/PP2PPPP/RNBQKBNR b KQkq - 0 3';
+  const fenAfter = 'rnbqkb1r/ppp1pppp/8/3n4/3P4/8/PP2PPPP/RNBQKBNR w KQkq - 0 4';
+  const near = cl({
+    cls: 'good',
+    winBefore: 0.45,
+    winAfter: 0.42,
+    winLoss: 0.025,
+    bestMoveUci: 'c7c6',
+    bestMoveSan: 'c6',
+    playedMoveSan: 'Nxd5',
+    equalBest: [
+      { san: 'c6', uci: 'c7c6', score: { kind: 'cp', value: -57 } },
+      { san: 'c5', uci: 'c7c5', score: { kind: 'cp', value: -67 } },
+      { san: 'g6', uci: 'g7g6', score: { kind: 'cp', value: -69 } },
+    ],
+    nearBest: true,
+  });
+  const ply = (over: Partial<Ply> = {}): Ply => ({
+    index: 5,
+    color: 'b',
+    san: 'Nxd5',
+    uci: 'f6d5',
+    fenBefore,
+    fenAfter,
+    evalWhite: { kind: 'cp', value: 85 },
+    classification: near,
+    ...over,
+  });
+
+  it('titles: "Top choices" (or "choice"), "Slightly better: X" for an Excellent or Good move that was not, "Best was X" for the rest', () => {
+    expect(showBestTitle(ply(), 'c6')).toBe('Top choices');
+    expect(showBestTitle(ply({ classification: { ...near, equalBest: [{ san: 'c6', uci: 'c7c6' }] } }), 'c6')).toBe('Top choice');
+    // A Good move that was not about as good: the better move was still only slightly better.
+    expect(showBestTitle(ply({ classification: { ...near, nearBest: false } }), 'c6')).toBe('Slightly better: c6');
+    expect(showBestTitle(ply({ classification: { ...near, nearBest: false, cls: 'excellent' } }), 'c6')).toBe('Slightly better: c6');
+    // A weak move, a Good move whose text says what it gives away, an older save: "Best was".
+    expect(showBestTitle(ply({ classification: { ...near, nearBest: false, cls: 'inaccuracy' } }), 'c6')).toBe('Best was c6');
+    const concedes = ply({
+      classification: { ...near, nearBest: false },
+      explanation: { headline: 'This hangs your knight on d5.', details: [], concedes: 'material' },
+    });
+    expect(showBestTitle(concedes, 'c6')).toBe('Best was c6');
+    expect(showBestTitle(ply({ classification: { ...near, nearBest: undefined, equalBest: undefined } }), 'c6')).toBe('Best was c6');
+    expect(showBestTitle(null, null)).toBe('Best move');
+  });
+
+  it('lines: the top choices with their evaluations (White’s point of view), then the played move from its own side', () => {
+    expect(nearBestShowLines(ply(), 'Your')).toEqual(['c6 +0.6 · c5 +0.7 · g6 +0.7', 'Your Nxd5: +0.9, close behind.']);
+    expect(nearBestShowLines(ply(), 'Pip’s')[1]).toBe('Pip’s Nxd5: +0.9, close behind.');
+    expect(nearBestShowLines(ply({ evalWhite: undefined }), 'Your')[1]).toBe('Your Nxd5 is close behind.');
+    // Scored at least as well as the best (here +0.4 against c6’s +0.6 for White): no "behind".
+    const above = ply({ evalWhite: { kind: 'cp', value: 40 }, classification: { ...near, cls: 'excellent', aboveBest: true } });
+    expect(nearBestShowLines(above, 'Your')).toEqual(['c6 +0.6 · c5 +0.7 · g6 +0.7', 'Your Nxd5: +0.4, at least as good.']);
+    // A listed move is "one of them"; a move without scores still lists the names.
+    const c5 = ply({ san: 'c5', uci: 'c7c5', classification: { ...near, playedMoveSan: 'c5' } });
+    expect(nearBestShowLines(c5, 'Your')).toEqual(['c6 +0.6 · c5 +0.7 · g6 +0.7', 'Your c5 is one of them.']);
+    const bare = ply({ classification: { ...near, equalBest: [{ san: 'c6', uci: 'c7c6' }, { san: 'c5', uci: 'c7c5' }] } });
+    expect(nearBestShowLines(bare, 'Your')[0]).toBe('c6 · c5');
+    // Not near-best: nothing (the usual "Best was" Show best).
+    expect(nearBestShowLines(ply({ classification: { ...near, nearBest: false } }), 'Your')).toEqual([]);
+    expect(nearBestShowLines(ply({ uci: 'c7c6', san: 'c6' }), 'Your')).toEqual([]);
+  });
 });
 
 describe('repetitionExplanation', () => {
@@ -72,6 +203,13 @@ describe('repetitionExplanation', () => {
     const e = repetitionExplanation('Ng5', cl({ bestMoveSan: 'd4' }), { human: true, botName: 'Pip' });
     expect(e.headline).toBe('Ng5 repeats the position for the third time, so the game is a draw.');
     expect(e.details).toEqual(['You were winning: when you are ahead, avoid repeating the position.', 'Best was d4.']);
+  });
+  it('names the moves that were about as good as the best one', () => {
+    const near = cl({ bestMoveSan: 'd4', bestMoveUci: 'd2d4', equalBest: [{ san: 'd4', uci: 'd2d4' }, { san: 'Ng5', uci: 'f3g5' }, { san: 'c4', uci: 'c2c4' }] });
+    // The played move (Ng5 repeats) is never "about as good" here.
+    expect(repetitionExplanation('Ng5', near, { human: true, botName: 'Pip' }).details[1]).toBe('Best was d4 (c4 was about as good).');
+    const two = cl({ bestMoveSan: 'd4', bestMoveUci: 'd2d4', equalBest: [{ san: 'd4', uci: 'd2d4' }, { san: 'c4', uci: 'c2c4' }, { san: 'e4', uci: 'e2e4' }] });
+    expect(repetitionExplanation('Ng5', two, { human: true, botName: 'Pip' }).details[1]).toBe('Best was d4 (c4 and e4 were about as good).');
   });
   it('and one that saved a lost game', () => {
     const e = repetitionExplanation('Kh1', cl({ winBefore: 0.1, cls: 'best' }), { human: false, botName: 'Pip' });

@@ -3,9 +3,11 @@
  * ("12. Nf3", "12… Nf6") and short, phase-aware playing tips.
  */
 import { Chess, type Square } from 'chess.js';
+import { bestWasSentence, equalAlternatives, isNearBest } from '../analysis/nearEqual';
 import { see } from '../analysis/see';
 import type { Classification, Explanation, MoveClass } from '../analysis/types';
-import { PIECE_VALUES } from '../chess/utils';
+import { formatScore } from '../analysis/winprob';
+import { PIECE_VALUES, sideToMove, toWhitePov } from '../chess/utils';
 import { CLASS_META } from '../ui/ClassIcon';
 import type { Ply } from './types';
 
@@ -99,6 +101,59 @@ export const TOP_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['brillian
 export function offersShowBest(cl: Pick<Classification, 'cls' | 'bestMoveUci'>, playedUci: string): boolean {
   if (!cl.bestMoveUci || cl.bestMoveUci === playedUci) return false;
   return cl.cls === 'brilliant' || !TOP_CLASSES.has(cl.cls);
+}
+
+/** Classes whose move lost little (under 5% expected score): the better move was only slightly better. */
+const SLIGHT_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['excellent', 'good']);
+
+/**
+ * Show best's title: "Top choices" ("Top choice" when the engine listed no other) when the played
+ * move was about as good as the best (analysis/nearEqual.ts `isNearBest`); "Slightly better: c6"
+ * for an Excellent or Good move that was not (unless its text says what it gives away, see
+ * `concession`; older saves without the near-equal fields keep "Best was"); "Best was c5" for any
+ * other; "Best move" when the best move is unknown.
+ */
+export function showBestTitle(
+  ply: Pick<Ply, 'uci' | 'classification' | 'explanation'> | null | undefined,
+  bestSan: string | null,
+): string {
+  const cl = ply?.classification;
+  if (ply && cl && isNearBest(cl, ply.uci)) {
+    const moves = new Set([cl.bestMoveUci, ...(cl.equalBest ?? []).map((m) => m.uci)]);
+    return moves.size > 1 ? 'Top choices' : 'Top choice';
+  }
+  if (!bestSan) return 'Best move';
+  if (ply && cl?.nearBest === false && SLIGHT_CLASSES.has(cl.cls) && !concession(ply)) return `Slightly better: ${bestSan}`;
+  return `Best was ${bestSan}`;
+}
+
+/**
+ * Show best's first lines when the played move was about as good as the best (`isNearBest`): the
+ * engine's near-equal moves with their evaluations as the eval bar shows them ("c6 +0.5 · c5 +0.6
+ * · g6 +0.6"), then the played move, said from the mover's side so the eval bar's signs cannot
+ * mislead: "Your Nxd5: +0.8, close behind." ("…, at least as good." when it scored at least as
+ * well, `aboveBest`), or "Your c5 is one of them." when it is listed. `owner` is "Your" or the
+ * opponent's "Pip’s". Empty for any other move.
+ */
+export function nearBestShowLines(
+  ply: Pick<Ply, 'fenBefore' | 'fenAfter' | 'uci' | 'san' | 'evalWhite' | 'classification'>,
+  owner: string,
+): string[] {
+  const cl = ply.classification;
+  if (!cl || !isNearBest(cl, ply.uci)) return [];
+  const equal = cl.equalBest?.length ? cl.equalBest : cl.bestMoveSan ? [{ san: cl.bestMoveSan, uci: cl.bestMoveUci! }] : [];
+  const stm = sideToMove(ply.fenBefore);
+  const evals = equal
+    .map((m) => ('score' in m && m.score ? `${m.san} ${formatScore(toWhitePov(m.score, ply.fenBefore), stm)}` : m.san))
+    .join(' · ');
+  const listed = equal.some((m) => m.uci === ply.uci);
+  const how = cl.aboveBest ? 'at least as good' : 'close behind';
+  const played = listed
+    ? `${owner} ${ply.san} is one of them.`
+    : ply.evalWhite
+      ? `${owner} ${ply.san}: ${formatScore(ply.evalWhite, sideToMove(ply.fenAfter))}, ${how}.`
+      : `${owner} ${ply.san} is ${how}.`;
+  return evals ? [evals, played] : [played];
 }
 
 /** Classes that offer "Retry" in coach mode. */
@@ -197,6 +252,24 @@ export function mentionsMove(text: string, san: string): boolean {
   return new RegExp(`(^|[^A-Za-z0-9-])${escaped}(?![A-Za-z0-9=-])`).test(text);
 }
 
+/** Words before a square name that make it a square, not a pawn move ("your knight on d4"). */
+const SQUARE_CONTEXT = /\b(on|to|from|the|pawn|square|at)\s+$/i;
+
+/**
+ * `mentionsMove`, except that a pawn move written as a bare square ("d4") does not count where the
+ * text names that square ("This hangs your knight on d4.", "the pawn to d4"): only where it names
+ * the move ("Best was d4.", "You missed d4, which …").
+ */
+export function namesMove(text: string, san: string): boolean {
+  const core = san.replace(/[+#?!]+$/, '');
+  if (!/^[a-h][1-8]$/.test(core)) return mentionsMove(text, san);
+  const re = new RegExp(`(^|[^A-Za-z0-9-])${core}(?![A-Za-z0-9=-])`, 'g');
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    if (!SQUARE_CONTEXT.test(text.slice(0, m.index + m[1].length))) return true;
+  }
+  return false;
+}
+
 /** Opening sentence when the explanation's own headline would give the better move away. */
 const ANSWER_FREE_LEAD: Partial<Record<MoveClass, string>> = {
   mistake: 'There was a clearly better move here.',
@@ -206,18 +279,23 @@ const ANSWER_FREE_LEAD: Partial<Record<MoveClass, string>> = {
 
 /**
  * The explanation of a move the player may still Retry, without giving the better move away: no
- * line that names it ("Best was Nf3, which …", "You missed Qxh5, which wins a knight."), no
- * description of a missed tactic, and no "promotes to a knight instead of a queen" (which says
- * what to promote to). "Show best" reveals the rest. Always at least one line.
+ * line that names it ("Best was Nf3, which …", "You missed Qxh5, which wins a knight.") or one of
+ * the moves about as good as it (`Classification.equalBest`; a line that only names a pawn move's
+ * square, "your knight on d4", stays: `namesMove`), no description of a missed tactic, and no
+ * "promotes to a knight instead of a queen" (which says what to promote to). "Show best" reveals
+ * the rest. Always at least one line.
  */
 export function answerFreeLines(e: Explanation | undefined | null, cl: Classification): string[] {
   const all = e ? [e.headline, ...e.details] : [];
-  const best = cl.bestMoveSan;
+  const better = [cl.bestMoveSan, ...(cl.equalBest ?? []).map((m) => m.san)].filter(
+    (san): san is string => !!san && san !== cl.playedMoveSan,
+  );
   const motifs = e?.motifs ?? [];
   const missedTactic = motifs.includes('missedTactic');
   const underpromotion = motifs.includes('underpromotion');
   const lines = all.filter(
-    (line, i) => !(best && mentionsMove(line, best)) && !(missedTactic && i > 0) && !(underpromotion && i === 0),
+    (line, i) =>
+      !better.some((san) => namesMove(line, san)) && !(missedTactic && i > 0) && !(underpromotion && i === 0),
   );
   if (e && lines[0] !== e.headline) {
     const lead = motifs.includes('missedMate')
@@ -247,7 +325,12 @@ export function repetitionExplanation(
         ? 'You were winning: when you are ahead, avoid repeating the position.'
         : `${opts.botName} was winning, so the draw let you off the hook.`,
     );
-    if (cl.bestMoveSan && cl.bestMoveSan !== san) details.push(`Best was ${cl.bestMoveSan}.`);
+    if (cl.bestMoveSan && cl.bestMoveSan !== san) {
+      const alternatives = equalAlternatives(cl)
+        .map((m) => m.san)
+        .filter((alt) => alt !== san);
+      details.push(bestWasSentence(cl.bestMoveSan, { alternatives }));
+    }
   } else if (cl.winBefore <= 0.4) {
     details.push(opts.human ? 'A draw is a good result from a lost position.' : `${opts.botName} was losing, so a draw is a good result for it.`);
   }
