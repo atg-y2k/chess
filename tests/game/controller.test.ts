@@ -1753,6 +1753,9 @@ describe('Show best', () => {
     await vi.waitFor(() => expect(second.store.coach.value.busy).toBe(false));
     expect(second.store.coach.value.lines).toEqual(shown);
     expect(shown[0]).toBe(`You played Qxf7+. ${ply.explanation!.headline}`);
+    // Then the moves about as good as the best one (near-equal awareness), once.
+    expect(shown[1]).toBe('d3 and Bc4 were about as good.');
+    expect(shown.filter((l) => /about as good/.test(l))).toHaveLength(1);
   });
 
   it('a missed tactic: the best move is explained once, not again after "You played"', async () => {

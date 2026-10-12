@@ -260,6 +260,12 @@ describe('classifyMove on real positions', () => {
       bestMoveUci: 'f8c5',
       bestMoveSan: 'Bc5',
       playedMoveSan: 'Nf6',
+      // Near-equal awareness: Bc5 and Nf6 are 5 cp apart, d6 40 cp behind.
+      equalBest: [
+        { san: 'Bc5', uci: 'f8c5', score: cp(-20) },
+        { san: 'Nf6', uci: 'g8f6', score: cp(-25) },
+      ],
+      nearBest: true,
     });
   });
 

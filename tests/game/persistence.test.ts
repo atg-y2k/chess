@@ -161,6 +161,41 @@ describe('saved game', () => {
     });
   });
 
+  it('near-equal awareness: round-trips equalBest, nearBest and aboveBest, drops malformed ones, loads older saves', () => {
+    const near: Classification = {
+      ...classification,
+      cls: 'good',
+      equalBest: [
+        { san: 'Nf6', uci: 'g8f6', score: { kind: 'cp', value: -57 } },
+        { san: 'd6', uci: 'd7d6', score: { kind: 'cp', value: -67 } },
+        { san: 'a6', uci: 'a7a6' },
+      ],
+      nearBest: true,
+    };
+    const game = savedGame({ annotations: { 3: { classification: near } } });
+    expect(saveGame(game)).toBe(true);
+    expect(loadGame()).toEqual(game);
+    // Malformed near-equal fields are dropped; the classification stays (worded as before).
+    const bad = (extra: Record<string, unknown>) => {
+      storage.setItem(GAME_KEY, JSON.stringify({ ...savedGame(), annotations: { 3: { classification: { ...classification, ...extra } } } }));
+      return loadGame()!.annotations[3].classification;
+    };
+    expect(bad({ nearBest: 'yes', equalBest: 'Nf6' })).toEqual(classification);
+    expect(bad({ equalBest: [] })).toEqual(classification);
+    expect(bad({ equalBest: [{ san: 'Nf6' }] })).toEqual(classification);
+    expect(bad({ equalBest: [{ san: 'Nf6', uci: 'g8f6', score: { kind: 'cp', value: 'x' } }] })).toEqual(classification);
+    expect(bad({ nearBest: false })).toEqual({ ...classification, nearBest: false });
+    // aboveBest only with nearBest.
+    expect(bad({ nearBest: true, aboveBest: true })).toEqual({ ...classification, nearBest: true, aboveBest: true });
+    expect(bad({ nearBest: true, aboveBest: 'yes' })).toEqual({ ...classification, nearBest: true });
+    expect(bad({ nearBest: false, aboveBest: true })).toEqual({ ...classification, nearBest: false });
+    // A save from before near-equal awareness: no such fields, loads as it was.
+    expect(saveGame(savedGame())).toBe(true);
+    const old = loadGame()!.annotations[3].classification!;
+    expect(old).toEqual(classification);
+    expect('nearBest' in old || 'equalBest' in old).toBe(false);
+  });
+
   it('retries without explanations when the quota is exceeded', () => {
     const limited = new MemoryStorage();
     limited.setItem = function (k: string, v: string) {

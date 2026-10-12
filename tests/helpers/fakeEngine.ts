@@ -130,6 +130,8 @@ export class FakeEngine implements ChessEngine {
    * deeper one, finished (not aborted), as Stockfish does when it runs out of nodes first.
    */
   nodeCapDepth = 0;
+  /** Fixed engine lines by position (`fenKey`), best first: a search of that position returns them. */
+  readonly fixed = new Map<string, PvLine[]>();
   private pending: Pending | null = null;
 
   constructor(readonly name = 'fake') {}
@@ -192,6 +194,11 @@ export class FakeEngine implements ChessEngine {
   }
 
   private evaluate(fen: string, opts: SearchOptions): AnalysisResult {
+    const fixed = this.fixed.get(fenKey(fen));
+    if (fixed) {
+      const lines = fixed.slice(0, Math.max(1, opts.multiPv ?? 1)).map((l, i) => ({ ...l, multipv: i + 1 }));
+      return { fen, depth: lines[0]?.depth ?? 0, lines, bestMove: lines[0]?.pv[0] ?? null, done: true };
+    }
     let scored = scoreMoves(fen);
     const next = this.script[0];
     if (next && scored.some((s) => s.uci === next)) {

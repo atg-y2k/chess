@@ -51,6 +51,44 @@ describe('explanationLines', () => {
     expect(explanationLines(e('O-O-O was possible.'), 'O-O')).toEqual(['O-O-O was possible.', 'Best was O-O.']);
   });
 
+  it('with the classification: the moves about as good, or "Your h3 was fine" for a near-best move', () => {
+    const cl: Classification = {
+      cls: 'excellent',
+      winBefore: 0.45,
+      winAfter: 0.44,
+      winLoss: 0.01,
+      accuracy: 95,
+      bestMoveUci: 'g1f3',
+      bestMoveSan: 'Nf3',
+      playedMoveSan: 'h3',
+      equalBest: [
+        { san: 'Nf3', uci: 'g1f3' },
+        { san: 'c4', uci: 'c2c4' },
+      ],
+      nearBest: true,
+    };
+    expect(explanationLines(e('h3 is a solid move.'), 'Nf3', { cl, playedUci: 'h2h3' })).toEqual([
+      'h3 is a solid move.',
+      'Your h3 was fine: Nf3 and c4 were only slightly better.',
+    ]);
+    // The opponent's move.
+    expect(explanationLines(e('h3 is a solid move.'), 'Nf3', { cl, playedUci: 'h2h3', voice: 'neutral' })).toEqual([
+      'h3 is a solid move.',
+      'h3 was fine: Nf3 and c4 were only slightly better.',
+    ]);
+    // Scored at least as well as the best: nothing about Nf3 (not "Best was Nf3." either).
+    expect(explanationLines(e('h3 is a solid move.'), 'Nf3', { cl: { ...cl, aboveBest: true }, playedUci: 'h2h3' })).toEqual([
+      'h3 is a solid move.',
+    ]);
+    expect(explanationLines(e('h3 loses time.'), 'Nf3', { cl: { ...cl, nearBest: false }, playedUci: 'h2h3' })).toEqual([
+      'h3 loses time.',
+      'Best was Nf3 (c4 was about as good).',
+    ]);
+    // An older save without the near-equal fields: as before.
+    const { equalBest: _e, nearBest: _n, ...old } = cl;
+    expect(explanationLines(e('h3 loses time.'), 'Nf3', { cl: old, playedUci: 'h2h3' })).toEqual(['h3 loses time.', 'Best was Nf3.']);
+  });
+
   it('without a best move or explanation', () => {
     expect(explanationLines(e('Solid.'), null)).toEqual(['Solid.']);
     expect(explanationLines(undefined, 'Nf3')).toEqual(['Best was Nf3.']);

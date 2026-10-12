@@ -9,8 +9,9 @@
 import { Chess } from 'chess.js';
 import type { AnalysisResult, Score } from '../engine/types';
 import { parseUci, uciToSan } from '../chess/utils';
-import type { Classification, MoveClass } from './types';
+import type { Classification, EqualMove, MoveClass } from './types';
 import { accuracyWin, moveAccuracy } from './accuracy';
+import { aboutAsGood, NEAR_EQUAL_RECHECK_CP, NEAR_EQUAL_SEARCH_CP, nearEqualLines, scoreRank } from './nearEqual';
 import { capturedFreeMaterial, detectSacrifice, isObviousEscape, MIN_SACRIFICE, type Sacrifice } from './sacrifice';
 import { childToMover, CP_CEILING, cpToWin, scoreToWin, type TerminalKind } from './winprob';
 
@@ -77,6 +78,12 @@ export function evalToWin(e: MoverEval): number {
 function evalToAccuracyWin(e: MoverEval): number {
   if (e.kind !== 'result') return accuracyWin(e);
   return e.value === 0.5 ? 0.5 : cpToWin(e.value === 1 ? CP_CEILING : -CP_CEILING);
+}
+
+/** A mover-POV evaluation as an engine score: a finished game as a mate (won / lost) or 0.00 (draw). */
+function evalScore(e: MoverEval): Score {
+  if (e.kind !== 'result') return e;
+  return e.value === 0.5 ? { kind: 'cp', value: 0 } : { kind: 'mate', value: e.value === 1 ? 1 : 0 };
 }
 
 const isMateFor = (e: MoverEval) => (e.kind === 'mate' && e.value > 0) || (e.kind === 'result' && e.value === 1);
@@ -327,6 +334,12 @@ export interface ClassifyMoveInput {
   before: AnalysisResult;
   /** Analysis of the position after the move (needed when the move is not in `before.lines`). */
   after?: AnalysisResult & { terminal?: TerminalKind };
+  /**
+   * Analysis of the position after the engine's best move (`before.lines[0]`), the same kind of
+   * search as `after`: the second opinion `nearBestRecheck` asks for, which settles whether the
+   * played move was about as good as the best (analysis/nearEqual.ts).
+   */
+  bestAfter?: AnalysisResult;
   /** `winLoss` of the opponent's previous move (for "miss"). */
   opponentPrevWinLoss?: number;
   /** The resulting position is in the opening book (and every earlier ply was). */
@@ -348,6 +361,11 @@ export interface ClassifyMoveDetail {
   reasons: ClassReason[];
   /** The piece the move leaves en prise, if any (a Brilliant sacrifice, or hung material). */
   sacrifice: Sacrifice | null;
+  /**
+   * The position whose search would settle `nearBest` (see `nearBestRecheck`), when it is in doubt
+   * and `bestAfter` was not given; null otherwise.
+   */
+  recheckFen: string | null;
 }
 
 /** Classifies a move and also returns the reasons and any sacrificed / hung piece. Never throws. */
@@ -401,6 +419,42 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
   });
 
   const bestMoveUci = lines[0]?.uci ?? p.before.bestMove ?? null;
+  // Near-equal awareness (analysis/nearEqual.ts): whether the played move was about as good as the
+  // best, and the top moves about as good as the best one.
+  const bestChildLine = p.bestAfter?.lines[0];
+  const near = nearVerdict({
+    lines,
+    moveUci: p.moveUci,
+    played,
+    listed: !!inLines && played === inLines.score,
+    child,
+    bestChild: bestChildLine ? childToMover(bestChildLine.score) : null,
+    cls: v.cls,
+  });
+  const equalBest: EqualMove[] = [];
+  for (const l of nearEqualLines(p.before.lines)) {
+    const uci = l.pv[0];
+    const san = uciToSan(p.fenBefore, uci);
+    if (!san) continue;
+    if (near.nearBest === false) {
+      // Not about as good itself (its own evaluation fell outside the band, e.g. a mate the deeper
+      // search found), and not when calling another move it matched "about as good" while
+      // correcting it: only the moves clearly better than it are named with the best one.
+      if (uci === p.moveUci) continue;
+      if (uci !== lines[0]?.uci && near.judged && aboutAsGood(near.judged, l.score)) continue;
+    }
+    equalBest.push({ san, uci, score: l.score });
+  }
+  let recheckFen: string | null = null;
+  if (near.recheck && bestMoveUci) {
+    try {
+      const c = new Chess(p.fenBefore);
+      c.move(parseUci(bestMoveUci));
+      recheckFen = c.fen();
+    } catch {
+      recheckFen = null;
+    }
+  }
   return {
     classification: {
       cls: v.cls,
@@ -411,10 +465,95 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
       bestMoveUci,
       bestMoveSan: bestMoveUci ? uciToSan(p.fenBefore, bestMoveUci) : null,
       playedMoveSan: playedSan ?? p.moveUci,
+      ...(equalBest.length ? { equalBest } : {}),
+      ...(near.nearBest !== undefined ? { nearBest: near.nearBest } : {}),
+      ...(near.aboveBest ? { aboveBest: true } : {}),
     },
     reasons: v.reasons,
     sacrifice,
+    recheckFen,
   };
+}
+
+/**
+ * Whether classifying this move needs a second opinion on `nearBest` (analysis/nearEqual.ts), and
+ * of which position: the position after the engine's best move, to search like the position after
+ * the played move (`after`) and pass as `bestAfter`. Asked when the played move is a little outside
+ * the band of the best line (at most `NEAR_EQUAL_RECHECK_CP` behind), or its own search puts a
+ * listed move far below the best line; never for a weak class (an inaccuracy is never "about as
+ * good"), a mate or a finished game.
+ * Null when no second opinion is needed, or `bestAfter` is already given.
+ */
+export function nearBestRecheck(p: ClassifyMoveInput): string | null {
+  return p.bestAfter ? null : classifyMoveDetailed(p).recheckFen;
+}
+
+/** Classes that already say the move was weak: never "about as good" as the best. */
+const WEAK: ReadonlySet<MoveClass> = new Set<MoveClass>(['inaccuracy', 'mistake', 'miss', 'blunder']);
+
+/** How the played move compares with the engine's best (see `nearVerdict`). */
+interface NearVerdict {
+  /** About as good as the best, or the best (`Classification.nearBest`); undefined when unknown. */
+  nearBest?: boolean;
+  /** Its evaluation ranks at or above the best move's (`Classification.aboveBest`). */
+  aboveBest?: boolean;
+  /** The verdict needs the second opinion (`bestAfter`), which was not given: `nearBest` is false. */
+  recheck: boolean;
+  /** The played move's score as it was judged (mover's point of view). */
+  judged?: Score;
+}
+
+/**
+ * Whether the played move was about as good as the engine's best one (analysis/nearEqual.ts):
+ * - first against the best line (`NEAR_EQUAL_CP`): the move's own line when the before-search
+ *   listed it (one search), else its own search (`child`, the search after it);
+ * - when that fails by at most `NEAR_EQUAL_RECHECK_CP`, the second opinion decides, like with
+ *   like: the move's own search against the best move scored the same way (`bestChild`, a search
+ *   of the position after it), at most `NEAR_EQUAL_SEARCH_CP` apart. The top line is the best of
+ *   several noisy estimates, so it tends to come out high, and a search of its own scores a move
+ *   lower than a line does on average. It also decides for a listed move that its own search puts
+ *   more than `NEAR_EQUAL_RECHECK_CP` below the best line (the searches disagree);
+ * - a mate or a finished game: only the same mate (or better) is about as good.
+ * A weak class (inaccuracy or worse) is never about as good.
+ */
+function nearVerdict(o: {
+  lines: readonly { uci: string; score: Score }[];
+  moveUci: string;
+  played: MoverEval | null;
+  /** The played move was scored as one of the before-search's lines. */
+  listed: boolean;
+  child: Score | null;
+  bestChild: Score | null;
+  cls: MoveClass;
+}): NearVerdict {
+  const best = o.lines[0];
+  if (!best || !o.played) return { recheck: false };
+  if (best.uci === o.moveUci) return { nearBest: true, recheck: false };
+  const score = evalScore(o.played);
+  if (WEAK.has(o.cls)) return { nearBest: false, recheck: false, judged: score };
+  const judge = (near: boolean, s: Score, ref: Score): NearVerdict => ({
+    nearBest: near,
+    ...(near && scoreRank(s) >= scoreRank(ref) ? { aboveBest: true } : {}),
+    recheck: false,
+    judged: s,
+  });
+  // A finished game (a repetition draw included, which no search sees) or a mate: compared as it is.
+  if (o.played.kind === 'result' || score.kind !== 'cp' || best.score.kind !== 'cp') {
+    return judge(aboutAsGood(score, best.score), score, best.score);
+  }
+  const child = o.child?.kind === 'cp' ? o.child : null;
+  /** The second opinion: both moves scored by a search of their own. */
+  const second = (): NearVerdict => {
+    if (!child || !o.bestChild) return { nearBest: false, recheck: true, judged: score };
+    const v = judge(aboutAsGood(child, o.bestChild, NEAR_EQUAL_SEARCH_CP), child, o.bestChild);
+    return { ...v, judged: score };
+  };
+  if (aboutAsGood(score, best.score)) {
+    // A listed move its own search puts far below the best line: the searches disagree.
+    const contested = o.listed && !!child && best.score.value - child.value > NEAR_EQUAL_RECHECK_CP;
+    return contested ? second() : judge(true, score, best.score);
+  }
+  return best.score.value - score.value <= NEAR_EQUAL_RECHECK_CP ? second() : judge(false, score, best.score);
 }
 
 /**

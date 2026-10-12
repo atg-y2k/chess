@@ -110,9 +110,19 @@ one.
 After each of your moves the coach names the kind of move (see [Move classifications](#move-classifications))
 and explains it. For example, "14. Qg4 is a blunder" with "This hangs your queen on g4."
 
-- **Show best** puts the engine's best move and the move you played on the board as arrows, and
-  explains the best move. It appears when the engine preferred a different move. After the app has
-  been closed and reopened, it may take a moment: the coach looks at the position again first.
+- **Show best** puts the engine's best move and the move you played on the board as arrows (and,
+  in another color, the moves that were about as good), and explains the best move. It appears when
+  the engine preferred a different move. After the app has been closed and reopened, it may take a
+  moment: the coach looks at the position again first.
+- **Moves that are about as good.** The engine's top moves are often only a few hundredths of a pawn
+  apart, and which one comes first can change when it looks deeper. When your move is that close to
+  the engine's choice, the coach does not correct it: it says, for example, "Your Nxd5 was fine: c6,
+  c5 and g6 were only slightly better.", and Show best lists the **Top choices** with their
+  evaluations ("c6 +0.6 · c5 +0.7 · g6 +0.7", then "Your Nxd5: +0.9, close behind."). When your move
+  looks a little worse at first, the coach checks the engine's choice the same way before it says
+  so, which takes a moment longer. A move that was clearly worse still gets "Best was c6", with the
+  moves that were about as good: "Best was c6 (c5 and g6 were about as good)." (An Excellent or Good
+  move that was not quite as good gets "Slightly better: c6".)
 - **Retry** (after a mistake, miss or blunder, when takebacks are on) takes your move back so you
   can look for a better one. While Retry is on offer, the coach does not give away the answer. The
   "Try again" prompt is still there if iOS closes the app in the meantime.
@@ -431,6 +441,10 @@ already a queen up.
 | `✕` | **Miss** | You did not punish your opponent's mistake. |
 | `??` | **Blunder** | A serious mistake that loses material or the game (loses 20% or more). |
 
+A Good move can also be one the coach calls fine ("Your Nxd5 was fine: c6 was only slightly
+better."): its badge still says how much it lost, and the coach adds that the engine's choices
+were only a little better, which at the engine's depth is often noise.
+
 **Accuracy** uses lichess's formula: a per-move accuracy from the drop in winning chances, averaged
 over the game. The chess.com formulas are private, so the numbers are similar in spirit but will not
 match chess.com exactly. The Brilliant and Great thresholds depend on your rating.
@@ -512,7 +526,7 @@ Requires Node 24 (chessground declares `engines.node >= 24`).
 ```sh
 npm ci                 # install
 npm run dev            # dev server with hot reload (http://localhost:5173)
-npm test               # unit tests (Vitest: about 1,090 tests in 57 files; the calibration test is skipped)
+npm test               # unit tests (Vitest: about 1,140 tests in 60 files; the calibration test is skipped)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
 npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting

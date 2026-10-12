@@ -8,7 +8,8 @@
 import { computed, signal, type ReadonlySignal, type Signal } from '@preact/signals';
 import { Chess } from 'chess.js';
 import { BOOK_REASON } from '../analysis/explain';
-import type { Arrow, Explanation, MoveClass } from '../analysis/types';
+import { bestMoveNote, bestWasSentence, equalAlternatives, isNearBest, type NearVoice } from '../analysis/nearEqual';
+import type { Arrow, Classification, Explanation, MoveClass } from '../analysis/types';
 import { formatScore, resultScore, whiteBarFraction } from '../analysis/winprob';
 import { personaById, customPersona, BOTS } from '../bot/personas';
 import type { BotPersona } from '../bot/types';
@@ -46,6 +47,7 @@ import {
   moveLabel,
   offersShowBest,
   recaptureTip,
+  showBestTitle,
   verdictTitle,
 } from './coach';
 import { DRAW_COLORS, NO_DRAWINGS, NO_SHAPES, shapesAt, type DrawColor, type Drawings } from './drawings';
@@ -915,7 +917,9 @@ export function createStore(state: AppState): Store {
     if (m.kind === 'showBest') {
       const ply = plies.value[m.index];
       if (!ply || locked('showBest')) return NO_ARROWS;
-      return [...uciArrow(ply.uci, 'played'), ...uciArrow(m.bestUci, 'best')];
+      // The moves about as good as the best one (analysis/nearEqual.ts) too, in the alternatives' color.
+      const alts = equalAlternatives(ply.classification, ply.uci).filter((a) => a.uci !== m.bestUci);
+      return [...uciArrow(ply.uci, 'played'), ...uciArrow(m.bestUci, 'best'), ...alts.flatMap((a) => uciArrow(a.uci, 'alt'))];
     }
     if (m.kind === 'hint' && isLive.value && m.fen === liveFen.value) {
       const e = m.explanation;
@@ -924,8 +928,15 @@ export function createStore(state: AppState): Store {
     if (phase.value === 'review') {
       const ply = displayedPly.value;
       const cl = ply?.classification;
-      if (ply && cl && offersShowBest(cl, ply.uci) && !locked('reviewDetails')) return uciArrow(cl.bestMoveUci, 'best');
-      return NO_ARROWS;
+      if (!ply || !cl || !offersShowBest(cl, ply.uci) || locked('reviewDetails')) return NO_ARROWS;
+      // A move about as good as the best (analysis/nearEqual.ts) is not corrected: the engine's
+      // near-equal choices, as Show best draws them (nothing when it scored at least as well).
+      if (isNearBest(cl, ply.uci)) {
+        if (cl.aboveBest) return NO_ARROWS;
+        const alts = equalAlternatives(cl, ply.uci);
+        return [...uciArrow(cl.bestMoveUci, 'best'), ...alts.flatMap((a) => uciArrow(a.uci, 'alt'))];
+      }
+      return uciArrow(cl.bestMoveUci, 'best');
     }
     // Opening practice: the line's next move, under the best-move arrows when they are on.
     const guide = phase.value === 'playing' && humanToMove.value && isLive.value ? lineGuide.value : NO_ARROWS;
@@ -1333,7 +1344,8 @@ export function createStore(state: AppState): Store {
     return {
       kind: phase.value === 'playing' ? 'coach' : 'review',
       cls: 'best',
-      title: m.bestSan ? `Best was ${m.bestSan}` : 'Best move',
+      // "Top choices" when the played move was about as good as the best (see coach.ts).
+      title: showBestTitle(ply, m.bestSan),
       lines: m.lines,
       busy: !!m.pending,
       actions,
@@ -1386,7 +1398,8 @@ export function createStore(state: AppState): Store {
       if (showBest) actions.push(showBestAction());
       return { kind: 'review', ...verdictTitle(ply), titleMove: moveLabel(ply), lines: [lockedTeaser(ply)], busy: false, actions, index: ply.index };
     }
-    const lines = explanationLines(ply.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null);
+    const voice: NearVoice = ply.color === game.value?.playerColor ? 'you' : 'neutral';
+    const lines = explanationLines(ply.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null, { cl, playedUci: ply.uci, voice });
     const actions: CoachActionView[] = showBest ? [showBestAction()] : [];
     return { kind: 'review', ...verdictTitle(ply), titleMove: moveLabel(ply), lines, busy: false, actions, index: ply.index };
   }
@@ -1966,13 +1979,24 @@ export function createStore(state: AppState): Store {
 }
 
 /**
- * [headline, ...details] of an explanation, plus "Best was X." when `bestSan` is given and no line
- * already names X as a move ("X was needed", "X was better", "You missed X, …").
+ * [headline, ...details] of an explanation, plus a note on the better move when `bestSan` is given
+ * and no line already names X as a move ("X was needed", "X was better", "You missed X, …"): "Best
+ * was X." with the moves about as good as it ("Best was X (Y was about as good).") when `move`
+ * gives the classification, or, when the played move was about as good itself, "Your Nxd5 was
+ * fine: X was only slightly better." (nothing when it scored at least as well; analysis/
+ * nearEqual.ts `bestMoveNote`, `voice` 'neutral' for the opponent's move: "Nxd5 was fine: …").
  */
-export function explanationLines(e: Explanation | undefined | null, bestSan?: string | null): string[] {
+export function explanationLines(
+  e: Explanation | undefined | null,
+  bestSan?: string | null,
+  move?: { cl: Classification; playedUci: string; voice?: NearVoice },
+): string[] {
   // "Nf3 is a known opening move." only repeats the verdict ("Nf3 is a book move"): say what "book" means instead.
   const lines = e ? [e.headline, ...e.details].map((l) => (BOOK_ECHO.test(l) ? BOOK_MEANING : l)) : [];
-  if (bestSan && !lines.some((l) => mentionsMove(l, bestSan))) lines.push(`Best was ${bestSan}.`);
+  if (bestSan && !lines.some((l) => mentionsMove(l, bestSan))) {
+    const note = move ? bestMoveNote(move.cl, move.playedUci, move.voice) : bestWasSentence(bestSan);
+    if (note) lines.push(note);
+  }
   return lines;
 }
 
