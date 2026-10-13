@@ -9,11 +9,12 @@
 import { Chess } from 'chess.js';
 import type { AnalysisResult, Score } from '../engine/types';
 import { parseUci, uciToSan } from '../chess/utils';
-import type { Classification, EqualMove, MoveClass } from './types';
+import type { Color } from '../game/types';
+import type { Classification, EqualMove, MoveClass, WonAnyway } from './types';
 import { accuracyWin, moveAccuracy } from './accuracy';
 import { aboutAsGood, NEAR_EQUAL_RECHECK_CP, NEAR_EQUAL_SEARCH_CP, nearEqualLines, scoreRank } from './nearEqual';
 import { capturedFreeMaterial, detectSacrifice, isObviousEscape, MIN_SACRIFICE, type Sacrifice } from './sacrifice';
-import { childToMover, CP_CEILING, cpToWin, scoreToWin, type TerminalKind } from './winprob';
+import { childToMover, CP_CEILING, cpToWin, negateScore, scoreToWin, type TerminalKind } from './winprob';
 
 /** Upper bounds (exclusive) of EP loss per class, from chess.com's table. Loss >= mistake is a blunder. */
 export const EP_THRESHOLDS = { excellent: 0.02, good: 0.05, inaccuracy: 0.1, mistake: 0.2 } as const;
@@ -153,6 +154,8 @@ export interface ClassifyVerdict {
   winLoss: number;
   accuracy: number;
   reasons: ClassReason[];
+  /** See `Classification.wonAnyway` (and `wonAnywayOf`). */
+  wonAnyway?: WonAnyway;
 }
 
 /**
@@ -203,6 +206,52 @@ function baseClass(
   return o.estimated ? worst(cls, 'good') : cls;
 }
 
+/**
+ * `Classification.wonAnyway`: a weak class that only the mate-distance rules gave, while the move
+ * kept a won game. Either a checkmate more than six moves slower than the best one (the coach's own
+ * `mate_slower` ladder), or a forced mate given up for a position still +10 or better (lichess's
+ * `lost_mate` floor, when the loss in winning chances alone would not make the move weak). The best
+ * line is a forced mate either way (`mateIn`). Only ever an inaccuracy (the ladder stops there, and
+ * the floor gives one from +10 on). Null for any other move.
+ */
+function wonAnywayOf(
+  cls: MoveClass,
+  best: MoverEval,
+  played: MoverEval,
+  loss: number,
+  reasons: readonly ClassReason[],
+): WonAnyway | null {
+  if (!WEAK.has(cls) || best.kind !== 'mate' || best.value <= 0) return null;
+  if (reasons.includes('mate_slower') && isMateFor(played)) return { kind: 'slower', mateIn: best.value };
+  const keepsWon = played.kind === 'cp' && played.value >= CP_CEILING;
+  if (reasons.includes('lost_mate') && keepsWon && !WEAK.has(classifyByWinLoss(loss))) return { kind: 'lost', mateIn: best.value };
+  return null;
+}
+
+/**
+ * `Classification.wonAnyway` from the evaluations a game record keeps, for records kept before the
+ * game history stored it (game/archive.ts `decodeAnalysis`): White's point of view of the position
+ * before the move (best play) and after it, as `Ply.evalWhite` stores them. An inaccuracy (the only
+ * class `wonAnywayOf` gives it) from a forced mate that still mates ('slower') or keeps +10 or better
+ * ('lost'). Null when an evaluation is missing or the move does not fit.
+ */
+export function wonAnywayFromEvals(
+  cls: MoveClass,
+  beforeWhite: Score | null | undefined,
+  afterWhite: Score | null | undefined,
+  mover: Color,
+): WonAnyway | null {
+  if (cls !== 'inaccuracy' || !beforeWhite || !afterWhite) return null;
+  const mine = (s: Score): Score => (mover === 'w' ? s : negateScore(s));
+  const before = mine(beforeWhite);
+  if (before.kind !== 'mate' || before.value <= 0) return null;
+  // `mate 0` after the move: it checkmated, never a weak move.
+  if (afterWhite.kind === 'mate' && afterWhite.value === 0) return null;
+  const after = mine(afterWhite);
+  if (after.kind === 'mate') return after.value > 0 ? { kind: 'slower', mateIn: before.value } : null;
+  return after.value >= CP_CEILING ? { kind: 'lost', mateIn: before.value } : null;
+}
+
 /** Classifies a move from engine evaluations alone (no board access). */
 export function classifyFromEvals(f: ClassifyFacts): ClassifyVerdict {
   const t = ratingTier(f.rating);
@@ -221,14 +270,10 @@ export function classifyFromEvals(f: ClassifyFacts): ClassifyVerdict {
   const epBest = best ? evalToWin(best.score) : epPlayed;
   const loss = Math.max(0, epBest - epPlayed);
   const accuracy = best && played ? moveAccuracy(evalToAccuracyWin(best.score), evalToAccuracyWin(played)) : 100;
-  const verdict = (cls: MoveClass): ClassifyVerdict => ({
-    cls,
-    winBefore: epBest,
-    winAfter: epPlayed,
-    winLoss: loss,
-    accuracy,
-    reasons,
-  });
+  const verdict = (cls: MoveClass): ClassifyVerdict => {
+    const won = best && played && !estimated ? wonAnywayOf(cls, best.score, played, loss, reasons) : null;
+    return { cls, winBefore: epBest, winAfter: epPlayed, winLoss: loss, accuracy, reasons, ...(won ? { wonAnyway: won } : {}) };
+  };
 
   let base: MoveClass = 'good';
   if (best && played) {
@@ -366,6 +411,12 @@ export interface ClassifyMoveDetail {
    * and `bestAfter` was not given; null otherwise.
    */
   recheckFen: string | null;
+  /**
+   * That search can change the class itself, not only the near-equal verdict: a listed move whose
+   * own search scores it far above its line is judged against the best move's own search (see
+   * `secondOpinionNeed`).
+   */
+  recheckAffectsClass: boolean;
 }
 
 /** Classifies a move and also returns the reasons and any sacrificed / hung piece. Never throws. */
@@ -486,10 +537,12 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
       ...(equalBest.length ? { equalBest } : {}),
       ...(near.nearBest !== undefined ? { nearBest: near.nearBest } : {}),
       ...(near.aboveBest ? { aboveBest: true } : {}),
+      ...(v.wonAnyway ? { wonAnyway: v.wonAnyway } : {}),
     },
     reasons: v.reasons,
     sacrifice,
     recheckFen,
+    recheckAffectsClass: recheckFen !== null && disputed && !p.bestAfter,
   };
 }
 
@@ -504,6 +557,21 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
  */
 export function nearBestRecheck(p: ClassifyMoveInput): string | null {
   return p.bestAfter ? null : classifyMoveDetailed(p).recheckFen;
+}
+
+/**
+ * The second opinion this move needs (`nearBestRecheck`'s position), and whether it can change its
+ * class (`affectsClass`): only for a listed move whose own search scores it more than
+ * `LISTED_DISPUTE_CP` above its line, which is then judged against the best move's own search.
+ * Otherwise it settles only the near-equal verdict (`nearBest`, `aboveBest`, `equalBest`) and so
+ * the words, never the class, its win chances or accuracy, and a smaller search does (GameController
+ * SECOND_OPINION). Either way it comes before the verdict, so its words never change once shown.
+ * Null when none is needed.
+ */
+export function secondOpinionNeed(p: ClassifyMoveInput): { fen: string; affectsClass: boolean } | null {
+  if (p.bestAfter) return null;
+  const d = classifyMoveDetailed(p);
+  return d.recheckFen ? { fen: d.recheckFen, affectsClass: d.recheckAffectsClass } : null;
 }
 
 /**

@@ -520,6 +520,7 @@ function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean>
         title={coach.title}
         titleMove={coach.titleMove}
         lines={coach.lines}
+        summary={coach.summary}
         busy={coach.busy}
         collapsed={collapsed}
         onToggleCollapsed={tight ? () => setPeek((p) => !p) : () => c.toggleCoachCollapsed()}
@@ -756,8 +757,9 @@ function Sheets({
   if (sh.assist) lastAssist.current = sh.assist;
   const assist = lastAssist.current;
   const close = () => c.closeSheet();
-  // The player's weak moves of the finished game to try again (the game-over sheet's button).
-  const tries = c.store.tryAgainMoments.value;
+  // The player's weak moves of the finished game to try again (the game-over sheet's button), not
+  // those made when already winning (the note above it says they cost nothing).
+  const tries = c.store.sheetTries.value;
   return (
     <>
       <NewGameSheet
@@ -843,13 +845,13 @@ function Sheets({
           {...over}
           open={sh.open === 'gameOver' && !!sh.gameOver}
           tryAgain={
-            tries.size
+            tries.length
               ? {
-                  count: tries.size,
+                  count: tries.length,
                   // The first of them (game order); Next mistake goes on from there.
                   onClick: () => {
                     close();
-                    c.tryAgain(Math.min(...tries));
+                    c.tryAgain(tries[0]);
                   },
                 }
               : null

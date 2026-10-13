@@ -196,6 +196,22 @@ describe('saved game', () => {
     expect('nearBest' in old || 'equalBest' in old).toBe(false);
   });
 
+  it('a weak class a won game made all but free: round-trips wonAnyway, drops a malformed one, loads older saves', () => {
+    const won: Classification = { ...classification, cls: 'inaccuracy', wonAnyway: { kind: 'slower', mateIn: 2 } };
+    const game = savedGame({ annotations: { 3: { classification: won } } });
+    expect(saveGame(game)).toBe(true);
+    expect(loadGame()).toEqual(game);
+    const bad = (wonAnyway: unknown) => {
+      storage.setItem(GAME_KEY, JSON.stringify({ ...savedGame(), annotations: { 3: { classification: { ...classification, wonAnyway } } } }));
+      return loadGame()!.annotations[3].classification;
+    };
+    expect(bad({ kind: 'lost', mateIn: 1 })).toEqual({ ...classification, wonAnyway: { kind: 'lost', mateIn: 1 } });
+    expect(bad({ kind: 'faster', mateIn: 2 })).toEqual(classification);
+    expect(bad({ kind: 'slower', mateIn: 0 })).toEqual(classification);
+    expect(bad({ kind: 'slower', mateIn: 1.5 })).toEqual(classification);
+    expect(bad('slower')).toEqual(classification);
+  });
+
   it('retries without explanations when the quota is exceeded', () => {
     const limited = new MemoryStorage();
     limited.setItem = function (k: string, v: string) {

@@ -4,7 +4,9 @@
  *
  * The PGN is the source of truth for the moves. The analysis is a few characters per move: the class
  * letter, the White-POV evaluation after the move, flags (about as good as the best, at least as
- * good, what it gives away) and the engine's better move, e.g. "s34", "e-12:g1f3", "bn#-3:d1h5"; the
+ * good, what it gives away), a weak class a won game made all but free ('w' a slower mate, 'l' a mate
+ * given up, with the best line's mate) and the engine's better move, e.g. "s34", "e-12:g1f3",
+ * "bn#-3:d1h5", "i#9w1:e1e8"; the
  * explanation headlines of the key moments ride along (`h`), for Game Review's list and Try again's
  * reason. Everything else (win chances, accuracy per move, the better move's SAN) is derived again.
  * A 60-move game takes about 3 KB with its PGN (measured in tests/game/archive.test.ts), so 200 games
@@ -13,8 +15,9 @@
  * Pure: no engine, DOM or signals (the controller and the store use it).
  */
 import { Chess, type Move } from 'chess.js';
-import type { Classification, Explanation, MoveClass } from '../analysis/types';
+import type { Classification, Explanation, MoveClass, WonAnyway } from '../analysis/types';
 import { moveAccuracy } from '../analysis/accuracy';
+import { wonAnywayFromEvals } from '../analysis/classify';
 import { negateScore, scoreToWin } from '../analysis/winprob';
 import { BOTS, customPersona, personaById } from '../bot/personas';
 import type { BotPersona } from '../bot/types';
@@ -42,8 +45,11 @@ const CLASS_CODE: Record<MoveClass, string> = {
 const CODE_CLASS: Record<string, MoveClass> = Object.fromEntries(
   Object.entries(CLASS_CODE).map(([cls, code]) => [code, cls as MoveClass]),
 );
-/** class, eval (centipawns, or "#" and moves to mate), flags (n a c d), ":" and the better move. */
-const TOKEN = /^([BGsegkfimxb-])(#-?\d{1,3}|-?\d{1,5})?([nacd]*)(?::([a-h][1-8][a-h][1-8][qrbn]?))?$/;
+/**
+ * class, eval (centipawns, or "#" and moves to mate), flags (n a c d), `wonAnyway` (w or l and the
+ * best line's mate in moves), ":" and the better move.
+ */
+const TOKEN = /^([BGsegkfimxb-])(#-?\d{1,3}|-?\d{1,5})?([nacd]*)(?:([wl])(\d{1,3}))?(?::([a-h][1-8][a-h][1-8][qrbn]?))?$/;
 /** The longest explanation headline kept for a key moment. */
 const MAX_HEADLINE = 200;
 
@@ -94,11 +100,13 @@ export function encodeAnalysis(
     const concedes = p.explanation?.concedes;
     if (concedes === 'material') t += 'c';
     else if (concedes === 'mate') t += 'd';
+    const won = cl?.wonAnyway;
+    if (won && Number.isInteger(won.mateIn) && won.mateIn > 0 && won.mateIn < 1000) t += `${won.kind === 'slower' ? 'w' : 'l'}${won.mateIn}`;
     const best = cl?.bestMoveUci;
     if (cl && best && best !== p.uci && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(best)) t += `:${best}`;
     return t;
   });
-  const out: CompactAnalysis = { v: 1, s: encodeScore(startEval), p: tokens.join(' ') };
+  const out: CompactAnalysis = { v: 1, s: encodeScore(startEval), p: tokens.join(' '), w: 1 };
   const h: Record<string, string> = {};
   for (const i of keyMomentIndexes(plies, opts.playerColor, opts.preplayed)) {
     const headline = plies[i]?.explanation?.headline;
@@ -140,7 +148,7 @@ export function mergeAnalysis(kept: CompactAnalysis | null | undefined, next: Co
     if (a[i] === t && !h[k] && kept.h?.[k]) h[k] = kept.h[k];
     return t;
   });
-  const out: CompactAnalysis = { v: 1, s: next.s || kept.s, p: tokens.join(' ') };
+  const out: CompactAnalysis = { v: 1, s: next.s || kept.s, p: tokens.join(' '), ...(next.w ? { w: 1 as const } : {}) };
   if (Object.keys(h).length) out.h = h;
   return out;
 }
@@ -151,7 +159,7 @@ export function sameAnalysis(a: CompactAnalysis | null | undefined, b: CompactAn
   const ha = a.h ?? {};
   const hb = b.h ?? {};
   const ka = Object.keys(ha);
-  return a.s === b.s && a.p === b.p && ka.length === Object.keys(hb).length && ka.every((k) => ha[k] === hb[k]);
+  return a.s === b.s && a.p === b.p && !!a.w === !!b.w && ka.length === Object.keys(hb).length && ka.every((k) => ha[k] === hb[k]);
 }
 
 /** The mover's expected score from a White-POV evaluation of the position after a move (0..1). */
@@ -176,6 +184,8 @@ export function decodeAnalysis(
   const tokens = analysis.p ? analysis.p.split(' ') : [];
   if (tokens.length !== plies.length) return { plies: out, startEval: null };
   const startEval = decodeScore(analysis.s);
+  // Kept before the history stored `wonAnyway`: it is judged from the evaluations kept.
+  const legacy = analysis.w !== 1;
   let prevEval: Score | null = startEval;
   out.forEach((p, i) => {
     const m = TOKEN.exec(tokens[i]);
@@ -189,7 +199,7 @@ export function decodeAnalysis(
     // The mover's chances before (best play from the previous position) and after the move.
     const winBefore = moverWin(before, p.color, false) ?? 0.5;
     const winAfter = moverWin(evalWhite, p.color, true) ?? winBefore;
-    const best = m[4] ?? null;
+    const best = m[6] ?? null;
     const flags = m[3];
     const cl: Classification = {
       cls,
@@ -210,6 +220,12 @@ export function decodeAnalysis(
       delete cl.nearBest;
       delete cl.aboveBest;
     }
+    const won: WonAnyway | null = m[4]
+      ? { kind: m[4] === 'w' ? 'slower' : 'lost', mateIn: Number(m[5]) }
+      : legacy
+        ? wonAnywayFromEvals(cls, before, evalWhite, p.color)
+        : null;
+    if (won && won.mateIn > 0) cl.wonAnyway = won;
     p.classification = cl;
     if (cls === 'book') p.isBook = true;
     const headline = analysis.h?.[String(i)];

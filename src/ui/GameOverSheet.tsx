@@ -52,6 +52,11 @@ export interface GameOverPlay {
   accuracy: { you: number | null; bot: number | null };
   /** The player's weak moves by class. */
   counts: { blunder: number; mistake: number; miss: number; inaccuracy: number };
+  /**
+   * How many of the player's weak moves came when they were already winning, which do not lower
+   * their accuracy (game/review.ts `alreadyWonSheetNote`). Omitted when none did.
+   */
+  note?: string;
 }
 
 /** "2 mistakes, 1 blunder" (the player's weak moves), or "No mistakes or blunders". */
@@ -235,6 +240,11 @@ export function GameOverSheet({
                     Accuracy: <strong>You {formatPct(play.accuracy.you)}</strong> · {botName} {formatPct(play.accuracy.bot)}
                   </span>
                   <span class="gos-play-weak">You: {weakMovesText(play.counts)}</span>
+                  {play.note && (
+                    <span class="gos-play-note" data-id="accuracy-note">
+                      {play.note}
+                    </span>
+                  )}
                 </>
               )}
             </div>

@@ -204,6 +204,12 @@
 .gos-play-pending {
   color: var(--text-faint);
 }
+.gos-play-note {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-faint);
+}
 .gos-play + .gos-rating {
   margin-top: 8px;
 }

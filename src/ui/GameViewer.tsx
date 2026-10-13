@@ -231,6 +231,7 @@ function Panel(p: GameViewerProps) {
         title={c.title}
         titleMove={c.titleMove}
         lines={c.lines}
+        summary={c.summary}
         busy={c.busy}
         collapsed={tight && !peek}
         onToggleCollapsed={tight ? () => setPeek((x) => !x) : undefined}

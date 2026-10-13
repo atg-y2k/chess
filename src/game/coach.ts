@@ -6,7 +6,7 @@ import { Chess, type Square } from 'chess.js';
 import { explainBestMove, type PrevMove } from '../analysis/explain';
 import { bestWasSentence, equalAlternatives, isNearBest } from '../analysis/nearEqual';
 import { see } from '../analysis/see';
-import type { Classification, Explanation, MoveClass } from '../analysis/types';
+import type { Classification, Explanation, MoveClass, WonAnyway } from '../analysis/types';
 import { formatScore } from '../analysis/winprob';
 import { PIECE_VALUES, sideToMove, toWhitePov, uciToSan, whitePovTo, type SeenPositions } from '../chess/utils';
 import type { PvLine, Score } from '../engine/types';
@@ -382,6 +382,48 @@ export function answerFreeLines(e: Explanation | undefined | null, cl: Classific
     lines.unshift(lead);
   }
   return lines.length ? lines : [ANSWER_FREE_LEAD[cl.cls] ?? 'There was a better move here.'];
+}
+
+/**
+ * The line that says why a weak class costs (almost) nothing (`Classification.wonAnyway`), added to
+ * the coach's explanation:
+ * - a slower checkmate: "A faster mate was available (Qh7+, mate in 3), but you were winning
+ *   anyway." (the explanation says how the move mates: "Qb1 still forces mate in 9."). The better
+ *   move and its mate show only with `reveal`: never while it is still to be found (Retry, Try again,
+ *   a punishment still to be found, a rated game in the game viewer), when the line says only "A
+ *   faster mate was available, but you were winning anyway.";
+ * - a forced mate given up for a position still +10 or better: "You were winning anyway, so the
+ *   missed mate hardly matters." (the explanation already names the mate: "You missed a forced mate
+ *   in 2.").
+ * `who`: 'you' for the player's move, else the mover in the third person (the opponent's name, or
+ * "White"): "Pip had a faster mate (Qh2#), but was winning anyway." Null without `won`.
+ */
+export function wonAnywayLine(
+  cl: Pick<Classification, 'bestMoveSan'>,
+  won: WonAnyway | null | undefined,
+  o: { who: 'you' | string; reveal: boolean },
+): string | null {
+  if (!won) return null;
+  const you = o.who === 'you';
+  if (won.kind === 'lost') return `${you ? 'You were' : `${o.who} was`} winning anyway, so the missed mate hardly matters.`;
+  const which = [cl.bestMoveSan, won.mateIn > 1 || !cl.bestMoveSan ? `mate in ${won.mateIn}` : null].filter(Boolean).join(', ');
+  const named = o.reveal && which ? ` (${which})` : '';
+  return you
+    ? `A faster mate was available${named}, but you were winning anyway.`
+    : `${o.who} had a faster mate${named}, but was winning anyway.`;
+}
+
+/**
+ * The collapsed coach row's line for a move with `wonAnywayLine` (the row shows the title and one
+ * line, cut to fit after a few words): the reassurance first, so "1. f3 is an inaccuracy" is not
+ * left alone beside a move that mates. "Still winning: a faster mate was available." ("Pip was still
+ * winning: …"), "Still winning: the missed mate hardly matters." for a mate given up. Null without
+ * `won`.
+ */
+export function wonAnywaySummary(won: WonAnyway | null | undefined, who: 'you' | string): string | null {
+  if (!won) return null;
+  const lead = who === 'you' ? 'Still winning' : `${who} was still winning`;
+  return `${lead}: ${won.kind === 'lost' ? 'the missed mate hardly matters' : 'a faster mate was available'}.`;
 }
 
 /** Who the repetition text speaks about (see `repetitionExplanation`). */

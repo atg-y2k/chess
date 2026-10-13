@@ -376,6 +376,7 @@ const MAX_HEADLINE_CHARS = 300;
 export function sanitizeAnalysis(v: unknown): CompactAnalysis | null {
   if (!isObject(v) || v.v !== 1 || typeof v.p !== 'string' || v.p.length > MAX_ANALYSIS_CHARS) return null;
   const out: CompactAnalysis = { v: 1, s: typeof v.s === 'string' && v.s.length <= 12 ? v.s : '', p: v.p };
+  if (v.w === 1) out.w = 1;
   if (isObject(v.h)) {
     const h: Record<string, string> = {};
     for (const [k, text] of Object.entries(v.h)) {

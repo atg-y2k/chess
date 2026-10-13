@@ -28,6 +28,12 @@ export interface ReviewPanelProps {
   /** 0..1 while analysing the game, null when complete. */
   progress: number | null;
   accuracy: { w: number | null; b: number | null };
+  /**
+   * Under the accuracies: how many of a side's weak moves came when it was already winning, which do
+   * not lower its accuracy (game/review.ts `alreadyWonNote`), the player's first. Omitted (or empty)
+   * when no weak move came in a won game.
+   */
+  accuracyNotes?: readonly string[];
   counts: Record<Color, Partial<Record<MoveClass, number>>>;
   playerColor: Color;
   names: { w: string; b: string };
@@ -115,6 +121,7 @@ function ConcessionIcon({ label, size }: { label: string; size: number }) {
 export function ReviewPanel({
   progress,
   accuracy,
+  accuracyNotes,
   counts,
   playerColor,
   names,
@@ -133,6 +140,18 @@ export function ReviewPanel({
 
   // Your mistakes to try again come first (the counts follow): on a phone the report opens on them.
   const tryFirst = !locked && !!onTryAgain && keyMoments.some((m) => m.tryAgain);
+  // Under the accuracies: weak moves made when that side was already winning, which accuracy does
+  // not count (why "99.1" can sit beside "Inaccuracy 9").
+  const notes =
+    !analysing && accuracyNotes?.length ? (
+      <div class="review-notes" data-id="accuracy-notes">
+        {accuracyNotes.map((n) => (
+          <p key={n} class="review-note" data-id="accuracy-note">
+            {n}
+          </p>
+        ))}
+      </div>
+    ) : null;
   const table = (
     <table class="review-table">
       <thead>
@@ -287,6 +306,7 @@ export function ReviewPanel({
       )}
 
       <div class="review-body" data-moments-first={tryFirst ? '' : undefined}>
+        {notes}
         {tryFirst ? (
           <>
             {moments}

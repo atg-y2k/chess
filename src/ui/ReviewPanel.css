@@ -108,6 +108,19 @@
   background: var(--surface-2);
 }
 
+/* Under the accuracies: weak moves made when that side was already winning (why accuracy stays high). */
+.review-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 2px 10px;
+}
+.review-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
 .review-progress-row {
   flex: none;
   display: flex;

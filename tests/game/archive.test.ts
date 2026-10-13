@@ -97,6 +97,8 @@ describe('compact analysis', () => {
       s: '18',
       p: 'k30 k35 i-10:g1f3 g20n:g8f6 b-650:g1f3 s#-12',
       h: { '2': 'Qh5 brings the queen out early.', '4': 'Qxf7+ grabs a pawn, but it hangs your queen on f7.' },
+      // The tokens say which weak moves a won game made all but free (none here).
+      w: 1,
     });
     const back = decodeAnalysis(pliesOf(plies.map((p) => p.uci)), a);
     expect(back.startEval).toEqual(cp(18));

@@ -35,11 +35,12 @@ export const THREAT_LINE_PLIES = 6;
 export const THREAT_DEPTH = 12;
 /**
  * Node budget of each probe search: 150k nodes, about 0.3 s on an iPhone. The two searches of a
- * position are queued together, before the annotation of the opponent's move, and run one after
- * the other on the analysis engine (about 0.6 s): the alert shows that soon, also while the
- * opponent's move is still being rated (unless it could hint at the punishment of a mistake, see
- * `ThreatAlert.best`), and the annotation waits that long. The bot has its own engine (or priority
- * on a shared one).
+ * position are asked together right after the opponent's move, with its priority (GameController
+ * ANALYSIS_PRIORITY.opponent), so ahead of its rating, and run one after the other on the analysis
+ * engine (about 0.6 s): the alert shows that soon, also while the opponent's move is still being
+ * rated (unless it could hint at the punishment of a mistake, see `ThreatAlert.best`). The player's
+ * move withdraws them, and the searches of its verdict come first. The bot has its own engine (or
+ * priority on a shared one).
  */
 export const THREAT_NODES = 150_000;
 /** A probe search cut short below this depth tells nothing (no alert). */

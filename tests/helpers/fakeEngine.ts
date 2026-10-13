@@ -108,6 +108,7 @@ export function scoreMoves(fen: string): Scored[] {
 }
 
 interface Pending {
+  fen: string;
   finish: (aborted: boolean) => void;
 }
 
@@ -132,6 +133,11 @@ export class FakeEngine implements ChessEngine {
   nodeCapDepth = 0;
   /** Fixed engine lines by position (`fenKey`), best first: a search of that position returns them. */
   readonly fixed = new Map<string, PvLine[]>();
+  /**
+   * When true, a search waits for `finishSearch()` (or pre-emption, or abort) instead of ending
+   * after `delayMs`: the test decides when each result lands.
+   */
+  manual = false;
   private pending: Pending | null = null;
 
   constructor(readonly name = 'fake') {}
@@ -171,9 +177,9 @@ export class FakeEngine implements ChessEngine {
         );
       };
       const onAbort = () => finish(true);
-      const entry: Pending = { finish };
+      const entry: Pending = { fen, finish };
       this.pending = entry;
-      const timer = setTimeout(() => finish(false), this.delayMs);
+      const timer = this.manual ? undefined : setTimeout(() => finish(false), this.delayMs);
       if (opts.signal?.aborted) finish(true);
       else opts.signal?.addEventListener('abort', onAbort, { once: true });
     });
@@ -181,6 +187,19 @@ export class FakeEngine implements ChessEngine {
 
   stop(): void {
     this.pending?.finish(true);
+  }
+
+  /** The position being searched (one search at a time), or null. */
+  get searching(): string | null {
+    return this.pending?.fen ?? null;
+  }
+
+  /** Ends the search in progress normally (see `manual`); false when there is none. */
+  finishSearch(): boolean {
+    const p = this.pending;
+    if (!p) return false;
+    p.finish(false);
+    return true;
   }
 
   newGame(): Promise<void> {

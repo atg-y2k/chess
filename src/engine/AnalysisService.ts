@@ -1,9 +1,13 @@
 /**
  * Cached, prioritized analysis on top of one ChessEngine (full strength).
  *
- *  - `ensure()` requests run FIFO and take priority over live analysis (they pre-empt it; it
- *    resumes afterwards). Identical/overlapping requests are deduplicated, and a request is
- *    answered straight from the cache when a good enough result is already known.
+ *  - `ensure()` requests run by `priority` (higher first; FIFO among equals) and take priority over
+ *    live analysis (they pre-empt it; it resumes afterwards). A request of a higher priority also
+ *    pre-empts a running `ensure()` search of a lower one, which goes back into the queue (and
+ *    resumes on a warm hash): the coach's verdict on the player's move never waits behind the
+ *    opponent's move or a threat probe. Identical/overlapping requests are deduplicated (a
+ *    shared search takes the highest priority asked), and a request is answered straight from the
+ *    cache when a good enough result is already known.
  *  - Every search has a node budget as well as a depth: `ensure()` stops at `minDepth` or after
  *    `maxNodes` nodes (default `defaultEnsureNodes(multiPv)`, about 2-3 s on an iPhone), whichever
  *    comes first. Depth 14 usually takes a few hundred thousand nodes, but in some positions one
@@ -96,6 +100,12 @@ export interface EnsureOptions {
    * explorer's when it closes, so they do not hold the queue for the game's own.
    */
   signal?: AbortSignal;
+  /**
+   * Higher runs first (default 0); requests of the same priority run in the order they came. A
+   * request of a higher priority than the running `ensure()` search pre-empts it: that search is
+   * put back in the queue and searched again (on a warm hash) when its turn comes.
+   */
+  priority?: number;
 }
 
 interface CacheEntry {
@@ -114,6 +124,7 @@ interface Waiter {
   minDepth: number;
   multiPv: number;
   maxNodes: number;
+  priority: number;
   resolve: (r: AnalysisResult) => void;
 }
 
@@ -126,6 +137,8 @@ interface Job {
   maxNodes: number;
   /** 'ensure' jobs have waiters and block the queue; 'live' jobs serve the watched position. */
   kind: 'ensure' | 'live';
+  /** The highest `EnsureOptions.priority` of its waiters (the queue's order). */
+  priority: number;
   waiters: Waiter[];
   ctl: AbortController;
   /** Intentionally pre-empted (new live target, pause, cancel): its abort is expected. */
@@ -194,6 +207,7 @@ export class AnalysisService {
     const minDepth = Math.max(1, Math.round(opts.minDepth));
     const multiPv = Math.max(1, Math.round(opts.multiPv ?? 1));
     const maxNodes = nodeBudget(opts.maxNodes ?? this.ensureNodes(multiPv));
+    const priority = Number.isFinite(opts.priority) ? (opts.priority as number) : 0;
     const hit = this.lookup(key, minDepth, multiPv, maxNodes);
     if (hit) {
       this.touch(key);
@@ -206,7 +220,7 @@ export class AnalysisService {
     }
     if (this.broken || signal?.aborted) return Promise.resolve(this.bestSoFar(key, fen));
     return new Promise<AnalysisResult>((resolve) => {
-      const waiter: Waiter = { fen, minDepth, multiPv, maxNodes, resolve };
+      const waiter: Waiter = { fen, minDepth, multiPv, maxNodes, priority, resolve };
       if (signal) {
         const onAbort = () => this.withdraw(waiter);
         signal.addEventListener('abort', onAbort, { once: true });
@@ -219,6 +233,8 @@ export class AnalysisService {
       if (r && !r.superseded && !r.ended && r.key === key && covers(r, minDepth, multiPv, maxNodes)) {
         // Already searching this position deeply enough (typically the live search): join it.
         r.waiters.push(waiter);
+        if (r.kind === 'live') r.priority = priority;
+        else r.priority = Math.max(r.priority, priority);
         r.kind = 'ensure';
         return;
       }
@@ -228,11 +244,42 @@ export class AnalysisService {
         queued.multiPv = Math.max(queued.multiPv, multiPv);
         queued.maxNodes = Math.max(queued.maxNodes, maxNodes);
         queued.waiters.push(waiter);
+        if (priority > queued.priority) {
+          // Asked for sooner: it moves up the queue (and may pre-empt the running search).
+          queued.priority = priority;
+          this.queue = this.queue.filter((j) => j !== queued);
+          this.enqueue(queued);
+          this.preemptFor(priority);
+        }
         return;
       }
-      this.queue.push(this.newJob(key, fen, minDepth, multiPv, maxNodes, 'ensure', [waiter]));
-      this.pump();
+      this.enqueue(this.newJob(key, fen, minDepth, multiPv, maxNodes, 'ensure', [waiter], priority));
+      if (!this.preemptFor(priority)) this.pump();
     });
+  }
+
+  /**
+   * Puts a job in the queue by priority: after the jobs of the same or a higher one (FIFO), or
+   * before those of the same one with `front` (a search put back after it was cut short, which
+   * keeps its turn).
+   */
+  private enqueue(job: Job, front = false): void {
+    const i = this.queue.findIndex((j) => (front ? j.priority <= job.priority : j.priority < job.priority));
+    if (i < 0) this.queue.push(job);
+    else this.queue.splice(i, 0, job);
+  }
+
+  /**
+   * A request of `priority` is waiting: a running `ensure()` search of a lower priority is cut
+   * short and put back in the queue (it runs again, on a warm hash, when its turn comes). Returns
+   * whether it did (the end of that search starts the next one).
+   */
+  private preemptFor(priority: number): boolean {
+    const r = this.running;
+    if (!r || r.kind !== 'ensure' || r.superseded || r.ended || r.priority >= priority || this.paused) return false;
+    r.requeue = true;
+    this.supersede(r);
+    return true;
   }
 
   /** Live analysis target (null = none). Streams updates to subscribers; stops at liveDepth. */
@@ -319,7 +366,17 @@ export class AnalysisService {
     if (!job) return; // already answered
     job.waiters = job.waiters.filter((x) => x !== w);
     w.resolve(this.bestSoFar(job.key, w.fen));
-    if (job.waiters.length) return;
+    if (job.waiters.length) {
+      // The ones left may have asked for it later: it takes their turn.
+      const priority = Math.max(...job.waiters.map((x) => x.priority));
+      if (priority === job.priority) return;
+      job.priority = priority;
+      if (job !== r) {
+        this.queue = this.queue.filter((j) => j !== job);
+        this.enqueue(job);
+      } else if (this.queue[0]) this.preemptFor(this.queue[0].priority);
+      return;
+    }
     if (job !== r) {
       this.queue = this.queue.filter((j) => j !== job);
       return;
@@ -348,6 +405,7 @@ export class AnalysisService {
     maxNodes: number,
     kind: Job['kind'],
     waiters: Waiter[],
+    priority = 0,
   ): Job {
     return {
       key,
@@ -356,6 +414,7 @@ export class AnalysisService {
       multiPv,
       maxNodes,
       kind,
+      priority,
       waiters,
       ctl: new AbortController(),
       superseded: false,
@@ -377,6 +436,7 @@ export class AnalysisService {
       if (r && !r.superseded && r.key === job.key && covers(r, job.depth, job.multiPv, job.maxNodes)) {
         // The live search already covers it: promote instead of restarting.
         r.waiters.push(...job.waiters);
+        r.priority = r.kind === 'live' ? job.priority : Math.max(r.priority, job.priority);
         r.kind = 'ensure';
         return;
       }
@@ -454,13 +514,13 @@ export class AnalysisService {
     if (!res.aborted) {
       this.resolveWaiters(job, res, nodes, true);
       // Left: requests that joined a search with a smaller budget, which ran out below their depth.
-      if (job.waiters.length) this.queue.unshift(this.jobFor(job));
+      if (job.waiters.length) this.enqueue(this.jobFor(job), true);
       this.accept(res, true, job.key);
     } else if (job.requeue) {
       job.requeue = false;
       this.resolveFromCache(job);
       if (job.waiters.length) {
-        this.queue.unshift(this.newJob(job.key, job.fen, job.depth, job.multiPv, job.maxNodes, 'ensure', job.waiters));
+        this.enqueue(this.newJob(job.key, job.fen, job.depth, job.multiPv, job.maxNodes, 'ensure', job.waiters, job.priority), true);
       }
     } else if (!job.superseded) {
       // Unexpected abort: the engine restarted after a crash or hang. It is usable again, so
@@ -472,7 +532,7 @@ export class AnalysisService {
         // comes back as that ensure() only.
         const retry = this.jobFor(job);
         retry.retries = job.retries + 1;
-        this.queue.unshift(retry);
+        this.enqueue(retry, true);
       } else {
         this.abortWaiters(job);
       }
@@ -491,6 +551,7 @@ export class AnalysisService {
       Math.max(...ws.map((w) => w.maxNodes)),
       'ensure',
       ws,
+      Math.max(...ws.map((w) => w.priority)),
     );
   }
 

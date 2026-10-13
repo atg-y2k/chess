@@ -368,13 +368,20 @@ function isClassification(v: unknown): v is Classification {
 
 /**
  * A valid classification, with its optional near-equal fields (`equalBest`, `nearBest`, `aboveBest`
- * with `nearBest`) kept only when well formed (a malformed one is dropped: the coach then words the move as older saves).
+ * with `nearBest`) and `wonAnyway` kept only when well formed (a malformed one is dropped: the coach
+ * then words the move as older saves).
  */
 function sanitizeClassification(v: unknown): Classification | null {
   if (!isClassification(v)) return null;
   const c = { ...v } as Classification & Record<string, unknown>;
   if ('nearBest' in c && typeof c.nearBest !== 'boolean') delete c.nearBest;
   if ('aboveBest' in c && (typeof c.aboveBest !== 'boolean' || c.nearBest !== true)) delete c.aboveBest;
+  if ('wonAnyway' in c) {
+    const w = c.wonAnyway as unknown;
+    const ok =
+      isObject(w) && (w.kind === 'slower' || w.kind === 'lost') && Number.isInteger(w.mateIn) && (w.mateIn as number) > 0;
+    if (!ok) delete c.wonAnyway;
+  }
   if ('equalBest' in c) {
     const isMove = (m: unknown) =>
       isObject(m) && typeof m.san === 'string' && typeof m.uci === 'string' && (!('score' in m) || isScore(m.score));

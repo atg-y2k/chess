@@ -1326,6 +1326,21 @@ function explainMoveUnsafe(input: ExplainMoveInput): Explanation {
   // Mate distances in moves from before this move, like `bestMate` (the reply's score counts from after it).
   const iHadMate = bestMate !== null && bestMate > 0 ? bestMate : 0;
   const iStillMate = replyMate !== null && replyMate <= 0 ? -replyMate + 1 : 0;
+  // A checkmate more than six moves slower, which only the mate-distance rule calls an inaccuracy
+  // (`Classification.wonAnyway`): what the move does. The coach adds the faster mate, and that the
+  // game was won anyway (game/coach.ts `wonAnywayLine`), so no "Best was …" here. Before the missed
+  // mate: the class rests on the move's listed mate, which the reply's search may not see.
+  if (cl.wonAnyway?.kind === 'slower' && !isBest) {
+    const listed = mateOf(playedInBefore?.score);
+    const mateIn = listed !== null && listed > 0 ? listed : iStillMate;
+    arrows.push(...arrow(bestUci, 'best'));
+    return done(
+      mateIn ? `${move.san} still forces mate in ${mateIn}.` : `${move.san} still forces mate.`,
+      [],
+      'Slower mate',
+      ['slowerMate'],
+    );
+  }
   if (iHadMate && !iStillMate && !replyCut && !isBest && bestSan && bestLine) {
     const line = playLine(fenBefore, bestLine.pv, 2 * iHadMate - 1).sans;
     arrows.push(...arrow(bestUci, 'best'));

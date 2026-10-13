@@ -10,7 +10,10 @@
  * Live analysis made those runs differ; here deterministic searches stand in for it (an `ensure`
  * of the human's and the bot's positions at depth 13 to 16 before the annotation, which the
  * analysis cache then serves, as it serves the live result in the app). Each history below put
- * Nxd5 outside the band of the best line, the third as one of the engine's own lines.
+ * Nxd5 outside the band of the best line, the third as one of the engine's own lines. The last
+ * move's second opinion is asked both ways: with the annotation request (as when these histories
+ * were recorded) and with SECOND_OPINION (MultiPV 1 within 300k nodes, as the app asks for it now,
+ * before the verdict).
  */
 import { describe, expect, it } from 'vitest';
 import { Chess } from 'chess.js';
@@ -18,7 +21,7 @@ import { classifyMove, nearBestRecheck, type ClassifyMoveInput } from '../../src
 import { explainMove } from '../../src/analysis/explain';
 import { AnalysisService } from '../../src/engine/AnalysisService';
 import { StockfishEngine } from '../../src/engine/StockfishEngine';
-import { ANNOTATE_DEPTH, ANNOTATE_MULTIPV, ANNOTATE_NODES } from '../../src/game/controller';
+import { ANNOTATE_DEPTH, ANNOTATE_MULTIPV, ANNOTATE_NODES, SECOND_OPINION } from '../../src/game/controller';
 import { createNodeTransport } from '../helpers/nodeTransport';
 
 const ANNOTATE = { minDepth: ANNOTATE_DEPTH, multiPv: ANNOTATE_MULTIPV, maxNodes: ANNOTATE_NODES };
@@ -38,7 +41,7 @@ function steps(sans: string[]) {
  * human's (Black's) positions to `humanDepth` and the bot's to `botDepth` (0: not at all). Returns
  * what the coach says about 3...Nxd5, with and without the second opinion.
  */
-async function userCase(humanDepth: number, botDepth: number) {
+async function userCase(humanDepth: number, botDepth: number, second: typeof ANNOTATE | typeof SECOND_OPINION = SECOND_OPINION) {
   const engine = new StockfishEngine(createNodeTransport, { hashMb: 32, showWdl: true });
   await engine.init();
   try {
@@ -61,7 +64,8 @@ async function userCase(humanDepth: number, botDepth: number) {
         prevFenBefore: prev?.fen,
       };
       const recheck = nearBestRecheck(input);
-      const bestAfter = recheck ? await svc.ensure(recheck, ANNOTATE) : undefined;
+      // The earlier moves' second opinions as when these histories were recorded; the last one's as asked.
+      const bestAfter = recheck ? await svc.ensure(recheck, i === st.length - 1 ? second : ANNOTATE) : undefined;
       const classification = classifyMove({ ...input, ...(bestAfter ? { bestAfter } : {}) });
       if (i === st.length - 1) {
         const e = explainMove({ fenBefore: st[i].fen, moveUci: st[i].uci, classification, before, after });
@@ -81,16 +85,21 @@ describe('THE USER’S CASE with the real engine: 3...Nxd5 stays "about as good"
     [16, 16, 'depth-16 lines from the cache, Nxd5 28 cp behind'],
     [0, 16, 'Nxd5 one of the lines, 33 cp behind c6'],
   ] as const) {
-    it(`${what} (human positions searched to depth ${humanDepth}, the bot’s to ${botDepth})`, { timeout: 120_000 }, async () => {
-      const r = await userCase(humanDepth, botDepth);
-      // Outside the band of the best line: the coach asks for the second opinion...
-      expect(r.recheck).not.toBeNull();
-      // ...without which Nxd5 would be corrected...
-      expect(r.alone.nearBest).toBe(false);
-      // ...and with which it is about as good: no correction.
-      expect(r.classification).toMatchObject({ cls: 'good', nearBest: true });
-      expect(r.text.some((l) => l.startsWith('Your Nxd5 was fine: '))).toBe(true);
-      for (const line of r.text) expect(line).not.toMatch(/Best was|was better|more accurate/);
-    });
+    for (const [request, second] of [
+      ['the annotation request', ANNOTATE],
+      ['SECOND_OPINION, as the app asks for it now', SECOND_OPINION],
+    ] as const) {
+      it(`${what} (human positions searched to depth ${humanDepth}, the bot’s to ${botDepth}; second opinion: ${request})`, { timeout: 120_000 }, async () => {
+        const r = await userCase(humanDepth, botDepth, second);
+        // Outside the band of the best line: the coach asks for the second opinion...
+        expect(r.recheck).not.toBeNull();
+        // ...without which Nxd5 would be corrected...
+        expect(r.alone.nearBest).toBe(false);
+        // ...and with which it is about as good: no correction.
+        expect(r.classification).toMatchObject({ cls: 'good', nearBest: true });
+        expect(r.text.some((l) => l.startsWith('Your Nxd5 was fine: '))).toBe(true);
+        for (const line of r.text) expect(line).not.toMatch(/Best was|was better|more accurate/);
+      });
+    }
   }
 });
