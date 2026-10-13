@@ -525,7 +525,7 @@ test.describe('Chess Coach Pro (paywall build)', () => {
     await teaser.locator('[data-id="unlock"]').tap();
     await expect(paywall(page)).toBeVisible();
     await expect(paywall(page).locator('[data-id="paywall-lead"]')).toHaveText(
-      'Learn why every move is played, and drill lines until you know them.',
+      'Learn why the key moves are played, and drill lines until you know them.',
     );
     await expect(paywall(page).locator('.paywall-item[data-current]')).toHaveAttribute('data-feature', 'openingGuides');
     await expect(paywall(page).locator('.paywall-item[data-feature="openingDrills"]')).toContainText('Opening drills');

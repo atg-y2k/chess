@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
 import type { Color, GameSettings } from '../game/types';
+import { formatRatingDelta } from '../rating/rating';
 import { IconBook, IconBotRated, IconChart, IconChevronRight, IconCoach, IconEye, IconSound, IconUndo } from './icons';
 import { LevelPicker, type StartingLevel } from './LevelPicker';
 import { IconLock } from './PaywallSheet';
@@ -23,7 +24,7 @@ export interface NewGameSheetProps {
    * A game is still going (the player has moved): starting a new one ends it as a loss (rated
    * unless it is already unrated). The sheet says so and the button reads "Resign & play".
    */
-  inProgress?: { rated: boolean } | null;
+  inProgress?: { rated: boolean; before?: number; after?: number } | null;
   /**
    * A brand-new player (no games yet): with `levels` and `onSetLevel`, a compact "Your level"
    * picker at the top sets the starting rating before the first game, and switches the opponent
@@ -70,12 +71,21 @@ export function unratedNote(o: { arrows: boolean; rateOpponent: boolean }): { te
   };
 }
 
-/** What starting a new game does to the game in progress (null when there is none). */
-export function abandonNote(inProgress: { rated: boolean } | null | undefined): string | null {
+/**
+ * What starting a new game does to the game in progress (null when there is none), with what the
+ * loss does to the rating when it is rated ("…: your rating goes from 904 to 834 (−70).").
+ */
+export function abandonNote(inProgress: { rated: boolean; before?: number; after?: number } | null | undefined): string | null {
   if (!inProgress) return null;
-  return inProgress.rated
-    ? 'Your current game will end and count as a loss.'
-    : 'Your current game will end as a loss. It is unrated, so your rating stays the same.';
+  if (!inProgress.rated) return 'Your current game will end as a loss. It is unrated, so your rating stays the same.';
+  const { before, after } = inProgress;
+  if (before === undefined || after === undefined) return 'Your current game will end and count as a loss.';
+  return `Your current game will end and count as a loss: your rating goes from ${before} to ${after} (${formatRatingDelta(after - before)}).`;
+}
+
+/** The name a custom or rating-matched opponent has in the game ("Robot 800", bot/personas.ts `customPersona`). */
+export function customOpponentName(elo: number): string {
+  return `Robot ${snapElo(elo)}`;
 }
 
 export const ELO_MIN = 100;
@@ -91,10 +101,14 @@ export function snapElo(elo: number): number {
   return Math.min(ELO_MAX, Math.max(ELO_MIN, snapped));
 }
 
-/** Human strength descriptor for an Elo on our 100..3200 scale. */
+/**
+ * Human strength descriptor for an Elo on our 100..3200 scale: the starting levels' names
+ * (rating/rating.ts STARTING_LEVELS: Beginner 400, Casual 800, Intermediate 1200, Advanced 1600,
+ * Expert 2000) for the bands around them, so one level has one name everywhere.
+ */
 export function strengthLabel(elo: number): string {
   if (elo < 550) return 'Beginner';
-  if (elo < 1000) return 'Novice';
+  if (elo < 1000) return 'Casual';
   if (elo < 1400) return 'Intermediate';
   if (elo < 1800) return 'Advanced';
   if (elo < 2200) return 'Expert';
@@ -202,14 +216,15 @@ export function NewGameSheet({
     opponentPicked.current = false;
   }, [open]);
 
-  // Bring the selected card into view when the sheet opens (no animation).
+  // Bring the selected card into view when the sheet opens (no animation); with "Match my rating"
+  // (no card selected) the carousel starts at its beginning, Custom and the weakest bots.
   useEffect(() => {
     if (!open) return;
     const id = requestAnimationFrame(() => {
       const scroller = scrollerRef.current;
-      const card = scroller?.querySelector<HTMLElement>('[aria-checked="true"]');
-      if (!scroller || !card) return;
-      scroller.scrollLeft = card.offsetLeft - (scroller.clientWidth - card.offsetWidth) / 2;
+      if (!scroller) return;
+      const card = scroller.querySelector<HTMLElement>('[aria-checked="true"]');
+      scroller.scrollLeft = card ? card.offsetLeft - (scroller.clientWidth - card.offsetWidth) / 2 : 0;
     });
     return () => cancelAnimationFrame(id);
   }, [open]);
@@ -218,7 +233,9 @@ export function NewGameSheet({
   const opponent = resolveOpponent(draft, bots, rating);
   const persona = draft.adaptive ? undefined : bots.find((b) => b.id === draft.selectedId);
   const isCustom = !draft.adaptive && !persona;
-  const cardIds = [...bots.map((b) => b.id), CUSTOM_BOT_ID];
+  // Custom (any Elo, also "Match my rating") first: when it is the opponent, the carousel opens on it
+  // and the weakest bots beside it, not on the 2200–3200 bots at the far end.
+  const cardIds = [CUSTOM_BOT_ID, ...bots.map((b) => b.id)];
 
   const pickOpponent = (patch: Partial<Draft>) => {
     opponentPicked.current = true;
@@ -252,16 +269,17 @@ export function NewGameSheet({
   const abandon = abandonNote(inProgress);
   const note = unratedNote({ arrows: arrowsOn, rateOpponent: draft.rateOpponent });
 
+  // The opponent by the name the game gives it ("Robot 800"); the cards say how it is chosen.
   const hero = draft.adaptive
     ? {
         emoji: MATCH_EMOJI,
         color: 'var(--accent-strong)',
-        name: 'Rating match',
-        tagline: 'Always plays at your current rating.',
+        name: customOpponentName(opponent.botElo),
+        tagline: 'Match my rating: always plays at your current rating.',
       }
     : persona
       ? { emoji: persona.emoji, color: persona.color, name: persona.name, tagline: persona.tagline }
-      : { emoji: CUSTOM_EMOJI, color: CUSTOM_COLOR, name: 'Custom', tagline: 'Pick any strength from 100 to 3200.' };
+      : { emoji: CUSTOM_EMOJI, color: CUSTOM_COLOR, name: customOpponentName(opponent.botElo), tagline: 'Custom: pick any strength from 100 to 3200.' };
 
   return (
     <Sheet
@@ -321,6 +339,16 @@ export function NewGameSheet({
         </div>
 
         <div class="ngs-bots" ref={scrollerRef} role="radiogroup" aria-label="Opponent" onKeyDown={onCardsKeyDown}>
+          <BotCard
+            id={CUSTOM_BOT_ID}
+            emoji={CUSTOM_EMOJI}
+            color={CUSTOM_COLOR}
+            name="Custom"
+            sub={isCustom ? String(opponent.botElo) : 'Any Elo'}
+            selected={isCustom}
+            focusable={isCustom || draft.adaptive}
+            onSelect={selectCard}
+          />
           {bots.map((b) => (
             <BotCard
               key={b.id}
@@ -334,16 +362,6 @@ export function NewGameSheet({
               onSelect={selectCard}
             />
           ))}
-          <BotCard
-            id={CUSTOM_BOT_ID}
-            emoji={CUSTOM_EMOJI}
-            color={CUSTOM_COLOR}
-            name="Custom"
-            sub={isCustom ? String(opponent.botElo) : 'Any Elo'}
-            selected={isCustom}
-            focusable={isCustom || draft.adaptive}
-            onSelect={selectCard}
-          />
         </div>
 
         <div class="sheet-group ngs-adaptive">

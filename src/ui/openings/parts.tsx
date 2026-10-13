@@ -233,8 +233,7 @@ export function MoveStrip({
     const el = ref.current?.querySelector<HTMLElement>('[aria-current="true"]');
     const box = ref.current;
     if (!el || !box) return;
-    const left = el.offsetLeft - (box.clientWidth - el.offsetWidth) / 2;
-    box.scrollTo({ left: Math.max(0, left), behavior: 'smooth' });
+    box.scrollTo({ left: Math.max(0, centeredScroll(box, el)), behavior: 'smooth' });
   }, [current, moves.length]);
   return (
     <div class="op-strip" ref={ref} role="list" aria-label={label} data-sheet-nodrag="">
@@ -329,4 +328,14 @@ export function RowChevron() {
       <path d="m9 18 6-6-6-6" />
     </svg>
   );
+}
+
+/**
+ * The scrollLeft of `box` that centers `el` in it. Measured from their boxes on screen, not from
+ * `offsetLeft` (relative to the nearest positioned ancestor: the page, in landscape, where the strip
+ * sits right of the board and would be over-scrolled by the board's width).
+ */
+export function centeredScroll(box: HTMLElement, el: HTMLElement): number {
+  const offset = el.getBoundingClientRect().left - box.getBoundingClientRect().left + box.scrollLeft;
+  return offset - (box.clientWidth - el.offsetWidth) / 2;
 }

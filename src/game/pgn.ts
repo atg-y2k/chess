@@ -26,6 +26,11 @@ export interface PgnOptions {
   opening?: { eco: string; name: string } | null;
   /** Add `{ [%eval …] }` comments and NAGs ($1 … $6) from the annotations. Default false. */
   annotations?: boolean;
+  /**
+   * With `annotations`: which plies may carry their NAG (default all). A game still in progress
+   * leaves out the marks the app does not show yet (the computer's mistakes in a rated game).
+   */
+  nag?: (ply: Ply) => boolean;
   /** Default "Chess Coach". */
   event?: string;
 }
@@ -111,7 +116,7 @@ export function buildPgn(o: PgnOptions): string {
     tokens.push(ply.san);
     needNumber = false;
     if (o.annotations) {
-      const nag = ply.classification ? NAG[ply.classification.cls] : undefined;
+      const nag = ply.classification && (!o.nag || o.nag(ply)) ? NAG[ply.classification.cls] : undefined;
       if (nag) tokens.push(nag);
       const ev = ply.evalWhite ? pgnEval(ply.evalWhite) : null;
       if (ev !== null) {

@@ -5,7 +5,8 @@
  * Mastery: 0 New (never drilled), 1 Learning (drilled, no clean run yet), 2 Familiar (a clean run),
  * 3 Mastered (clean runs on MASTERED_DAYS different local calendar days, each counted day at least
  * MIN_CLEAN_GAP_HOURS after the previous one, so it takes 40 hours at the least). Only full drills
- * from the opening's own side count towards it (see recordDrill). It never goes down; `isDue` says when a line is worth
+ * from the opening's own side count towards it; the other side's are practice runs, kept apart
+ * (see recordDrill). It never goes down; `isDue` says when a line is worth
  * practicing again.
  *
  * No DOM access: storage is `localStorage` when present, or an injected stand-in. No call throws:
@@ -56,6 +57,15 @@ export interface LineProgress {
   /** Local calendar days (YYYY-MM-DD) with a clean run, oldest first (the last few only). */
   cleanDays: readonly string[];
   mastery: MasteryLevel;
+  /**
+   * Drills from the other side than the one that plays the opening (practice): counted apart, never
+   * in `attempts`, `lastPracticed`, the scores or the mastery.
+   */
+  practiceRuns: number;
+  /** ISO time of the last practice run (null: none). */
+  lastPracticeAt: string | null;
+  /** Best score of the practice runs (0..100). */
+  practiceBest: number;
 }
 
 /** Progress over the lines of one family. */
@@ -98,6 +108,10 @@ interface StoredLine {
   cleanDayAt?: string;
   /** The line's family when it was recorded (summaries work before the catalog loads). */
   family?: string;
+  /** Practice runs from the other side (see LineProgress), absent when none. */
+  practiceRuns?: number;
+  lastPracticeAt?: string;
+  practiceBest?: number;
 }
 
 /** How reading the saved progress went. */
@@ -140,6 +154,12 @@ function sanitize(v: unknown): StoredLine | null {
   };
   if (out.cleanDays.length && isTime(v.cleanDayAt)) out.cleanDayAt = v.cleanDayAt;
   if (typeof v.family === 'string' && v.family) out.family = v.family;
+  const practice = count(v.practiceRuns);
+  if (practice) {
+    out.practiceRuns = practice;
+    if (isTime(v.lastPracticeAt)) out.lastPracticeAt = v.lastPracticeAt;
+    out.practiceBest = Math.min(100, count(v.practiceBest));
+  }
   return out;
 }
 
@@ -198,7 +218,7 @@ export function masteryOf(p: Pick<LineProgress, 'attempts' | 'cleanRuns' | 'clea
 }
 
 function toProgress(lineId: string, s: StoredLine | undefined): LineProgress {
-  const base = s ?? { attempts: 0, cleanRuns: 0, lastPracticed: null, lastClean: false, bestScore: 0, cleanDays: [] };
+  const base: StoredLine = s ?? { attempts: 0, cleanRuns: 0, lastPracticed: null, lastClean: false, bestScore: 0, cleanDays: [] };
   const cleanDays = Object.freeze(base.cleanDays.slice());
   const p = {
     lineId,
@@ -209,7 +229,13 @@ function toProgress(lineId: string, s: StoredLine | undefined): LineProgress {
     bestScore: base.bestScore,
     cleanDays,
   };
-  return { ...p, mastery: masteryOf(p) };
+  return {
+    ...p,
+    mastery: masteryOf(p),
+    practiceRuns: base.practiceRuns ?? 0,
+    lastPracticeAt: base.lastPracticeAt ?? null,
+    practiceBest: base.practiceBest ?? 0,
+  };
 }
 
 /** "2026-10-06" for a date in local time. */
@@ -241,7 +267,9 @@ export function allProgress(opts?: ProgressOptions): Record<string, LineProgress
  * `opts.family` names the family of a line the catalog does not know (e.g. an opening guide's own
  * main line), so family summaries count it; a catalog line's own family always wins. `opts.side` is
  * the side that plays the line's opening: a drill from the other side (`result.playerColor`, e.g.
- * two easy Black moves of a White opening) counts as practice only, like a partial one.
+ * two easy Black moves of a White opening) is practice only, counted apart (`practiceRuns`,
+ * `lastPracticeAt`, `practiceBest`): the line's attempts, last run, scores and mastery stay as they
+ * were, so it is not "Learning" or due because of it.
  */
 export function recordDrill(
   lineId: string,
@@ -253,13 +281,29 @@ export function recordDrill(
   const read = readAll(storage);
   const prev = read.lines.get(lineId);
   if (result.playerMoves === 0 || !validId(lineId)) return toProgress(lineId, prev);
-  const base = prev ?? { attempts: 0, cleanRuns: 0, lastPracticed: null, lastClean: false, bestScore: 0, cleanDays: [] };
+  const base: StoredLine = prev ?? { attempts: 0, cleanRuns: 0, lastPracticed: null, lastClean: false, bestScore: 0, cleanDays: [] };
   const offSide = !!opts?.side && !!result.playerColor && result.playerColor !== opts.side;
   const full = result.partial !== true && !offSide;
   const clean = result.clean === true;
   const counts = full && clean;
   const raw = typeof result.score === 'number' && Number.isFinite(result.score) ? result.score : clean ? 100 : 0;
   const score = Math.max(0, Math.min(100, Math.round(raw)));
+  const family = getLine(lineId)?.family ?? (opts?.family || undefined) ?? base.family;
+  if (offSide) {
+    // Practice for the other side: kept apart, so the line stays as it was for its own side (New,
+    // never "due" because of it, its own last run and scores unchanged).
+    const practice: StoredLine = {
+      ...base,
+      cleanDays: base.cleanDays.slice(),
+      practiceRuns: (base.practiceRuns ?? 0) + 1,
+      lastPracticeAt: now.toISOString(),
+      practiceBest: Math.max(base.practiceBest ?? 0, score),
+    };
+    if (family) practice.family = family;
+    read.lines.set(lineId, practice);
+    writeAll(storage, read, read.lines);
+    return toProgress(lineId, practice);
+  }
   const day = localDay(now);
   const lastAt = base.cleanDayAt ? Date.parse(base.cleanDayAt) : Number.NEGATIVE_INFINITY;
   const newDay =
@@ -274,8 +318,12 @@ export function recordDrill(
   };
   const cleanDayAt = newDay ? now.toISOString() : base.cleanDayAt;
   if (cleanDayAt) next.cleanDayAt = cleanDayAt;
-  const family = getLine(lineId)?.family ?? (opts?.family || undefined) ?? base.family;
   if (family) next.family = family;
+  if (base.practiceRuns) {
+    next.practiceRuns = base.practiceRuns;
+    if (base.lastPracticeAt) next.lastPracticeAt = base.lastPracticeAt;
+    next.practiceBest = base.practiceBest ?? 0;
+  }
   read.lines.set(lineId, next);
   writeAll(storage, read, read.lines);
   return toProgress(lineId, next);

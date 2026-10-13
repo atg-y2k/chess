@@ -11,11 +11,13 @@ import { families, search, type OpeningFamily, type SearchResult } from '../../o
 import { allProgress, isDue, MASTERY_LABELS, type LineProgress, type MasteryLevel } from '../../openings/progress';
 import { drillPage, linePage, updatePage, type HomePage as HomePageState } from '../../openings/session';
 import { IconBook, IconExplore } from '../icons';
+import { IconLock } from '../PaywallSheet';
 import { EcoNote } from './FamilyPage';
 import {
   colorName,
   difficultyLabel,
   dismissIntro,
+  distinctTitles,
   familyFacts,
   familyHits,
   firstSentence,
@@ -26,6 +28,7 @@ import {
   saveSide,
   savedSide,
   starterFamilies,
+  trapHits,
 } from './model';
 import { MasteryRing, RowChevron, Segmented, type PageContext } from './parts';
 
@@ -93,6 +96,29 @@ export function HomePage({ ctx, page }: { ctx: PageContext; page: HomePageState 
 
 function SearchResults({ ctx, query, results }: { ctx: PageContext; query: string; results: SearchResult[] }) {
   if (!query.trim()) return <div class="op-results" aria-busy="true" />;
+  // The guides' traps by name ("Scholar's Mate"): Show me, as on the opening's page (Pro).
+  const traps = trapHits(query);
+  const trapList = traps.length > 0 && (
+    <ul class="op-group op-results" data-id="search-traps">
+      {traps.map((t) => (
+        <li key={t.id}>
+          <button
+            type="button"
+            class="op-row"
+            data-line={t.id}
+            onClick={() => (ctx.guides ? ctx.go(linePage(t.id)) : ctx.unlock('openingGuides'))}
+          >
+            <span class="op-row-text">
+              <span class="op-row-title">Trap: {t.title}</span>
+              <span class="op-row-moves">In the {t.family}</span>
+            </span>
+            {ctx.guides ? <RowChevron /> : <IconLock size={16} />}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+  if (!results.length && trapList) return <section class="op-section" aria-label="Search results">{trapList}</section>;
   if (!results.length) {
     return (
       <p class="op-empty" data-id="search-empty" role="status">
@@ -102,8 +128,14 @@ function SearchResults({ ctx, query, results }: { ctx: PageContext; query: strin
     );
   }
   const named = familyHits(results);
+  // Results named alike (five "Najdorf Variation"s) say where they part.
+  const variations = distinctTitles(
+    results.map((r) => r.line),
+    (l) => `${l.family}\t${l.variation}`,
+  ).map((t) => t.slice(t.indexOf('\t') + 1).replace(/^ · /, ''));
   return (
     <section class="op-section" aria-label="Search results">
+      {trapList}
       {named.length > 0 && (
         <ul class="op-group op-results" data-id="search-openings">
           {named.map((f) => (
@@ -114,13 +146,13 @@ function SearchResults({ ctx, query, results }: { ctx: PageContext; query: strin
         </ul>
       )}
       <ul class="op-group op-results" data-id="search-results">
-        {results.map(({ line }) => (
+        {results.map(({ line }, i) => (
           <li key={line.id}>
             <button type="button" class="op-row" data-line={line.id} onClick={() => ctx.go(linePage(line.id))}>
               <span class="op-row-text">
                 <span class="op-row-title">
                   {line.family}
-                  {line.variation && <span class="op-row-variation">{line.variation}</span>}
+                  {variations[i] && <span class="op-row-variation">{variations[i]}</span>}
                 </span>
                 <span class="op-row-moves">{movesSummary(line.san, RESULT_PLIES)}</span>
               </span>
@@ -326,9 +358,12 @@ function Practice({ ctx, progress }: { ctx: PageContext; progress: Record<string
   if (!entries.length) return null;
   const now = new Date();
   const due = entries.filter((e) => isDue(e.p, now)).slice(0, 5);
+  // The latest run of a line: a drill from its own side, or practice from the other side.
+  const latest = (p: LineProgress) => ((p.lastPracticeAt ?? '') > (p.lastPracticed ?? '') ? (p.lastPracticeAt ?? '') : (p.lastPracticed ?? ''));
+  const practiceLast = (p: LineProgress) => (p.lastPracticeAt ?? '') > (p.lastPracticed ?? '');
   const recent = entries
     .slice()
-    .sort((a, b) => ((b.p.lastPracticed ?? '') < (a.p.lastPracticed ?? '') ? -1 : 1))
+    .sort((a, b) => (latest(b.p) < latest(a.p) ? -1 : 1))
     .slice(0, 3);
   const row = (e: (typeof entries)[number], what: 'due' | 'recent') => (
     <li key={`${what}-${e.line.id}`}>
@@ -346,7 +381,11 @@ function Practice({ ctx, progress }: { ctx: PageContext; progress: Record<string
           </span>
           <span class="op-row-sub">
             {MASTERY_LABELS[e.p.mastery]}
-            {what === 'recent' ? ` · last run ${e.p.lastClean ? 'clean' : 'with mistakes'} · best ${e.p.bestScore}%` : ` · ${dueReason(e.p)}`}
+            {what !== 'recent'
+              ? ` · ${dueReason(e.p)}`
+              : practiceLast(e.p)
+                ? ` · practice as ${colorName(e.line.side === 'w' ? 'b' : 'w')} · best ${e.p.practiceBest}%`
+                : ` · last run ${e.p.lastClean ? 'clean' : 'with mistakes'} · best ${e.p.bestScore}%`}
           </span>
         </span>
         <RowChevron />

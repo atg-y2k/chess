@@ -7,9 +7,10 @@ import { bestWasSentence, equalAlternatives, isNearBest } from '../analysis/near
 import { see } from '../analysis/see';
 import type { Classification, Explanation, MoveClass } from '../analysis/types';
 import { formatScore } from '../analysis/winprob';
-import { PIECE_VALUES, sideToMove, toWhitePov } from '../chess/utils';
+import { PIECE_VALUES, sideToMove, toWhitePov, whitePovTo } from '../chess/utils';
+import type { Score } from '../engine/types';
 import { CLASS_META } from '../ui/ClassIcon';
-import type { Ply } from './types';
+import type { Color, Ply } from './types';
 
 /** Display label of a class, e.g. "Blunder" (from CLASS_META). */
 export function classLabel(cls: MoveClass): string {
@@ -147,13 +148,25 @@ export function nearBestShowLines(
     .map((m) => ('score' in m && m.score ? `${m.san} ${formatScore(toWhitePov(m.score, ply.fenBefore), stm)}` : m.san))
     .join(' · ');
   const listed = equal.some((m) => m.uci === ply.uci);
-  const how = cl.aboveBest ? 'at least as good' : 'close behind';
+  // "At least as good" only when the numbers shown say so too: the verdict may come from the
+  // second opinion (two searches of their own), whose best-move score is not the one listed here.
+  const first = equal[0];
+  const bestShown = first && 'score' in first && first.score ? first.score : null;
+  const playedShown = ply.evalWhite ? whitePovTo(ply.evalWhite, stm) : null;
+  const behind = !!bestShown && !!playedShown && scoreKey(playedShown) < scoreKey(bestShown);
+  const how = cl.aboveBest && !behind ? 'at least as good' : 'close behind';
   const played = listed
     ? `${owner} ${ply.san} is one of them.`
     : ply.evalWhite
       ? `${owner} ${ply.san}: ${formatScore(ply.evalWhite, sideToMove(ply.fenAfter))}, ${how}.`
       : `${owner} ${ply.san} is ${how}.`;
   return evals ? [evals, played] : [played];
+}
+
+/** Orders scores from one side's point of view (a mate for it first, the fastest first). */
+function scoreKey(s: Score): number {
+  if (s.kind === 'cp') return s.value;
+  return s.value > 0 ? 1e6 - s.value : -1e6 - s.value;
 }
 
 /** Classes that offer "Retry" in coach mode. */
@@ -308,22 +321,46 @@ export function answerFreeLines(e: Explanation | undefined | null, cl: Classific
   return lines.length ? lines : [ANSWER_FREE_LEAD[cl.cls] ?? 'There was a better move here.'];
 }
 
+/** Who the repetition text speaks about (see `repetitionExplanation`). */
+export interface RepetitionVoice {
+  /** The move is the player's. */
+  human: boolean;
+  /** The computer's name (its moves in the game). */
+  botName: string;
+  /**
+   * A move the player tried in the explorer for the computer's side: said by its color ("Black
+   * was winning…"), not as the computer's.
+   */
+  neutral?: boolean;
+  /** The mover's color (for the neutral voice). */
+  mover?: Color;
+  /**
+   * The move lets the opponent repeat the position for the third time (its only reply, or one it
+   * would gladly take), rather than repeating it itself.
+   */
+  allows?: boolean;
+}
+
 /**
- * Explanation of a move that repeats the position for the third time (the game is drawn at once).
- * The engine only sees the position, not the game's history, so its own explanation would praise
- * or criticize the move as if play went on.
+ * Explanation of a move that repeats the position for the third time (the game is drawn at once),
+ * or that lets the opponent do so (`allows`). The engine only sees the position, not the game's
+ * history, so its own explanation would praise or criticize the move as if play went on.
  */
-export function repetitionExplanation(
-  san: string,
-  cl: Classification,
-  opts: { human: boolean; botName: string },
-): Explanation {
+export function repetitionExplanation(san: string, cl: Classification, opts: RepetitionVoice): Explanation {
+  const side = (c: Color | undefined) => (c === 'b' ? 'Black' : 'White');
+  const neutral = !opts.human && !!opts.neutral;
+  const mover = opts.human ? 'You' : neutral ? side(opts.mover) : opts.botName;
+  const opponent = opts.human ? opts.botName : neutral ? side(opts.mover === 'b' ? 'w' : 'b') : 'you';
   const details: string[] = [];
   if (cl.winBefore >= 0.6) {
     details.push(
       opts.human
-        ? 'You were winning: when you are ahead, avoid repeating the position.'
-        : `${opts.botName} was winning, so the draw let you off the hook.`,
+        ? opts.allows
+          ? 'You were winning: when you are ahead, don’t give your opponent the chance to repeat the position.'
+          : 'You were winning: when you are ahead, avoid repeating the position.'
+        : neutral
+          ? `${mover} was winning, so this draw gives the win away.`
+          : `${opts.botName} was winning, so the draw let you off the hook.`,
     );
     if (cl.bestMoveSan && cl.bestMoveSan !== san) {
       const alternatives = equalAlternatives(cl)
@@ -332,12 +369,39 @@ export function repetitionExplanation(
       details.push(bestWasSentence(cl.bestMoveSan, { alternatives }));
     }
   } else if (cl.winBefore <= 0.4) {
-    details.push(opts.human ? 'A draw is a good result from a lost position.' : `${opts.botName} was losing, so a draw is a good result for it.`);
+    details.push(
+      opts.human
+        ? 'A draw is a good result from a lost position.'
+        : neutral
+          ? `${mover} was losing, so a draw is a good result for ${mover}.`
+          : `${opts.botName} was losing, so a draw is a good result for it.`,
+    );
   }
   return {
-    headline: `${san} repeats the position for the third time, so the game is a draw.`,
+    headline: opts.allows
+      ? `${san} lets ${opponent} repeat the position for the third time, which ends the game in a draw.`
+      : `${san} repeats the position for the third time, so the game is a draw.`,
     details,
     title: 'Repetition',
-    motifs: ['repetition'],
+    motifs: [opts.allows ? 'allowsRepetition' : 'repetition'],
   };
+}
+
+/**
+ * The result of a game ended by a draw rule, in plain words for a beginner (the coach after the
+ * game and the game-over sheet say it); null for any other result (checkmate, a resignation).
+ */
+export function drawRuleText(reason: string): string | null {
+  switch (reason) {
+    case 'Stalemate':
+      return 'Stalemate: the side to move has no legal move and is not in check, so the game is a draw.';
+    case 'Threefold repetition':
+      return 'Threefold repetition: the same position came up for the third time, so the game is a draw.';
+    case 'Insufficient material':
+      return 'Insufficient material: neither side has enough pieces left to checkmate, so the game is a draw.';
+    case '50-move rule':
+      return '50-move rule: 50 moves in a row by each side without a capture or a pawn move, so the game is a draw.';
+    default:
+      return null;
+  }
 }

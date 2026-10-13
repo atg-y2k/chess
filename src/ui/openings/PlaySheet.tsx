@@ -19,6 +19,7 @@ import {
   resolveOpponent,
   strengthLabel,
   type OpponentChoice,
+  customOpponentName,
 } from '../NewGameSheet';
 import { Sheet } from '../Sheet';
 import { Toggle } from '../Toggle';
@@ -30,8 +31,11 @@ export interface PlaySetup {
   settings: GameSettings;
   rating: number;
   bots: readonly BotPersona[];
-  /** A game the player has moved in is still going: starting ends it (a loss unless unrated). */
-  inProgress: { rated: boolean } | null;
+  /**
+   * A game the player has moved in is still going: starting ends it (a loss unless unrated), with
+   * what the loss does to the rating when it is rated.
+   */
+  inProgress: { rated: boolean; before?: number; after?: number } | null;
 }
 
 export interface PlaySheetProps {
@@ -45,6 +49,8 @@ export interface PlaySheetProps {
   setup: PlaySetup;
   onStart: (settings: GameSettings, opening: OpeningStart) => void;
   onClose: () => void;
+  /** With a game in progress: back to it (closes the section), the safe choice beside "Resign & play". */
+  onBackToGame?: () => void;
 }
 
 /** The game's settings for the sheet's choices. */
@@ -57,7 +63,7 @@ export function playSettings(
   return { ...setup.settings, playerColor, botId, botElo, adaptive: opponent.adaptive };
 }
 
-export function PlaySheet({ open, line, mode: initialMode, color: initialColor, setup, onStart, onClose }: PlaySheetProps) {
+export function PlaySheet({ open, line, mode: initialMode, color: initialColor, setup, onStart, onClose, onBackToGame }: PlaySheetProps) {
   const side = line?.side ?? 'w';
   // A line that ends in mate is played up to the mate, never from after it.
   const mateLine = useMemo(() => !!line && endsGame(line), [line]);
@@ -91,7 +97,7 @@ export function PlaySheet({ open, line, mode: initialMode, color: initialColor, 
     ? { emoji: '🎯', name: `Match my rating`, color: 'var(--accent-strong)' }
     : persona
       ? { emoji: persona.emoji, name: persona.name, color: persona.color }
-      : { emoji: '🤖', name: 'Custom', color: '#6b7b8c' };
+      : { emoji: '🤖', name: customOpponentName(resolved.botElo), color: '#6b7b8c' };
   const abandon = abandonNote(setup.inProgress);
   const lastLabel = line.san.length ? nb(moveLabel(line.san.length - 1, line.san[line.san.length - 1])) : '';
   const start = () => onStart(playSettings({ ...setup, rating }, color, opponent), openingStart(line, mode, showMoves));
@@ -112,6 +118,11 @@ export function PlaySheet({ open, line, mode: initialMode, color: initialColor, 
           <button type="button" class="btn btn-primary op-play-start" data-id="play-start" onClick={start}>
             {abandon ? 'Resign & play' : 'Play'}
           </button>
+          {abandon && onBackToGame && (
+            <button type="button" class="btn op-play-back" data-id="play-back-to-game" onClick={onBackToGame}>
+              Back to my game
+            </button>
+          )}
         </>
       }
     >

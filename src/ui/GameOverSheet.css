@@ -166,6 +166,55 @@
 
 /* ---------------------------------------------------------------- rating */
 
+/* A draw rule in plain words, under the reason. */
+.gos-rule {
+  position: relative;
+  max-width: 340px;
+  margin: 8px auto 0;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  text-wrap: balance;
+}
+
+/* How the game went: accuracy for both sides and the player's weak moves. */
+.gos-play {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  margin-top: 18px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--sheet-group);
+  font-size: 14px;
+  text-align: left;
+}
+.gos-play-acc {
+  color: var(--text-dim);
+}
+.gos-play-acc strong {
+  color: var(--text);
+  font-weight: 700;
+}
+.gos-play-weak {
+  color: var(--text-dim);
+}
+.gos-play-pending {
+  color: var(--text-faint);
+}
+.gos-play + .gos-rating {
+  margin-top: 8px;
+}
+.gos-note {
+  margin: 8px 2px 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-faint);
+  text-align: left;
+}
+
 .gos-rating {
   position: relative;
   display: flex;

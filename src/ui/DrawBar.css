@@ -182,6 +182,17 @@
 .drawbar-btn:active:not(:disabled) {
   filter: brightness(0.92);
 }
+/* Browsing earlier moves: the way back to the game's position, in the pencil's place. */
+.drawbar-back {
+  gap: 1px;
+  padding: 0 6px 0 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+}
+.drawbar-back svg {
+  color: var(--text-dim);
+}
 .drawbar-clear {
   margin-left: auto;
   background: transparent;

@@ -389,14 +389,33 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
   }
   if (result == null && p.after?.terminal) result = p.after.terminal === 'checkmate' ? 1 : 0.5;
 
-  const lines = p.before.lines
+  const allLines = p.before.lines
     .filter((l) => l.pv.length > 0)
     .map((l) => ({ uci: l.pv[0], score: l.score }));
-  const inLines = lines.find((l) => l.uci === p.moveUci);
+  const inLines = allLines.find((l) => l.uci === p.moveUci);
   const childBest = p.after?.lines[0];
   const child = childBest ? childToMover(childBest.score) : null;
+  const bestChildLine = p.bestAfter?.lines[0];
+  const bestChild = bestChildLine ? childToMover(bestChildLine.score) : null;
+  // A listed move (not the first) whose own search, a ply deeper and only about it, scores it far
+  // above its line in the list: a secondary MultiPV line can be badly under-searched at the
+  // annotation budget (51…Qb1+: 2.1 in the list, 4.9 by its own search, 6.1 at depth 20). Its own
+  // search judges it then, against the best move searched the same way when that is at hand
+  // (`bestAfter`, which `nearBestRecheck` asks for), so the class agrees with the eval graph.
+  const disputed =
+    result == null &&
+    !!inLines &&
+    inLines !== allLines[0] &&
+    child?.kind === 'cp' &&
+    inLines.score.kind === 'cp' &&
+    child.value - inLines.score.value > LISTED_DISPUTE_CP;
+  const lines =
+    disputed && bestChild?.kind === 'cp' && allLines[0]?.score.kind === 'cp'
+      ? [{ ...allLines[0], score: bestChild }, ...allLines.slice(1)]
+      : allLines;
   let played: MoverEval | null = null;
   if (result != null) played = { kind: 'result', value: result };
+  else if (disputed) played = child;
   // The child search is one ply deeper on this move: a forced mate it finds (for either side) beats
   // the before-search's centipawn score, as the explanation already describes that mate.
   else if (inLines) played = child?.kind === 'mate' && inLines.score.kind !== 'mate' ? child : inLines.score;
@@ -421,14 +440,13 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
   const bestMoveUci = lines[0]?.uci ?? p.before.bestMove ?? null;
   // Near-equal awareness (analysis/nearEqual.ts): whether the played move was about as good as the
   // best, and the top moves about as good as the best one.
-  const bestChildLine = p.bestAfter?.lines[0];
   const near = nearVerdict({
-    lines,
+    lines: allLines,
     moveUci: p.moveUci,
     played,
     listed: !!inLines && played === inLines.score,
     child,
-    bestChild: bestChildLine ? childToMover(bestChildLine.score) : null,
+    bestChild,
     cls: v.cls,
   });
   const equalBest: EqualMove[] = [];
@@ -446,7 +464,7 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
     equalBest.push({ san, uci, score: l.score });
   }
   let recheckFen: string | null = null;
-  if (near.recheck && bestMoveUci) {
+  if ((near.recheck || (disputed && !p.bestAfter)) && bestMoveUci) {
     try {
       const c = new Chess(p.fenBefore);
       c.move(parseUci(bestMoveUci));
@@ -487,6 +505,12 @@ export function classifyMoveDetailed(p: ClassifyMoveInput): ClassifyMoveDetail {
 export function nearBestRecheck(p: ClassifyMoveInput): string | null {
   return p.bestAfter ? null : classifyMoveDetailed(p).recheckFen;
 }
+
+/**
+ * A listed move's own search above its line in the before-search's list by more than this (cp,
+ * mover's view): the list's score is not trusted (see `classifyMoveDetailed`).
+ */
+export const LISTED_DISPUTE_CP = 100;
 
 /** Classes that already say the move was weak: never "about as good" as the best. */
 const WEAK: ReadonlySet<MoveClass> = new Set<MoveClass>(['inaccuracy', 'mistake', 'miss', 'blunder']);

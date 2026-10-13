@@ -155,7 +155,7 @@ test.describe('Rate opponent’s moves', () => {
     }
   });
 
-  test('switched on in the Menu during a rated game: asks first, then the game is unrated', async ({ page }) => {
+  test('switched on in the Menu during a rated game: asks first (either answer back in the Menu), then the game is unrated', async ({ page }) => {
     test.setTimeout(120_000);
     await newGame(page, { rateOpponent: false });
     await waitForMyTurn(page);
@@ -165,7 +165,7 @@ test.describe('Rate opponent’s moves', () => {
 
     const menu = page.getByRole('dialog', { name: 'Menu' });
     const ask = page.getByRole('dialog', { name: 'Rate your opponent’s moves?' });
-    // Cancel: nothing changes.
+    // Cancel: nothing changes, and the question goes back to the Menu it was asked from.
     await page.locator('.toolbar-btn[data-id="menu"]').tap();
     await expect(menu).toBeVisible();
     await menu.locator('.toggle[data-id="rateOpponent"]').tap();
@@ -173,18 +173,20 @@ test.describe('Rate opponent’s moves', () => {
     await expect(ask).toContainText('so it makes this game unrated');
     await ask.locator('[data-id="confirm-cancel"]').tap();
     await expect(ask).toBeHidden();
-    await expect(page.locator('.app-player--bottom')).not.toContainText('Unrated');
-    await page.locator('.toolbar-btn[data-id="menu"]').tap();
+    await expect(menu).toBeVisible();
     await expect(menu.locator('.toggle[data-id="rateOpponent"]')).toHaveAttribute('aria-checked', 'false');
+    await expect(page.locator('.app-player--bottom')).not.toContainText('Unrated');
 
-    // Turn on: the Unrated pill, and the bot's last move rated at once.
+    // Turn on: back in the Menu with the switch on; the Unrated pill, and the bot's last move rated at once.
     await menu.locator('.toggle[data-id="rateOpponent"]').tap();
     await ask.locator('[data-id="confirm-ok"]').tap();
     await expect(ask).toBeHidden();
+    await expect(menu).toBeVisible();
+    await expect(menu.locator('.toggle[data-id="rateOpponent"]')).toHaveAttribute('aria-checked', 'true');
+    await menu.getByRole('button', { name: 'Close' }).tap();
+    await expect(menu).toBeHidden();
     await expect(page.locator('.app-player--bottom')).toContainText('Unrated');
     await expect(coach(page).locator('.coach-title')).toHaveText(/^Pip’s 1… /, { timeout: 30_000 });
     await expect(coach(page).locator('.coach-other')).toContainText('1. e4');
-    await page.locator('.toolbar-btn[data-id="menu"]').tap();
-    await expect(menu.locator('.toggle[data-id="rateOpponent"]')).toHaveAttribute('aria-checked', 'true');
   });
 });

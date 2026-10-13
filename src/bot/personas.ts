@@ -160,14 +160,16 @@ export function personaById(id: string): BotPersona | undefined {
   return byId.get(id);
 }
 
-/** Rough human description of a level on our (engine-anchored) Elo scale. */
+/**
+ * Rough human description of a level on our (engine-anchored) Elo scale, in the starting levels'
+ * words (Beginner 400, Casual 800, Intermediate 1200, Advanced 1600, Expert 2000).
+ */
 function levelLabel(elo: number): string {
-  if (elo < 500) return 'a total beginner';
-  if (elo < 900) return 'a beginner';
-  if (elo < 1300) return 'a casual player';
-  if (elo < 1700) return 'a club player';
-  if (elo < 2000) return 'a strong club player';
-  if (elo < 2300) return 'an expert';
+  if (elo < 550) return 'a beginner';
+  if (elo < 1000) return 'a casual player';
+  if (elo < 1400) return 'an intermediate player';
+  if (elo < 1800) return 'an advanced player';
+  if (elo < 2200) return 'an expert';
   if (elo < 2700) return 'a master';
   if (elo < 3200) return 'a grandmaster';
   return 'a full-strength engine';

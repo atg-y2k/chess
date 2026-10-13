@@ -905,6 +905,7 @@ export function materialOutcome(fen: string, pv: readonly string[], pov: Color, 
 export type PrincipleKind =
   | 'castles'
   | 'kingWalk'
+  | 'kingExposed'
   | 'develops'
   | 'centrePawn'
   | 'centreControl'
@@ -978,8 +979,20 @@ export function principles(fen: string, uci: string): Principle[] {
   const castles = m.isKingsideCastle() || m.isQueensideCastle();
   const relRank = (s: Square) => (me === 'w' ? rankOf(s) : 7 - rankOf(s));
 
+  // A king that walks out while the queens (or plenty of pieces) are on can be attacked, castling
+  // rights or not (6.Ke3 after 5.Kf2).
+  const oppQueen = pieces(before, other(me)).some((p) => p.type === 'q');
+  const exposed =
+    !castles &&
+    m.piece === 'k' &&
+    !inCheckBefore &&
+    fullmove <= 20 &&
+    (oppQueen || nonPawn >= 40) &&
+    relRank(m.to) > relRank(m.from) &&
+    relRank(m.to) >= 1;
   if (castles) P('castles', true);
   else if (m.piece === 'k' && hasRights && !inCheckBefore) P('kingWalk', false);
+  else if (exposed) P('kingExposed', false);
   if (opening && (m.piece === 'n' || m.piece === 'b') && m.from[1] === homeRank) P('develops', true);
   if (opening && m.piece === 'p' && CENTRE.includes(m.to) && !m.captured) P('centrePawn', true);
   if (opening && m.piece === 'q' && fullmove <= 6 && minorsHome >= 3 && !m.captured) P('earlyQueen', false);
@@ -987,7 +1000,10 @@ export function principles(fen: string, uci: string): Principle[] {
   if (opening && m.piece === 'p' && m.from[0] === 'f' && !m.captured && hasRights && fullmove <= 10) P('fPawn', false);
   if (opening && m.piece === 'n' && (m.to[0] === 'a' || m.to[0] === 'h') && !m.captured) P('knightRim', false);
   const ctrl = (b: Chess) => CENTRE.reduce((n, s) => n + b.attackers(s, me).length, 0);
-  if (opening && !out.some((p) => p.kind === 'centrePawn') && ctrl(c) - ctrl(before) >= 2) P('centreControl', true);
+  // The king does not "fight for the center" (its attacks there are a danger to it, not control).
+  if (opening && m.piece !== 'k' && !out.some((p) => p.kind === 'centrePawn') && ctrl(c) - ctrl(before) >= 2) {
+    P('centreControl', true);
+  }
   const king = kingSquare(before, me);
   const luft =
     !opening &&

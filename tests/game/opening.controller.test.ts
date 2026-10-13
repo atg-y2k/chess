@@ -11,7 +11,7 @@ import { loadGame, loadSettings, saveGame, type SavedGame } from '../../src/game
 import { summarizeGame } from '../../src/game/review';
 import { DEFAULT_SETTINGS, type GameSettings, type PromotionPiece } from '../../src/game/types';
 import { getLine } from '../../src/openings/catalog';
-import { openingsOpen, closeOpenings, currentPage, openOpenings } from '../../src/openings/session';
+import { openingsOpen, closeOpenings, currentPage, openOpenings, setOpeningsShown } from '../../src/openings/session';
 import { MemoryStorage, RecordingSound, ScriptedBot, fakeEngineSet } from '../helpers/fakeEngine';
 import { FakePurchases } from './fakePurchases';
 
@@ -504,6 +504,7 @@ describe('the Openings section over a game', () => {
     await playAll(controller, ['f2f3']);
     controller.openSheet('menu');
     openOpenings();
+    setOpeningsShown(true); // its pages showing (OpeningsView)
     await playAll(controller, ['g2g4']); // 2... Qh4#
     expect(store.phase.value).toBe('over');
     expect(store.outcome.value?.reason).toBe('Checkmate');
@@ -511,6 +512,7 @@ describe('the Openings section over a game', () => {
     expect(store.sheet.value).toBe('menu');
     expect(controller.canReloadNow({ hidden: true })).toBe(false);
     closeOpenings();
+    setOpeningsShown(false);
     expect(store.sheet.value).toBe('gameOver');
     expect(controller.canReloadNow({ hidden: true })).toBe(true);
   });
@@ -522,9 +524,24 @@ describe('the Openings section over a game', () => {
     expect(store.phase.value).toBe('setup');
     expect(controller.canReloadNow()).toBe(true);
     openOpenings();
+    // Still loading, or failed to load (its chunk gone after an update): nothing to lose, and the
+    // reload onto the new build is what fixes it.
+    expect(controller.canReloadNow()).toBe(true);
+    setOpeningsShown(true);
     expect(controller.canReloadNow({ hidden: true })).toBe(false);
+    setOpeningsShown(false);
     closeOpenings();
     expect(controller.canReloadNow()).toBe(true);
+  });
+
+  it('while a game is in progress the open section never allows a reload, loaded or not', async () => {
+    const { controller } = setup({ bot: new ScriptedBot(['e7e5']) });
+    await controller.boot();
+    await controller.newGame(settings());
+    await playAll(controller, ['e2e4']);
+    openOpenings();
+    expect(controller.canReloadNow({ hidden: true })).toBe(false);
+    closeOpenings();
   });
 });
 

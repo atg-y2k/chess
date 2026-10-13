@@ -24,6 +24,34 @@ export interface GameOverSheetProps {
   botElo?: number;
   /** Opening practice: the line's name ("Opening practice: Italian Game" in place of "Unrated game"). */
   practice?: string;
+  /**
+   * How well each side played, from the coach's ratings of the moves: accuracy (0..100) and the
+   * player's weak moves; 'pending' while the last moves are still being checked. Omitted: none.
+   */
+  play?: GameOverPlay | 'pending' | null;
+  /** A draw rule in plain words ("Stalemate: the side to move has no legal move…"), under the reason. */
+  rule?: string | null;
+  /** The rating is new and moves fast: a line under the rating change says so. */
+  provisional?: boolean;
+}
+
+/** The game in numbers, for the sheet (see `play`). */
+export interface GameOverPlay {
+  accuracy: { you: number | null; bot: number | null };
+  /** The player's weak moves by class. */
+  counts: { blunder: number; mistake: number; miss: number; inaccuracy: number };
+}
+
+/** "2 mistakes, 1 blunder" (the player's weak moves), or "No mistakes or blunders". */
+export function weakMovesText(c: GameOverPlay['counts']): string {
+  const part = (n: number, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : null);
+  const parts = [
+    part(c.blunder, 'blunder', 'blunders'),
+    part(c.mistake, 'mistake', 'mistakes'),
+    part(c.miss, 'missed win', 'missed wins'),
+    part(c.inaccuracy, 'inaccuracy', 'inaccuracies'),
+  ].filter((x): x is string => !!x);
+  return parts.length ? parts.join(', ') : 'No mistakes or blunders';
 }
 
 export type GameOverKind = 'win' | 'loss' | 'draw';
@@ -72,6 +100,11 @@ export function gameOverScore(outcome: GameOutcome): { text: string; note: strin
   return outcome.winner === 'w' ? { text: '1–0', note: 'White won' } : { text: '0–1', note: 'Black won' };
 }
 
+/** "91%" (rounded), or "–" while unknown. */
+function formatPct(a: number | null): string {
+  return a == null || !Number.isFinite(a) ? '–' : `${Math.round(a)}%`;
+}
+
 /** One player on the sheet. */
 interface Side {
   human: boolean;
@@ -98,6 +131,9 @@ export function GameOverSheet({
   botColor: botAvatarColor,
   botElo,
   practice,
+  play,
+  rule,
+  provisional = false,
 }: GameOverSheetProps) {
   const { kind, headline } = gameOverHeadline(outcome, playerColor);
   const reason = gameOverReason(outcome, playerColor, botName);
@@ -152,6 +188,11 @@ export function GameOverSheet({
               {reason}
             </p>
           )}
+          {rule && (
+            <p class="gos-rule" data-id="gos-rule">
+              {rule}
+            </p>
+          )}
 
           <div
             class="gos-players"
@@ -168,6 +209,20 @@ export function GameOverSheet({
         </div>
 
         <div class="gos-next">
+          {play && (
+            <div class="gos-play" data-id="gos-play" data-pending={play === 'pending' ? '' : undefined}>
+              {play === 'pending' ? (
+                <span class="gos-play-pending">Checking your moves…</span>
+              ) : (
+                <>
+                  <span class="gos-play-acc">
+                    Accuracy: <strong>You {formatPct(play.accuracy.you)}</strong> · {botName} {formatPct(play.accuracy.bot)}
+                  </span>
+                  <span class="gos-play-weak">You: {weakMovesText(play.counts)}</span>
+                </>
+              )}
+            </div>
+          )}
           {rated && ratingChange ? (
             <div
               class="gos-rating"
@@ -202,6 +257,12 @@ export function GameOverSheet({
                   : `${practice ? 'your' : 'Your'} rating is unchanged`}
               </span>
             </div>
+          )}
+
+          {rated && provisional && (
+            <p class="gos-note" data-id="gos-provisional">
+              New ratings move fast at first. They settle after about 10 rated games.
+            </p>
           )}
 
           <div class="gos-actions">

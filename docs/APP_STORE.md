@@ -391,7 +391,7 @@ LEARN MORE WITH PRO (one-time purchase)
 • The engine in the explorer: its evaluation, best moves and a rating for every move you try
 • Best-move arrows while you play
 • A full review of every game, with its key moments and a comment on every move
-• Opening lessons and drills: why every move of an opening is played, the plans and traps, and drills with your progress saved
+• Opening lessons and drills: why the key moves of an opening are played, the plans and traps, and drills with your progress saved
 Pro is a single in-app purchase, not a subscription, and Family Sharing shares it with your family.
 
 PRIVATE AND OFFLINE

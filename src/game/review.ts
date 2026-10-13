@@ -26,11 +26,24 @@ export function emptyCounts(): Record<Color, Partial<Record<MoveClass, number>>>
   return { w: {}, b: {} };
 }
 
+/** "12." for White's move, "12…" for Black's, numbered from the position before it (any start position). */
+export function moveNumberLabel(p: Pick<Ply, 'fenBefore' | 'color' | 'index'>): string {
+  const n = Number(p.fenBefore.split(' ')[5]);
+  const no = Number.isInteger(n) && n > 0 ? n : Math.floor(p.index / 2) + 1;
+  return p.color === 'w' ? `${no}.` : `${no}…`;
+}
+
 /**
  * Summarises an annotated game.
  * @param startEval White-POV eval of the start position (null = lichess's default +0.15).
+ * @param playerColor The player's side: with more key moments than fit, the player's own come first.
  */
-export function summarizeGame(startFen: string, startEval: Score | null, plies: readonly Ply[]): ReviewSummary {
+export function summarizeGame(
+  startFen: string,
+  startEval: Score | null,
+  plies: readonly Ply[],
+  playerColor?: Color,
+): ReviewSummary {
   const accuracy = gameAccuracy([startEval, ...plies.map((p) => p.evalWhite ?? null)], {
     startColor: sideToMove(startFen),
   });
@@ -44,6 +57,8 @@ export function summarizeGame(startFen: string, startEval: Score | null, plies: 
       index: p.index,
       cls: p.classification!.cls,
       san: p.san,
+      label: moveNumberLabel(p),
+      color: p.color,
       text: p.explanation?.headline ?? classLabel(p.classification!.cls),
     };
     const c = concession(p);
@@ -58,10 +73,12 @@ export function summarizeGame(startFen: string, startEval: Score | null, plies: 
     keyMoments = plies.filter((p) => key(p) || p.classification?.cls === 'inaccuracy').map(moment);
   }
   if (keyMoments.length > MAX_KEY_MOMENTS) {
-    // Keep the most important ones (blunders and brilliancies first), then restore game order.
+    // Keep the most important ones (blunders and brilliancies first): the player's own first (a
+    // weak bot's many blunders never push out the player's moments), then restore game order.
+    const mineFirst = (m: KeyMoment) => (playerColor && m.color !== playerColor ? 1 : 0);
     keyMoments = keyMoments
       .slice()
-      .sort((a, b) => priority(a) - priority(b) || a.index - b.index)
+      .sort((a, b) => mineFirst(a) - mineFirst(b) || priority(a) - priority(b) || a.index - b.index)
       .slice(0, MAX_KEY_MOMENTS)
       .sort((a, b) => a.index - b.index);
   }

@@ -30,6 +30,45 @@ export function isThirdRepetition(startFen: string, moves: readonly { fenAfter: 
   return seen >= 3;
 }
 
+/** How often a game has had each position so far, by `fenKey`. */
+export type SeenPositions = ReadonlyMap<string, number>;
+
+/** `seen` plus one more occurrence of `fen`. */
+export function withPosition(seen: SeenPositions, fen: string): Map<string, number> {
+  const out = new Map(seen);
+  const k = fenKey(fen);
+  out.set(k, (out.get(k) ?? 0) + 1);
+  return out;
+}
+
+/** The positions of a game: the start and the position after each move (`fenAfter`), for the first `upTo` moves. */
+export function seenPositions(startFen: string, moves: readonly { fenAfter: string }[], upTo = moves.length): Map<string, number> {
+  const out = new Map<string, number>();
+  const add = (fen: string) => {
+    const k = fenKey(fen);
+    out.set(k, (out.get(k) ?? 0) + 1);
+  };
+  add(startFen);
+  for (let i = 0; i < Math.min(upTo, moves.length); i++) add(moves[i].fenAfter);
+  return out;
+}
+
+/**
+ * The legal moves in `fen` that would repeat a position for the third time (a draw), counting the
+ * game's positions in `seen` (which include `fen`). UCI.
+ */
+export function repetitionReplies(fen: string, seen: SeenPositions): string[] {
+  try {
+    const c = new Chess(fen);
+    return c
+      .moves({ verbose: true })
+      .filter((m) => (seen.get(fenKey(m.after)) ?? 0) >= 2)
+      .map((m) => toUci(m));
+  } catch {
+    return [];
+  }
+}
+
 export function sideToMove(fen: string): Color {
   return fen.split(' ')[1] === 'b' ? 'b' : 'w';
 }
@@ -116,9 +155,13 @@ export function material(fen: string): { w: number; b: number } {
 
 const START_COUNTS: Record<string, number> = { p: 8, n: 2, b: 2, r: 2, q: 1 };
 
+const CAPTURE_ORDER = ['q', 'r', 'b', 'n', 'p'];
+
 /**
  * Pieces captured BY each colour (lower-case letters, most valuable first), derived from the
- * board so it stays correct across takebacks. Promotions can make counts negative; those are clamped.
+ * board so it stays correct across takebacks. A piece beyond the starting set (a promotion) was a
+ * pawn, which is then not counted as captured. (A promoted piece captured later counts as a pawn:
+ * `capturedByMoves` knows better when the moves are at hand.)
  */
 export function capturedPieces(fen: string): { w: string[]; b: string[] } {
   const placement = fen.split(' ')[0];
@@ -129,9 +172,23 @@ export function capturedPieces(fen: string): { w: string[]; b: string[] } {
     const c: Color = ch === lower ? 'b' : 'w';
     counts[c][lower] = (counts[c][lower] ?? 0) + 1;
   }
-  const order = ['q', 'r', 'b', 'n', 'p'];
-  const lost = (c: Color) =>
-    order.flatMap((p) => Array(Math.max(0, START_COUNTS[p] - (counts[c][p] ?? 0))).fill(p) as string[]);
+  const lost = (c: Color) => {
+    const promoted = ['q', 'r', 'b', 'n'].reduce((n, p) => n + Math.max(0, (counts[c][p] ?? 0) - START_COUNTS[p]), 0);
+    return CAPTURE_ORDER.flatMap((p) => {
+      const have = (counts[c][p] ?? 0) + (p === 'p' ? promoted : 0);
+      return Array(Math.max(0, START_COUNTS[p] - have)).fill(p) as string[];
+    });
+  };
   // White captured what Black lost, and vice versa.
   return { w: lost('b'), b: lost('w') };
+}
+
+/** Pieces captured BY each colour in these moves (the game's, from its start), most valuable first. */
+export function capturedByMoves(moves: readonly { color: Color; captured?: string }[]): { w: string[]; b: string[] } {
+  const out: { w: string[]; b: string[] } = { w: [], b: [] };
+  for (const m of moves) if (m.captured) out[m.color].push(m.captured);
+  const rank = (p: string) => CAPTURE_ORDER.indexOf(p);
+  out.w.sort((a, b) => rank(a) - rank(b));
+  out.b.sort((a, b) => rank(a) - rank(b));
+  return out;
 }

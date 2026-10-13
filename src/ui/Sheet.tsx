@@ -151,7 +151,11 @@ export function Sheet({ open, onClose, title, children, footer, hideTitle = fals
     } else if (phase === 'closed' && prevFocus.current) {
       const el = prevFocus.current;
       prevFocus.current = null;
-      if (el.isConnected) el.focus({ preventScroll: true });
+      // Back to where focus was before, unless another layer has taken it meanwhile (the game-over
+      // sheet that a resignation from the Menu opened as the Menu closed): never behind a dialog.
+      const now = document.activeElement;
+      const free = !now || now === document.body || !!rootRef.current?.contains(now);
+      if (el.isConnected && free) el.focus({ preventScroll: true });
     }
     return undefined;
   }, [phase]);

@@ -81,6 +81,38 @@ export const GUIDE_PREFIX = 'guide:';
 /** Id prefix of a guide's trap: "trap:Italian Game:0". */
 export const TRAP_PREFIX = 'trap:';
 
+/** A guide's trap a search names ("scholars mate", "legal", "fried liver"). */
+export interface TrapHit {
+  /** The trap's study line ("trap:Italian Game:0"). */
+  id: string;
+  title: string;
+  /** The opening whose guide teaches it. */
+  family: string;
+}
+
+/** Words that say "a trap" without naming one. */
+const TRAP_WORDS = new Set(['trap', 'traps', 'mate', 'the', 'a', 's']);
+
+/**
+ * The guides' traps a search names: every word of the query (but "trap", "mate"…) starts a word
+ * of the trap's title, apostrophes and accents ignored ("scholars mate", "legal trap"). Needs the
+ * guides (loaded with the section); [] for a query with no naming word.
+ */
+export function trapHits(query: string): TrapHit[] {
+  const words = normalizeText(query)
+    .split(' ')
+    .filter((w) => w && !TRAP_WORDS.has(w));
+  if (!words.length || !guidesMod) return [];
+  const out: TrapHit[] = [];
+  for (const g of guidesMod.OPENING_GUIDES) {
+    g.traps?.forEach((t, i) => {
+      const title = normalizeText(t.title).split(' ');
+      if (words.every((w) => title.some((x) => x.startsWith(w)))) out.push({ id: `${TRAP_PREFIX}${g.family}:${i}`, title: t.title, family: g.family });
+    });
+  }
+  return out;
+}
+
 /** A line the section can step through, drill and (unless it is a trap) play against the computer. */
 export interface StudyLine {
   /** Catalog id, `guide:<family>` or `trap:<family>:<index>`. */
@@ -285,19 +317,51 @@ export function familyStudyIds(family: string): string[] {
 /**
  * The line after `id` in its family's list (for "Next variation"), or null. Lines whose moves only
  * start the line just studied (the family's base line after its main line) are skipped: they would
- * teach nothing new.
+ * teach nothing new. After a drill (`side`, the side drilled), so are lines whose moves for that
+ * side only start the drilled line's (the Two Knights Defense after the Italian main line as White:
+ * 1. e4 2. Nf3 3. Bc4 again): the next drill always has a new move to find.
  */
-export function nextLineId(id: string): string | null {
+export function nextLineId(id: string, side?: Color): string | null {
   const line = resolveLine(id);
   if (!line) return null;
   const ids = familyStudyIds(line.family);
   const i = ids.indexOf(id);
   if (i < 0) return null;
+  const own = (sans: readonly string[]) => (side ? sans.filter((_, k) => (k % 2 === 0) === (side === 'w')) : sans);
   for (const next of ids.slice(i + 1)) {
     const l = resolveLine(next);
-    if (l && !isPrefix(l.san, line.san)) return next;
+    if (!l || isPrefix(l.san, line.san)) continue;
+    if (side && isPrefix(own(l.san), own(line.san))) continue;
+    return next;
   }
   return null;
+}
+
+/**
+ * Row titles for a list of lines, each distinguishable: when rows would read the same ("Starting
+ * moves" three times, five "Najdorf Variation"s), each of them adds the move where it parts from the
+ * others ("Starting moves · 3. Nc3"; a line that only starts another one, its last move). `title`
+ * gives a row's plain title.
+ */
+export function distinctTitles<L extends { san: readonly string[] }>(lines: readonly L[], title: (l: L) => string): string[] {
+  const base = lines.map(title);
+  const groups = new Map<string, number[]>();
+  base.forEach((t, i) => groups.set(t, [...(groups.get(t) ?? []), i]));
+  return lines.map((l, i) => {
+    const group = groups.get(base[i])!;
+    if (group.length < 2 || !l.san.length) return base[i];
+    // The first ply where this line differs from every other line of the same name.
+    let k = 0;
+    for (const j of group) {
+      if (j === i) continue;
+      const o = lines[j].san;
+      let c = 0;
+      while (c < l.san.length && c < o.length && l.san[c] === o[c]) c++;
+      k = Math.max(k, c);
+    }
+    const ply = Math.min(k, l.san.length - 1);
+    return `${base[i]} · ${moveLabel(ply, l.san[ply]).replace(' ', '\u00a0')}`;
+  });
 }
 
 /** `a` is `b`'s first moves (or all of them). */
@@ -592,6 +656,10 @@ export function drillFeedback(check: DrillCheck, lineSans: readonly string[]): D
     return { kind: 'correct', text, sans: upTo(played.label) };
   }
   if (result === 'alternative') {
+    // "Allow them": the first other book move is fine, and the line's move stays to be found.
+    if (!check.missed) {
+      return { kind: 'alternative', text: `${played.label} is a good book move too, but this line goes another way. Try again.` };
+    }
     return {
       kind: 'alternative',
       text: `${played.label} is also a book move, but this line continues with ${expected.label}. Play it to go on.`,

@@ -1045,10 +1045,15 @@
 }
 .op-note-title {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   font-size: 16px;
   font-weight: 700;
+}
+/* A term (ⓘ) in a title: its explanation takes a row of its own under the title, never a column beside it. */
+.op-note-title .op-term {
+  display: contents;
 }
 .op-note-who {
   font-weight: 500;
@@ -1444,6 +1449,13 @@
   width: 100%;
   min-height: 52px;
   font-size: 17px;
+}
+/* With a game in progress: the safe way out, under "Resign & play". */
+.op-play-back {
+  width: 100%;
+  min-height: 46px;
+  margin-top: 8px;
+  font-size: 16px;
 }
 
 /* Home: the link that brings back the "New to openings?" card. */

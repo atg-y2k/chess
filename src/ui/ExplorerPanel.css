@@ -291,7 +291,27 @@
 .xpanel-row:disabled {
   cursor: default;
 }
+/*
+ * Nothing ever slides out of the row (under the Engine pill beside it). The row's own width decides
+ * what it drops: the eval first (the bar beside the board says it), then the title shrinks.
+ */
+.xpanel--collapsed > .xpanel-row {
+  overflow: hidden;
+  container: xrow / inline-size;
+}
+@container xrow (max-width: 240px) {
+  .xpanel-row .xpanel-eval {
+    display: none;
+  }
+  .xpanel-row .xpanel-chevron {
+    margin-left: auto;
+  }
+}
 .xpanel-row .xpanel-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 14px;
 }
 .xpanel-row .xpanel-verdict {
@@ -323,6 +343,15 @@
   white-space: nowrap;
   font-size: 12.5px;
   line-height: 1.3;
+}
+/*
+ * A narrow one-row panel (the Engine pill beside the row): the row drops its explorer icon first
+ * (the blue frame and the "Exploring" tag say it), so the verdict word keeps its room.
+ */
+@container panel (max-width: 420px) {
+  .xpanel--collapsed > .xpanel-row .xpanel-tag {
+    display: none;
+  }
 }
 /* A narrow row with the main action beside it: the class icon says the verdict. */
 @container panel (max-width: 420px) {

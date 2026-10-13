@@ -220,6 +220,8 @@
 /* ---------------------------------------------------------------- bot cards */
 
 .ngs-bots {
+  /* The offsetParent of the cards, for the scroll maths that centers the selected one. */
+  position: relative;
   display: flex;
   gap: 4px;
   margin: 10px calc(-1 * var(--sheet-pad)) 0;

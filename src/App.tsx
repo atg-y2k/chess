@@ -18,12 +18,13 @@ import { copyText } from './clipboard';
 import { rememberedEngineMode, resetEngineMode } from './engine/createEngines';
 import type { GameController, OpeningGameOptions } from './game/controller';
 import { PRO_NAME } from './game/entitlements';
+import { nativeBuild } from './native/platform';
 import { DRAW_TIP } from './game/drawings';
 import type { ReadonlyStore, ToolbarId } from './game/store';
 import type { GameSettings, PromotionPiece } from './game/types';
-import { closeOpenings, openingsOpen, openOpenings, popPage } from './openings/session';
+import { closeOpenings, openingsLoadFailedText, openingsOpen, openOpenings, popPage } from './openings/session';
 import type { OfflineStatus } from './pwa';
-import { STARTING_LEVELS } from './rating/rating';
+import { STARTING_LEVELS, formatRatingDelta } from './rating/rating';
 import { applyTheme, loadTheme, saveTheme, watchSystemTheme, type ThemePref } from './theme';
 import { Board } from './ui/Board';
 import { CoachPanel } from './ui/CoachPanel';
@@ -166,6 +167,21 @@ export function App({ controller: c, offline }: AppProps) {
     }
   });
 
+  // Once the app has started (web app: updates replace the old build's files), load the Openings
+  // section's code and data at idle, so an update in the background never breaks the section in this
+  // page (a game in progress is never reloaded onto the new build).
+  const prefetched = useRef(false);
+  useEffect(() => {
+    if (prefetched.current || phase === 'boot' || nativeBuild) return;
+    prefetched.current = true;
+    const run = () =>
+      void loadOpeningsModule()
+        .then((m) => m.prefetchOpeningsData())
+        .catch((e: unknown) => console.warn('[openings] prefetch failed', e));
+    if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(run, { timeout: 8000 });
+    else window.setTimeout(run, 3000);
+  }, [phase]);
+
   const exportPgn = () => void sharePgn(c, notify);
 
   // Desktop / keyboard: ← → step through the moves. Not while a layer is open over the game (a
@@ -219,7 +235,7 @@ export function App({ controller: c, offline }: AppProps) {
         notify={notify}
         offlineReady={!!offline?.value}
       />
-      <Openings c={c} />
+      <Openings c={c} notify={notify} />
       <Paywall c={c} />
       <Splash phase={phase} download={s.engineDownload} />
       {phase === 'error' && <ErrorScreen c={c} />}
@@ -283,7 +299,14 @@ function backChipShown(s: ReadonlyStore): boolean {
  * and nothing covers the board. The first time, a tip under the bar says how to draw.
  */
 function DrawControls({ c }: { c: GameController }) {
-  const d = c.store.draw.value;
+  const s = c.store;
+  const d = s.draw.value;
+  // The bar covers the strip and its "Back to game" chip: the way back moves into the bar.
+  const back = d?.on && backChipShown(s)
+    ? s.phase.value === 'playing'
+      ? { label: 'Back', ariaLabel: 'Back to the game', onClick: () => c.backToLive() }
+      : { label: 'Final', ariaLabel: 'Final position', onClick: () => c.backToLive() }
+    : null;
   const on = !!d?.on;
   const ref = useRef<HTMLDivElement>(null);
   const was = useRef(on);
@@ -311,6 +334,7 @@ function DrawControls({ c }: { c: GameController }) {
         canClear={d.canClear}
         tip={d.tip ? DRAW_TIP : null}
         yourMove={d.yourMove}
+        back={back}
         onColor={(color) => c.setDrawColor(color)}
         onClear={() => c.clearDrawings()}
         onDone={() => c.exitDraw()}
@@ -446,7 +470,7 @@ function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean>
   } else {
     const coach = s.coach.value;
     const collapsed = tight ? !peek : coach.collapsed;
-    // The "Back to game" chip already offers this while browsing.
+    // The "Back to game" chip (or, in Draw mode, the Draw bar) already offers this while browsing.
     const actions = backChipShown(s) ? coach.actions.filter((a) => a.id !== 'backToGame') : coach.actions;
     // Both moves rated: the other one's row expands it (and opens a collapsed panel).
     const other = coach.other;
@@ -534,7 +558,7 @@ function Moves({ c }: { c: GameController }) {
           class="app-opening-chip"
           data-id="opening-chip"
           aria-label={`${opening.name}: learn this opening`}
-          onClick={() => openOpenings({ name: opening.name, eco: opening.eco })}
+          onClick={() => openOpenings({ name: opening.name, eco: opening.eco, ...(s.game.value ? { color: s.game.value.playerColor } : {}) })}
         >
           <IconBook size={15} />
           <span class="app-opening-chip-name">{openingFamilyOf(opening.name)}</span>
@@ -590,7 +614,11 @@ function Tools({ c, summary }: { c: GameController; summary: Signal<boolean> }) 
         id: 'summary',
         label: 'Report',
         icon: <IconChart />,
-        onClick: () => (summary.value = !shown),
+        // The summary floats over the board and the Draw bar on a phone: Draw mode ends, as for a sheet.
+        onClick: () => {
+          if (!shown) c.exitDraw();
+          summary.value = !shown;
+        },
         active: shown,
       },
       flip,
@@ -677,7 +705,7 @@ function Sheets({
         newPlayer={sh.newGame.newPlayer}
         levels={STARTING_LEVELS}
         onSetLevel={(rating) => c.setStartingRating(rating)}
-        onStart={(settings) => c.newGame(settings)}
+        onStart={(settings) => startNewGame(c, notify, () => c.newGame(settings))}
         onClose={close}
         onLearnOpenings={() => openOpenings()}
         arrowsLocked={arrowsLocked ? `Part of ${PRO_NAME}` : null}
@@ -716,9 +744,17 @@ function Sheets({
         offlineReady={offlineReady}
         levels={STARTING_LEVELS}
         onSetLevel={(rating) => {
-          c.setStartingRating(rating);
-          notify(`Your rating is now ${Math.round(c.store.profile.value.rating)}`);
+          const when = c.setStartingRating(rating);
+          notify(
+            when === 'afterGame'
+              ? `Your level becomes ${c.store.pendingLevel.value ?? rating} when this game ends`
+              : `Your rating is now ${Math.round(c.store.profile.value.rating)}`,
+          );
         }}
+        levelAfterGame={sh.menu.levelAfterGame}
+        pendingLevel={sh.menu.pendingLevel}
+        provisional={sh.menu.provisional}
+        resign={sh.menu.resign}
         onClose={close}
         pro={
           pro.enabled
@@ -748,6 +784,30 @@ function Sheets({
   );
 }
 
+/**
+ * Starts a new game, and when that ended a game in progress ("Resign & play"), says what the loss
+ * did to the rating (no game-over sheet shows for it).
+ */
+export function startNewGame(c: GameController, notify: Notify, start: () => Promise<void>): void {
+  const before = c.store.game.peek();
+  const moved = c.store.sheets.peek().newGame.inProgress;
+  const done = start();
+  if (!before || !moved) return;
+  let said = false;
+  const report = () => {
+    const r = c.store.profile.peek().history.find((g) => g.id === before.id);
+    if (said || !r || r.reason !== 'Abandoned') return;
+    said = true;
+    notify(
+      r.rated
+        ? `Previous game counted as a loss: rating ${r.ratingBefore} → ${r.ratingAfter} (${formatRatingDelta(r.ratingAfter - r.ratingBefore)})`
+        : 'Previous game counted as a loss (unrated)',
+    );
+  };
+  report();
+  void done.then(report);
+}
+
 // -------------------------------------------------------------------------------------------------
 // Openings
 
@@ -772,7 +832,7 @@ const OPENINGS_CLOSE_MS = 300;
  * opened from, as it was. Back, Escape and the browser's or Android's Back button go back a page
  * (and close it from its first page). Playing an opening starts the game and closes it.
  */
-function Openings({ c }: { c: GameController }) {
+function Openings({ c, notify }: { c: GameController; notify: Notify }) {
   const open = openingsOpen.value;
   const [mounted, setMounted] = useState(open);
   const [mod, setMod] = useState<OpeningsModule | null>(null);
@@ -838,7 +898,7 @@ function Openings({ c }: { c: GameController }) {
     inProgress: s.sheets.peek().newGame.inProgress,
   });
   const startGame = (settings: GameSettings, opening: OpeningGameOptions) => {
-    void c.newGame(settings, { opening });
+    startNewGame(c, notify, () => c.newGame(settings, { opening }));
     closeOpenings();
   };
   return (
@@ -879,7 +939,7 @@ function Openings({ c }: { c: GameController }) {
           </button>
           {failed ? (
             <>
-              <p>Couldn’t load the openings. Check your connection and try again.</p>
+              <p>{openingsLoadFailedText()}</p>
               <button type="button" class="btn btn-primary" onClick={() => setAttempt((a) => a + 1)}>
                 Try again
               </button>
