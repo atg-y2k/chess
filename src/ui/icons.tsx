@@ -173,6 +173,14 @@ export const IconBotRated = (p: IconProps) => (
   </Svg>
 );
 
+/** Threat alerts: a warning triangle. */
+export const IconThreat = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M10.3 4.2 2.6 17.6A2 2 0 0 0 4.3 20.6h15.4a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0Z" />
+    <path d="M12 9.5v4.5M12 17.2v.3" />
+  </Svg>
+);
+
 /** Openings: an open book. */
 export const IconBook = (p: IconProps) => (
   <Svg {...p}>
@@ -195,5 +203,20 @@ export const IconTrash = (p: IconProps) => (
     <path d="M4 7h16M10 7V4.5h4V7" />
     <path d="M6 7l1 12.5a1.5 1.5 0 0 0 1.5 1.5h7a1.5 1.5 0 0 0 1.5-1.5L18 7" />
     <path d="M10 11v6M14 11v6" />
+  </Svg>
+);
+
+/** A play triangle (the game viewer's "Play here"). */
+export const IconPlay = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M7 4.5v15l12.5-7.5Z" />
+  </Svg>
+);
+
+/** Skip forward (Try again's "Next mistake": the next move to try, not the next move of the game). */
+export const IconSkipForward = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m5 5 9 7-9 7Z" />
+    <path d="M19 5v14" />
   </Svg>
 );

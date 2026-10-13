@@ -35,6 +35,7 @@ export type ProFeature =
   | 'hint'
   | 'showBest'
   | 'bestMoveArrows'
+  | 'threatAlerts'
   | 'reviewDetails'
   | 'explorer'
   | 'explorerEngine'
@@ -56,6 +57,8 @@ export const FEATURE_TIERS: Readonly<Record<ProFeature, Tier>> = {
   showBest: 'pro',
   /** The live best-move arrows option. */
   bestMoveArrows: 'pro',
+  /** Threat alerts: a warning (and an arrow) when the opponent threatens something real. */
+  threatAlerts: 'pro',
   /** Game Review's key moments and per-move explanations (accuracy and counts stay free). */
   reviewDetails: 'pro',
   /** The explorer: try moves for both sides on the board, without the engine (pure rules). */
@@ -109,9 +112,14 @@ export const FEATURE_INFO: Readonly<Record<ProFeature, FeatureInfo>> = {
     detail: 'The engine’s top moves as you play',
     context: 'Best-move arrows are part of Pro.',
   },
+  threatAlerts: {
+    title: 'Threat alerts',
+    detail: 'A warning when your opponent threatens something',
+    context: 'Threat alerts are part of Pro.',
+  },
   reviewDetails: {
     title: 'Full Game Review',
-    detail: 'Key moments and coaching on every move',
+    detail: 'Key moments, coaching on every move, and Try again on your mistakes',
     context: 'See the moments that decided the game.',
   },
   explorer: {
@@ -144,6 +152,7 @@ const FEATURE_ORDER: readonly ProFeature[] = [
   'explorer',
   'explorerEngine',
   'bestMoveArrows',
+  'threatAlerts',
   'reviewDetails',
   'openingGuides',
   'openingDrills',

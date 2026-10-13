@@ -34,6 +34,7 @@ import { EvalBar } from './ui/EvalBar';
 import { EvalGraph } from './ui/EvalGraph';
 import { ExplorerPanel } from './ui/ExplorerPanel';
 import { GameOverSheet } from './ui/GameOverSheet';
+import { GameViewer } from './ui/GameViewer';
 import {
   IconBook,
   IconBulb,
@@ -44,10 +45,13 @@ import {
   IconCoach,
   IconCpu,
   IconExplore,
+  IconEye,
   IconFlip,
   IconMenu,
+  IconPlay,
   IconPlus,
   IconReset,
+  IconSkipForward,
   IconUndo,
 } from './ui/icons';
 import { MenuSheet } from './ui/MenuSheet';
@@ -109,6 +113,7 @@ export function App({ controller: c, offline }: AppProps) {
   const evalVisible = useComputed(() => s.evalBar.value.visible).value;
   const graphVisible = useComputed(() => s.evalGraph.value.visible).value;
   const exploring = useComputed(() => !!s.explorer.value).value;
+  const practicing = useComputed(() => !!s.practice.value).value;
   const [theme, setTheme] = useState<ThemePref>(loadTheme);
   const themeRef = useRef(theme);
   themeRef.current = theme;
@@ -182,21 +187,24 @@ export function App({ controller: c, offline }: AppProps) {
     else window.setTimeout(run, 3000);
   }, [phase]);
 
-  const exportPgn = () => void sharePgn(c, notify);
+  const exportPgn = () => void sharePgn(c.exportPgn(), notify);
 
   // Desktop / keyboard: ← → step through the moves. Not while a layer is open over the game (a
   // sheet, the paywall, which is not in `s.sheet`, the Openings section): its own Escape goes first.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || s.sheet.value || openingsOpen.value) return;
+      // The game viewer has its own keys (it steps aside while one of its moves is tried again).
+      if (s.viewer.value && !s.practice.value) return;
       if (hasOpenLayer() || c.entitlements.paywall.value.open) return;
       const el = e.target instanceof Element ? e.target : null;
       if (el?.closest('input, textarea, select, [role="slider"], [contenteditable]')) return;
       if (e.key === 'ArrowLeft') c.stepBack();
       else if (e.key === 'ArrowRight') c.stepForward();
-      // Escape leaves Draw mode first, then the explorer.
+      // Escape leaves Draw mode first, then the explorer or Try again.
       else if (e.key === 'Escape' && s.drawMode.value) c.exitDraw();
       else if (e.key === 'Escape' && s.explorer.value) c.exitExplorer();
+      else if (e.key === 'Escape' && s.practice.value) c.exitPractice();
       else return;
       e.preventDefault();
     };
@@ -212,10 +220,12 @@ export function App({ controller: c, offline }: AppProps) {
         data-evalbar={evalVisible ? '' : undefined}
         data-graph={graphVisible ? '' : undefined}
         data-exploring={exploring ? '' : undefined}
+        data-practice={practicing ? '' : undefined}
         aria-hidden={phase === 'boot' || phase === 'error' ? 'true' : undefined}
       >
         <Player store={s} which="top">
           {exploring && <ExploringTag onExit={() => c.exitExplorer()} />}
+          {practicing && <PracticeTag onExit={() => c.exitPractice()} />}
         </Player>
         <BoardArea c={c} />
         <Player store={s} which="bottom">
@@ -235,6 +245,7 @@ export function App({ controller: c, offline }: AppProps) {
         notify={notify}
         offlineReady={!!offline?.value}
       />
+      <Viewer c={c} notify={notify} />
       <Openings c={c} notify={notify} />
       <Paywall c={c} />
       <Splash phase={phase} download={s.engineDownload} />
@@ -288,7 +299,8 @@ function backChipShown(s: ReadonlyStore): boolean {
     !s.isLive.value &&
     (phase === 'playing' || phase === 'over') &&
     s.coachMode.value.kind !== 'showBest' &&
-    !s.explorer.value
+    !s.explorer.value &&
+    !s.practice.value
   );
 }
 
@@ -357,12 +369,33 @@ function ExploringTag({ onExit }: { onExit: () => void }) {
   );
 }
 
+/**
+ * "Try again ✕" on the top player strip while trying one of your moves again (with the frame
+ * around the board, App.css): not the game. Tapping it goes back, like the toolbar's Back.
+ */
+function PracticeTag({ onExit }: { onExit: () => void }) {
+  return (
+    <button
+      type="button"
+      class="app-explore-tag app-practice-tag"
+      data-id="practicing"
+      aria-label="Trying a move again. Go back"
+      onClick={onExit}
+    >
+      <IconReset size={15} />
+      Try again
+      <IconClose size={14} class="app-explore-tag-x" />
+    </button>
+  );
+}
+
 /** [eval bar | board]. */
 function BoardArea({ c }: { c: GameController }) {
   const s = c.store;
   const board = s.board.value;
   const onMove = (from: string, to: string, promotion?: PromotionPiece) => {
-    if (s.explorer.value) c.explorerMove(from, to, promotion);
+    if (s.practice.value) c.practiceMove(from, to, promotion);
+    else if (s.explorer.value) c.explorerMove(from, to, promotion);
     else c.playerMove(from, to, promotion);
   };
   return (
@@ -465,6 +498,7 @@ function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean>
         onSelectPly={select}
         onClose={() => c.exitReview()}
         onUnlock={() => c.entitlements.openPaywall('reviewDetails')}
+        onTryAgain={(index) => c.tryAgain(index)}
       />
     );
   } else {
@@ -492,6 +526,7 @@ function PanelArea({ c, summary }: { c: GameController; summary: Signal<boolean>
         other={other ? { ...other, onSelect: selectOther } : undefined}
         who={coach.who}
         verdict={coach.verdict}
+        alert={coach.alert}
         actions={actions.map((a) => ({
           id: a.id,
           label: a.label,
@@ -523,8 +558,9 @@ function GraphArea({ c }: { c: GameController }) {
   const s = c.store;
   const g = s.evalGraph.value;
   const playing = s.phase.value === 'playing';
-  // The game's graph stays while exploring, dimmed and not tappable (the explorer has its own line).
-  const exploring = !!s.explorer.value;
+  // The game's graph stays while exploring or trying a move again, dimmed and not tappable (the
+  // explorer has its own line; Try again marks the position it is at).
+  const exploring = !!s.explorer.value || !!s.practice.value;
   return (
     <div class="app-graph" data-dim={exploring ? '' : undefined}>
       <EvalGraph
@@ -546,9 +582,10 @@ function GraphArea({ c }: { c: GameController }) {
  */
 function Moves({ c }: { c: GameController }) {
   const s = c.store;
-  const select = (i: number) => (s.explorer.value ? c.explorerGoTo(i) : c.goTo(i));
+  // Trying a move again: the moves are only there to look at.
+  const select = (i: number) => (s.practice.value ? undefined : s.explorer.value ? c.explorerGoTo(i) : c.goTo(i));
   const exploring = !!s.explorer.value;
-  const opening = exploring || s.openingPractice.value ? null : (s.gameSummary.value?.opening ?? null);
+  const opening = exploring || s.practice.value || s.openingPractice.value ? null : (s.gameSummary.value?.opening ?? null);
   return (
     <div class="app-moves" data-exploring={exploring ? '' : undefined} data-opening={opening ? '' : undefined}>
       <MoveList {...s.moveList.value} onSelect={select} />
@@ -598,7 +635,25 @@ function Tools({ c, summary }: { c: GameController; summary: Signal<boolean> }) 
   const exploreIcon = t.explore.locked ? <LockedIcon><IconExplore /></LockedIcon> : <IconExplore />;
   const explore = item('explore', 'Explore', exploreIcon, () => c.requestExplore());
   let items: ToolbarItem[];
-  if (s.explorer.value) {
+  if (s.practice.value) {
+    // Once the try is over, Play on takes the place of the hint and the answer (one tap away on a
+    // short phone, whose panel is a single row).
+    const over = !t.practicePlayOn.disabled;
+    items = [
+      item('practiceExit', 'Back', <IconChevronLeft />, () => c.exitPractice()),
+      flip,
+      ...(over
+        ? [item('practicePlayOn', 'Play on', <IconPlay />, () => void c.practicePlayOn())]
+        : [
+            item('practiceHint', 'Hint', <IconBulb />, () => c.practiceHint()),
+            item('practiceAnswer', 'Answer', <IconEye />, () => c.practiceShowAnswer()),
+          ]),
+      // "Next one" (the next mistake to try), with its own icon: not the move-stepping Next, and short
+      // enough for six buttons on a 375-point phone.
+      item('practiceNext', 'Next one', <IconSkipForward />, () => void c.practiceNext()),
+      menu,
+    ];
+  } else if (s.explorer.value) {
     items = [
       item('explorerReset', 'Reset', <IconReset />, () => c.explorerReset()),
       flip,
@@ -642,7 +697,13 @@ function Tools({ c, summary }: { c: GameController; summary: Signal<boolean> }) 
       menu,
     ];
   }
-  const label = s.explorer.value ? 'Explorer controls' : phase === 'review' ? 'Review controls' : 'Game controls';
+  const label = s.practice.value
+    ? 'Try again controls'
+    : s.explorer.value
+      ? 'Explorer controls'
+      : phase === 'review'
+        ? 'Review controls'
+        : 'Game controls';
   return (
     <div class="app-tools">
       <Toolbar items={items} label={label} />
@@ -670,6 +731,7 @@ function Sheets({
   const engineMode = c.store.engineMode.value;
   const pro = c.entitlements;
   const arrowsLocked = pro.locked.value.has('bestMoveArrows');
+  const threatsLocked = pro.locked.value.has('threatAlerts');
   const proStatus = pro.status.value;
   const restoreFromMenu = async () => {
     const wasUnlocked = pro.pro.peek();
@@ -694,6 +756,8 @@ function Sheets({
   if (sh.assist) lastAssist.current = sh.assist;
   const assist = lastAssist.current;
   const close = () => c.closeSheet();
+  // The player's weak moves of the finished game to try again (the game-over sheet's button).
+  const tries = c.store.tryAgainMoments.value;
   return (
     <>
       <NewGameSheet
@@ -709,7 +773,9 @@ function Sheets({
         onClose={close}
         onLearnOpenings={() => openOpenings()}
         arrowsLocked={arrowsLocked ? `Part of ${PRO_NAME}` : null}
+        threatsLocked={threatsLocked ? `Part of ${PRO_NAME}` : null}
         onUnlock={() => pro.openPaywall('bestMoveArrows')}
+        onUnlockThreats={() => pro.openPaywall('threatAlerts')}
       />
       {assist && (
         <ConfirmSheet
@@ -764,16 +830,30 @@ function Sheets({
                 pending: proStatus === 'pending',
                 restoring: proStatus === 'restoring',
                 arrowsLocked,
+                threatsLocked,
               }
             : undefined
         }
         onUnlock={(feature) => pro.openPaywall(feature ?? null)}
         onRestore={() => void restoreFromMenu()}
+        onOpenGame={(id) => c.openGame(id, { from: 'menu' })}
       />
       {over && (
         <GameOverSheet
           {...over}
           open={sh.open === 'gameOver' && !!sh.gameOver}
+          tryAgain={
+            tries.size
+              ? {
+                  count: tries.size,
+                  // The first of them (game order); Next mistake goes on from there.
+                  onClick: () => {
+                    close();
+                    c.tryAgain(Math.min(...tries));
+                  },
+                }
+              : null
+          }
           onReview={() => void c.startReview()}
           onRematch={() => c.rematch()}
           onNewGame={() => c.openSheet('new')}
@@ -806,6 +886,133 @@ export function startNewGame(c: GameController, notify: Notify, start: () => Pro
   };
   report();
   void done.then(report);
+}
+
+// -------------------------------------------------------------------------------------------------
+// Game viewer
+
+/** Must match the closing animation of `.viewer-shell` (GameViewer.css) plus a little slack. */
+const VIEWER_CLOSE_MS = 300;
+
+/**
+ * The game viewer (ui/GameViewer.tsx): one of your earlier games, full screen over the game and its
+ * sheets (the Menu it was opened from stays open under it), under the paywall. Back, Escape and the
+ * browser's or Android's Back button close it; ← → step through the moves. It steps aside while one
+ * of its moves is tried again (the try is on the game screen) and comes back as it was.
+ */
+function Viewer({ c, notify }: { c: GameController; notify: Notify }) {
+  const s = c.store;
+  const live = c.viewerView.value;
+  const trying = !!s.practice.value;
+  const open = !!live && !trying;
+  const last = useRef(live);
+  if (live) last.current = live;
+  const [mounted, setMounted] = useState(open);
+  /** Back from a try: the viewer shows again at once (no slide). */
+  const [returning, setReturning] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    // Stepping aside for a try: at once (the try's board shows); closing: after the slide.
+    if (trying) {
+      setMounted(false);
+      setReturning(true);
+      return;
+    }
+    setReturning(false);
+    const t = window.setTimeout(() => setMounted(false), VIEWER_CLOSE_MS);
+    return () => window.clearTimeout(t);
+  }, [open, trying]);
+
+  const close = () => c.closeGame();
+  const onEscape = () => {
+    const v = s.viewer.peek();
+    if (v?.draw.on) c.viewerExitDraw();
+    else close();
+  };
+  const isTop = useEscapeLayer(open, onEscape);
+  useBackButton(open, close, () => !!s.viewer.peek() && !s.practice.peek());
+
+  // ← → step through the moves (not while a sheet or the paywall is over it, nor in a text field).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || !isTop()) return;
+      const el = e.target instanceof Element ? e.target : null;
+      if (el?.closest('input, textarea, select, [role="slider"], [contenteditable]')) return;
+      if (e.key === 'ArrowLeft') c.viewerStep(-1);
+      else if (e.key === 'ArrowRight') c.viewerStep(1);
+      else return;
+      e.preventDefault();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  // Focus moves into the viewer (it covers the Menu) and goes back where it was when it closes.
+  const shellRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const shell = shellRef.current;
+    if (!open || !mounted || !shell) return;
+    const before = document.activeElement instanceof HTMLElement && !shell.contains(document.activeElement) ? document.activeElement : null;
+    if (!shell.contains(document.activeElement)) shell.focus({ preventScroll: true });
+    return () => {
+      const now = document.activeElement;
+      if (before?.isConnected && (!now || now === document.body || shell.contains(now))) before.focus({ preventScroll: true });
+    };
+  }, [open, mounted]);
+
+  const view = live ?? last.current;
+  if (!mounted || !view) return null;
+  const playHere = () => {
+    const r = c.viewerPlayFromHere();
+    if (r === 'inProgress') notify('Finish the game you’re playing to play from here');
+  };
+  return (
+    <div
+      class="viewer-shell"
+      ref={shellRef}
+      data-state={open ? (returning ? 'back' : 'open') : 'closing'}
+      role="dialog"
+      aria-modal="true"
+      aria-label={view.label}
+      tabIndex={-1}
+      data-id="game-viewer"
+      onKeyDown={(e) => {
+        if (!(document.activeElement instanceof Element && document.activeElement.closest('.sheet'))) trapTab(e, shellRef.current, '.sheet');
+      }}
+      // The board measured itself while the viewer was sliding up (chessground measures once).
+      onAnimationEnd={(e) => {
+        if (open && e.target === e.currentTarget) window.dispatchEvent(new Event('resize'));
+      }}
+      onAnimationStart={(e) => {
+        if (e.target === e.currentTarget && returning) setReturning(false);
+      }}
+    >
+      <GameViewer
+        view={view}
+        closing={!open}
+        onBack={close}
+        onExport={() => void sharePgn(c.viewerExportPgn(), notify)}
+        onFlip={() => c.viewerFlip()}
+        onStep={(d) => c.viewerStep(d)}
+        onGoTo={(n) => c.viewerGoTo(n)}
+        onReview={() => c.viewerReview()}
+        onShowReport={(on) => c.viewerShowReport(on)}
+        onPlayHere={playHere}
+        onAction={(id) => c.runViewerAction(id)}
+        onTryAgain={(index) => c.viewerTryAgain(index)}
+        onUnlock={() => c.entitlements.openPaywall('reviewDetails')}
+        onToggleDraw={() => c.viewerToggleDraw()}
+        onExitDraw={() => c.viewerExitDraw()}
+        onDrawShape={(shape, fen) => c.viewerDrawShape(shape, fen)}
+        onClearDrawings={() => c.viewerClearDrawings()}
+        onDrawColor={(color) => c.setDrawColor(color)}
+      />
+    </div>
+  );
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -866,7 +1073,7 @@ function Openings({ c, notify }: { c: GameController; notify: Notify }) {
 
   const back = () => void popPage();
   const isTop = useEscapeLayer(open, back);
-  useBackButton(open, back);
+  useBackButton(open, back, () => openingsOpen.peek());
 
   // Focus moves into the section (screen readers and keyboards would stay on the Menu or sheet it
   // covers) and goes back where it was when it closes.
@@ -957,16 +1164,17 @@ function Openings({ c, notify }: { c: GameController; notify: Notify }) {
 }
 
 /**
- * While `open`, one browser history entry belongs to the section: the browser's (or Android's)
- * Back button, or Safari's swipe, goes back a page instead of leaving the app; the entry is taken
- * again while the section stays open, and given back when it closes some other way.
+ * While `open`, one browser history entry belongs to the full-screen layer (the Openings section, the
+ * game viewer): the browser's (or Android's) Back button, or Safari's swipe, goes back (a page, or
+ * out of the viewer) instead of leaving the app; the entry is taken again while the layer stays open
+ * (`stillOpen`), and given back when it closes some other way.
  */
-function useBackButton(open: boolean, onBack: () => void): void {
+function useBackButton(open: boolean, onBack: () => void, stillOpen: () => boolean): void {
   const ref = useRef(onBack);
   ref.current = onBack;
   useEffect(() => {
     if (!open || typeof history === 'undefined') return;
-    const marker = `openings-${Date.now()}`;
+    const marker = `layer-${Date.now()}`;
     const state = { chesscoach: marker };
     let ours = false;
     try {
@@ -983,7 +1191,7 @@ function useBackButton(open: boolean, onBack: () => void): void {
       }
       ours = false;
       ref.current();
-      if (openingsOpen.peek()) {
+      if (stillOpen()) {
         history.pushState(state, '');
         ours = true;
       }
@@ -1142,9 +1350,8 @@ function ErrorScreen({ c }: { c: GameController }) {
 // -------------------------------------------------------------------------------------------------
 // PGN export
 
-/** Shares the PGN (iOS share sheet) when the browser can, else copies it; reports via a toast. */
-async function sharePgn(c: GameController, notify: Notify): Promise<void> {
-  const pgn = c.exportPgn();
+/** Shares a PGN (iOS share sheet) when the browser can, else copies it; reports via a toast. */
+async function sharePgn(pgn: string, notify: Notify): Promise<void> {
   if (!pgn) {
     notify('No game to export yet');
     return;

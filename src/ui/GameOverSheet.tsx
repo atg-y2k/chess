@@ -1,5 +1,5 @@
 import type { Color, GameOutcome } from '../game/types';
-import { IconChart, IconPlus } from './icons';
+import { IconChart, IconPlus, IconReset } from './icons';
 import { formatRatingDelta } from './MenuSheet';
 import { KingGlyph } from './NewGameSheet';
 import { Sheet } from './Sheet';
@@ -24,6 +24,8 @@ export interface GameOverSheetProps {
   botElo?: number;
   /** Opening practice: the line's name ("Opening practice: Italian Game" in place of "Unrated game"). */
   practice?: string;
+  /** Play on from here (Try again): the game's name in place of "Unrated game" ("Practice from move 12"). */
+  practiceLabel?: string;
   /**
    * How well each side played, from the coach's ratings of the moves: accuracy (0..100) and the
    * player's weak moves; 'pending' while the last moves are still being checked. Omitted: none.
@@ -33,6 +35,16 @@ export interface GameOverSheetProps {
   rule?: string | null;
   /** The rating is new and moves fast: a line under the rating change says so. */
   provisional?: boolean;
+  /**
+   * The player's weak moves that can be tried again (Try again, game/practice.ts): how many, and the
+   * button's action (the first of them). Omitted, or none: no button.
+   */
+  tryAgain?: { count: number; onClick: () => void } | null;
+}
+
+/** The game-over sheet's Try again button: "Try your mistake again" / "Try your 3 mistakes again". */
+export function tryAgainLabel(count: number): string {
+  return count === 1 ? 'Try your mistake again' : `Try your ${count} mistakes again`;
 }
 
 /** The game in numbers, for the sheet (see `play`). */
@@ -131,11 +143,15 @@ export function GameOverSheet({
   botColor: botAvatarColor,
   botElo,
   practice,
+  practiceLabel,
   play,
   rule,
   provisional = false,
+  tryAgain,
 }: GameOverSheetProps) {
   const { kind, headline } = gameOverHeadline(outcome, playerColor);
+  // A practice game says what it is in place of "Unrated game".
+  const named = practice ? `Opening practice: ${practice}` : (practiceLabel ?? null);
   const reason = gameOverReason(outcome, playerColor, botName);
   const score = gameOverScore(outcome);
   const rated = ratingChange?.rated === true;
@@ -248,13 +264,13 @@ export function GameOverSheet({
               <span class="gos-delta">{formatRatingDelta(delta)}</span>
             </div>
           ) : (
-            <div class="gos-rating gos-rating--unrated" data-practice={practice ? '' : undefined}>
-              <span class="gos-rating-label">{practice ? `Opening practice: ${practice}` : 'Unrated game'}</span>
+            <div class="gos-rating gos-rating--unrated" data-practice={named ? '' : undefined}>
+              <span class="gos-rating-label">{named ?? 'Unrated game'}</span>
               <span class="gos-rating-note">
-                {practice ? 'Unrated game: ' : ''}
+                {named ? 'Unrated game: ' : ''}
                 {ratingChange
-                  ? `${practice ? 'your' : 'Your'} rating stays at ${ratingChange.before}`
-                  : `${practice ? 'your' : 'Your'} rating is unchanged`}
+                  ? `${named ? 'your' : 'Your'} rating stays at ${ratingChange.before}`
+                  : `${named ? 'your' : 'Your'} rating is unchanged`}
               </span>
             </div>
           )}
@@ -270,6 +286,12 @@ export function GameOverSheet({
               <IconChart size={20} />
               Game Review
             </button>
+            {tryAgain && tryAgain.count > 0 && (
+              <button type="button" class="btn gos-secondary gos-try" data-id="gos-try-again" onClick={tryAgain.onClick}>
+                <IconReset size={18} />
+                {tryAgainLabel(tryAgain.count)}
+              </button>
+            )}
             <div class="gos-actions-row">
               <button type="button" class="btn gos-secondary" data-id="rematch" onClick={onRematch}>
                 <svg

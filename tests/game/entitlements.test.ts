@@ -21,6 +21,7 @@ const ALL: ProFeature[] = [
   'showBest',
   'explorerEngine',
   'bestMoveArrows',
+  'threatAlerts',
   'reviewDetails',
   'openingGuides',
   'openingDrills',
@@ -44,7 +45,7 @@ afterEach(() => {
 });
 
 describe('the free / Pro split (FEATURE_TIERS)', () => {
-  it('sells the coach’s explanations, Hint, Show best, the engine in the explorer, best-move arrows, the review details and the opening lessons and drills', () => {
+  it('sells the coach’s explanations, Hint, Show best, the engine in the explorer, best-move arrows, threat alerts, the review details and the opening lessons and drills', () => {
     expect(proFeatures()).toEqual(ALL);
     for (const f of ALL) expect(FEATURE_TIERS[f]).toBe('pro');
     // The explorer itself (moves on the board, no engine) is free.

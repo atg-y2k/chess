@@ -9,6 +9,7 @@ import { computed, signal, type ReadonlySignal, type Signal } from '@preact/sign
 import { Chess } from 'chess.js';
 import { BOOK_REASON } from '../analysis/explain';
 import { bestMoveNote, bestWasSentence, equalAlternatives, isNearBest, type NearVoice } from '../analysis/nearEqual';
+import type { ThreatAlert } from '../analysis/threat';
 import type { Arrow, Classification, Explanation, MoveClass } from '../analysis/types';
 import { formatScore, resultScore, whiteBarFraction } from '../analysis/winprob';
 import { personaById, customPersona, BOTS } from '../bot/personas';
@@ -37,6 +38,11 @@ import type { PlayerStripProps } from '../ui/PlayerStrip';
 import type { ReviewPanelProps } from '../ui/ReviewPanel';
 import {
   KEY_CLASSES,
+  PUNISHED_LINE,
+  PUNISHED_VERDICT,
+  PUNISH_CLASSES,
+  PUNISH_IT_VERDICT,
+  PUNISH_MISSED_LINE,
   RETRY_CLASSES,
   TOP_CLASSES,
   UNLOCK_LABEL,
@@ -48,7 +54,11 @@ import {
   lockedTeaser,
   mentionsMove,
   moveLabel,
+  namesMove,
   offersShowBest,
+  punishPrompt,
+  punishWithLine,
+  punishmentWasLine,
   recaptureTip,
   showBestTitle,
   verdictTitle,
@@ -57,8 +67,28 @@ import { DRAW_COLORS, NO_DRAWINGS, NO_SHAPES, shapesAt, type DrawColor, type Dra
 import type { ProFeature } from './entitlements';
 import { currentMove, drawReason, explorerFen, type DrawReason, type Explorer, type ExplorerMove } from './explorer';
 import { lineMoveNumber, lineMoves, lineProgress, type LineMove, type LineStatus, type OpeningTarget } from './opening';
+import {
+  awaitsMove,
+  hintText,
+  isSettled as practiceSettled,
+  lastMomentLine,
+  nextMoment,
+  playedLine,
+  practiceFen,
+  practiceMoments,
+  practicePly,
+  practiceTitle,
+  solvedLine,
+  solvedTitle,
+  triedLine,
+  tryKey,
+  NOT_QUITE,
+  type Practice,
+  type PracticeGame,
+} from './practice';
 import { summarizeGame, type ReviewSummary } from './review';
-import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings, type Ply } from './types';
+import type { GameViewer } from './viewer';
+import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings, type Ply, type Punishment } from './types';
 
 // -------------------------------------------------------------------------------------------------
 // State
@@ -70,9 +100,10 @@ export type EngineMode = 'dual' | 'single';
 
 /**
  * Help that makes a rated game unrated; the first use in a rated game asks for confirmation.
- * 'exploreEngine' is switching the engine on in the explorer (exploring without it is free help).
+ * 'exploreEngine' is switching the engine on in the explorer (exploring without it is free help);
+ * 'rateOpponent' and 'threatAlerts' are switching those settings on.
  */
-export type AssistKind = 'hint' | 'undo' | 'retry' | 'exploreEngine' | 'rateOpponent';
+export type AssistKind = 'hint' | 'undo' | 'retry' | 'exploreEngine' | 'rateOpponent' | 'threatAlerts';
 
 /** Whose move the coach's feedback is about during play: yours, or the opponent's (`rateOpponent`). */
 export type CoachSubject = 'you' | 'opponent';
@@ -136,6 +167,23 @@ export interface GameInfo {
    * never taken back. Absent = 0.
    */
   preplayed?: number;
+  /**
+   * "Play on from here" (Try again, see game/practice.ts): a game started from the position before
+   * one of the player's moves in an earlier game, against the same opponent. Unrated from the start;
+   * a rematch keeps it.
+   */
+  practice?: GamePractice;
+}
+
+/** See `GameInfo.practice`. */
+export interface GamePractice {
+  /** The earlier game's move that the player tried again: the game starts just before it ("12. Qxb2"). */
+  from: string;
+  /**
+   * The game starts just after `from` instead (the game viewer's Play from here on an earlier game's
+   * final position, where no move follows).
+   */
+  after?: boolean;
 }
 
 export interface RatingChange {
@@ -255,6 +303,36 @@ export interface AppState {
   /** The first-use tip under the Draw bar is showing ("Drag between squares for an arrow…"). */
   drawTip: Signal<boolean>;
   /**
+   * Threat alerts: the controller's latest probe result for the live position on the player's turn
+   * (analysis/threat.ts; null = no threat there). It is about `fen` only: the view models show it
+   * while that is the live position (`threatAlert`), never after the position changed.
+   */
+  threat: Signal<ThreatAlert | null>;
+  /**
+   * The opponent's move whose punishment the player revealed ("Show me", or a hint), by
+   * `annotationKey`; null when none. See `punishView`.
+   */
+  punishReveal: Signal<string | null>;
+  /**
+   * Try again (game/practice.ts): one of the player's weak moves set up again, from Game Review's key
+   * moments (or an earlier game's). While it is on, the board, the coach panel, the move list, the
+   * graph, the strips and the toolbar show the try, not the game; the game itself never changes. Not
+   * saved.
+   */
+  practice: Signal<Practice | null>;
+  /**
+   * The player's weak moves whose better move has been shown (by practice.ts `tryKey`): Show best on
+   * it, or a try at it that ended (found, or Show answer). Until then a move that can be tried again
+   * keeps its answer hidden: no "Best was …" and no arrow (Game Review, the game viewer). For the
+   * session only.
+   */
+  revealedTries: Signal<ReadonlySet<string>>;
+  /**
+   * The game viewer (game/viewer.ts): an earlier game from the history, full screen over the game
+   * (its own board, moves, review). It never changes the game or the rating. Not saved.
+   */
+  viewer: Signal<GameViewer | null>;
+  /**
    * Pro features that are locked (game/entitlements.ts; empty where Pro is not sold or is
    * unlocked). The view models never show what they would reveal: explanations, hints, the best
    * move, best-move arrows, the review's key moments.
@@ -292,8 +370,18 @@ export type CoachActionId =
   | 'rematch'
   | 'retryBoot'
   | 'retryAnalysis'
+  /** "Show me": reveals the punishment of the opponent's mistake (see `punishView`); Pro's Show best. */
+  | 'showPunishment'
   /** Opens the paywall for the action's `feature` (the coach's text is locked). */
   | 'unlock'
+  /** Game Review's coach on one of your weak moves (a key moment): try it again (see game/practice.ts). */
+  | 'tryAgain'
+  /** Try again's buttons: a hint, the answer, the next move to try, a new game from there, back. */
+  | 'practiceHint'
+  | 'practiceAnswer'
+  | 'practiceNext'
+  | 'practicePlayOn'
+  | 'practiceExit'
   /**
    * Opening practice: not a button of the actions row but the banner at the top of the panel
    * ("Italian Game · Move 3 of 5"); its label is the line's name, the status and the tone ('on',
@@ -312,8 +400,11 @@ export interface CoachActionView {
   feature?: ProFeature;
 }
 
-/** What the panel shows: 'coach' feedback, a 'hint', 'minimal' (coach off), 'review', or 'status'. */
-export type CoachViewKind = 'coach' | 'hint' | 'minimal' | 'review' | 'status';
+/**
+ * What the panel shows: 'coach' feedback, a 'hint', 'minimal' (coach off), 'review', 'status', or
+ * 'practice' (Try again, see game/practice.ts).
+ */
+export type CoachViewKind = 'coach' | 'hint' | 'minimal' | 'review' | 'status' | 'practice';
 
 /** The other rated move as one compact row of the coach panel (CoachPanel `other`, minus its handler). */
 export interface CoachOtherView extends Omit<CoachOther, 'onSelect'> {
@@ -361,7 +452,16 @@ export type ToolbarId =
   /** The explorer's toolbar (its ‹ and › are 'prev' and 'next'). */
   | 'explorerReset'
   | 'explorerReply'
-  | 'explorerExit';
+  | 'explorerExit'
+  /**
+   * Try again's toolbar: back (to the review), a hint, the answer, the next move to try; once the try
+   * is over, Play on from here in place of the hint and the answer.
+   */
+  | 'practiceExit'
+  | 'practiceHint'
+  | 'practiceAnswer'
+  | 'practiceNext'
+  | 'practicePlayOn';
 
 export interface ToolState {
   disabled: boolean;
@@ -413,6 +513,8 @@ export interface SheetsView {
     ratingChange?: RatingChange;
     /** Opening practice: the line's name ("Opening practice: Italian Game" on the sheet). */
     practice?: string;
+    /** Play on from here (Try again): what the sheet calls the game ("Practice from move 12"). */
+    practiceLabel?: string;
     /** Accuracy and the player's weak moves, once every move is checked ('pending' until then). */
     play: GameOverPlay | 'pending' | null;
     /** A draw rule in plain words (coach.ts `drawRuleText`), or null. */
@@ -576,6 +678,34 @@ export interface Store extends AppState {
   openingPractice: ReadonlySignal<OpeningPracticeView | null>;
   /** Draw mode's toggle and bar; null when no game is on the board. */
   draw: ReadonlySignal<DrawView | null>;
+  /**
+   * The threat alert on show (the coach panel's warning and the board's threat arrow): threat alerts
+   * on (allowed, in an unrated game), the live position on the player's turn, not exploring; null
+   * otherwise, and while it would hint at a punishment still to be found (see `punishView`).
+   */
+  threatAlert: ReadonlySignal<ThreatAlert | null>;
+  /**
+   * The opponent's weak move whose punishment the player is asked to find (`rateOpponent`): its
+   * last move was a mistake, miss or blunder and it is the player's turn. `hidden` until the player
+   * taps "Show me" (or a hint shows the best move); `punishment` is the answer, when known.
+   */
+  punishView: ReadonlySignal<PunishView | null>;
+  /** The position on the board while trying a move again (null otherwise). */
+  practicePosition: ReadonlySignal<PositionInfo | null>;
+  /**
+   * The finished game's plies that can be tried again (Try again, game/practice.ts
+   * `practiceMoments`): the player's key moments that were an inaccuracy or worse. Empty while the
+   * game is in progress, and while Game Review's details are locked (Pro).
+   */
+  tryAgainMoments: ReadonlySignal<ReadonlySet<number>>;
+}
+
+/** See `Store.punishView`. */
+export interface PunishView {
+  ply: Ply;
+  hidden: boolean;
+  /** The punishing move (the best reply), from the annotation or else the live analysis. */
+  punishment: Punishment | null;
 }
 
 /** The store as the UI should see it: every signal read-only. */
@@ -597,6 +727,9 @@ interface KnownEval {
 const NO_DESTS: Map<string, string[]> = new Map();
 const NO_ARROWS: Arrow[] = [];
 const NONE_LOCKED: ReadonlySet<ProFeature> = new Set();
+const NO_MOMENTS: ReadonlySet<number> = new Set();
+/** The opponent's mistake, said without the move that punishes it (while yours after it may be retried). */
+const OPPONENT_CHANCE = 'This move gave you a chance.';
 /** What "book" means, for a beginner (opening practice says it once). */
 const BOOK_MEANING = 'A “book” move is a well-known opening move that players have studied for years.';
 /** Your move's classes that keep its feedback expanded when the opponent's is rated too. */
@@ -724,6 +857,11 @@ export function createState(init: {
     drawColor: signal<DrawColor>(DRAW_COLORS[0]),
     drawings: signal<Drawings>(NO_DRAWINGS),
     drawTip: signal(false),
+    threat: signal<ThreatAlert | null>(null),
+    punishReveal: signal<string | null>(null),
+    practice: signal<Practice | null>(null),
+    revealedTries: signal<ReadonlySet<string>>(new Set()),
+    viewer: signal<GameViewer | null>(null),
     locked: init.locked ?? signal(NONE_LOCKED),
   };
 }
@@ -808,6 +946,64 @@ export function createStore(state: AppState): Store {
     const pre = preplayed.value;
     for (let i = ps.length - 1; i >= pre && i >= ps.length - 2; i--) if (g && ps[i].color !== g.playerColor) return ps[i];
     return null;
+  });
+
+  // --- the punishment of the opponent's mistakes, threat alerts ----------------------------------
+  /**
+   * The opponent's latest move was a mistake, miss or blunder while its moves are rated: the player,
+   * to move, is asked to punish it. Its explanation, Show best and anything naming the punishing move
+   * (best-move arrows, a threat alert pointing at it) wait until the player has moved or tapped
+   * "Show me" (`hidden` until then).
+   */
+  const punishView = computed<PunishView | null>(() => {
+    const g = game.value;
+    const last = plies.value.at(-1);
+    if (!g || !last || !ratesOpponent.value || phase.value !== 'playing' || outcome.value) return null;
+    if (last.color === g.playerColor || last.index < preplayed.value) return null;
+    const cls = last.classification?.cls;
+    if (!cls || !last.explanation || !PUNISH_CLASSES.has(cls)) return null;
+    let punishment = last.punishment ?? null;
+    if (!punishment) {
+      // Annotated before punishments were kept (an older save): the live analysis of the position.
+      const l = live.value;
+      const uci = l && l.key === fenKey(last.fenAfter) ? l.result.lines[0]?.pv[0] : undefined;
+      const san = uci ? uciToSan(last.fenAfter, uci) : null;
+      if (uci && san) punishment = { uci, san, reason: null };
+    }
+    return { ply: last, hidden: state.punishReveal.value !== annotationKey(g.id, last), punishment };
+  });
+
+  /**
+   * The opponent's latest move is still being rated (its moves are rated): it may turn out to be a
+   * mistake to punish, so nothing may name the best reply yet (best-move arrows, a threat alert that
+   * points at it).
+   */
+  const punishPending = computed(() => {
+    const g = game.value;
+    const last = plies.value.at(-1);
+    if (!g || !last || !ratesOpponent.value || phase.value !== 'playing' || outcome.value) return false;
+    if (last.color === g.playerColor || last.index < preplayed.value) return false;
+    return !last.classification && !analysisFailed(last);
+  });
+
+  /** The board shows the live game on the player's turn (not browsing, previewing or exploring). */
+  const playerTurnShown = computed(
+    () => phase.value === 'playing' && !outcome.value && humanToMove.value && isLive.value && !explorer.value,
+  );
+
+  const threatAlert = computed<ThreatAlert | null>(() => {
+    const t = state.threat.value;
+    const g = game.value;
+    if (!t || !g || !settings.value.threatAlerts || locked('threatAlerts') || !g.assisted || !playerTurnShown.value) return null;
+    if (fenKey(t.fen) !== fenKey(liveFen.value)) return null; // never about another position
+    // Never a pointer at a punishment still to be found: while the opponent's latest move is being
+    // rated, the alert waits only when it touches the best reply the probe found (the likely
+    // punishment); once the verdict asks for one, when it touches that.
+    const touches = (u: string | undefined) => !u || t.squares.includes(u.slice(0, 2)) || t.squares.includes(u.slice(2, 4));
+    if (punishPending.value && touches(t.best)) return null;
+    const p = punishView.value;
+    if (p?.hidden && touches(p.punishment?.uci)) return null;
+    return t;
   });
 
   // --- opening practice --------------------------------------------------------------------------
@@ -939,6 +1135,90 @@ export function createStore(state: AppState): Store {
     return x && x.baseIndex > 0 ? (plies.value[x.baseIndex - 1] ?? null) : null;
   });
 
+  // --- try again (game/practice.ts) ---------------------------------------------------------------
+  const practice = state.practice;
+  const practicePosition = computed(() => {
+    const p = practice.value;
+    return p ? positionInfo(practiceFen(p)) : null;
+  });
+  /**
+   * The tried game's plies: the game on the board's own (its annotations go on landing while it is
+   * tried), else the earlier game's.
+   */
+  const practiceGamePlies = computed<readonly Ply[]>(() => {
+    const p = practice.value;
+    if (!p) return [];
+    return p.game.source === 'current' && game.value?.id === p.game.id ? plies.value : p.game.plies;
+  });
+  /** The tried game with its plies as they are now (see `practiceGamePlies`): its moves to try again. */
+  const practiceGameNow = computed<PracticeGame | null>(() => {
+    const p = practice.value;
+    if (!p) return null;
+    const ps = practiceGamePlies.value;
+    return ps === p.game.plies ? p.game : { ...p.game, plies: ps };
+  });
+  /** There is a move to try again after the one being tried (Next mistake). */
+  const practiceHasNext = computed(() => {
+    const p = practice.value;
+    const g = practiceGameNow.value;
+    return !!p && !!g && nextMoment(g, p.index) !== null;
+  });
+  /** The moves on the board while trying again: the game's up to the move tried, then the attempt (with its icon once found). */
+  const practicePlies = computed<Ply[] | null>(() => {
+    const p = practice.value;
+    if (!p) return null;
+    const before = practiceGamePlies.value.slice(0, p.index);
+    const a = p.attempt;
+    if (!a) return before;
+    const ply: Ply = { index: p.index, color: a.color, san: a.san, uci: a.uci, fenBefore: a.fenBefore, fenAfter: a.fenAfter };
+    if (a.captured) ply.captured = a.captured;
+    if (a.rating && !concession(a.rating)) ply.classification = a.rating.classification;
+    return [...before, ply];
+  });
+  /** The player's side at the bottom (Flip turns the try's own board, `Practice.flipped`). */
+  const practiceOrientation = computed<'white' | 'black'>(() => {
+    const p = practice.value;
+    const white = (p?.game.playerColor ?? humanColor.value) === 'w';
+    return white !== (p ? p.flipped : flipped.value) ? 'white' : 'black';
+  });
+  /**
+   * While a move is awaited: the move tried last ('played', taken back) and the second hint's square
+   * (a circle); the answer shown: the move made in the game and the best one, as Show best draws them.
+   */
+  const practiceArrows = computed<Arrow[]>(() => {
+    const p = practice.value;
+    if (!p) return NO_ARROWS;
+    if (p.status === 'revealed') return [...uciArrow(practicePly(p).uci, 'played'), ...uciArrow(p.answer?.uci, 'best')];
+    if (!awaitsMove(p)) return NO_ARROWS;
+    const out: Arrow[] = [...uciArrow(p.tried?.uci, 'played')];
+    const from = p.hint >= 2 ? p.answer?.uci.slice(0, 2) : undefined;
+    if (from) out.push({ from, to: from, brush: 'best' });
+    return out.length ? out : NO_ARROWS;
+  });
+  /** The game on the board as Try again sees it (once it is over), for the moves that can be tried again. */
+  const tryAgainMoments = computed<ReadonlySet<number>>(() => {
+    const g = game.value;
+    const ph = phase.value;
+    if (!g || !outcome.value || (ph !== 'over' && ph !== 'review') || locked('reviewDetails')) return NO_MOMENTS;
+    const pg: PracticeGame = {
+      id: g.id,
+      startFen: g.startFen,
+      playerColor: g.playerColor,
+      bot: g.bot,
+      botElo: g.botElo,
+      plies: plies.value,
+      ...(g.preplayed ? { preplayed: g.preplayed } : {}),
+      source: 'current',
+    };
+    const m = practiceMoments(pg);
+    return m.length ? new Set(m) : NO_MOMENTS;
+  });
+  /** The better move of the game's ply `index` has been shown (Show best, or a try that ended). */
+  const answerShown = (index: number): boolean => {
+    const g = game.value;
+    return !!g && state.revealedTries.value.has(tryKey(g.id, index));
+  };
+
   // --- board ---------------------------------------------------------------------------------
   // Locked Pro features draw no arrow at all: an arrow would give the best move away.
   const arrows = computed<Arrow[]>(() => {
@@ -955,14 +1235,19 @@ export function createStore(state: AppState): Store {
       const alts = equalAlternatives(ply.classification, ply.uci).filter((a) => a.uci !== m.bestUci);
       return [...uciArrow(ply.uci, 'played'), ...uciArrow(m.bestUci, 'best'), ...alts.flatMap((a) => uciArrow(a.uci, 'alt'))];
     }
+    // The threat alert's arrow (the opponent's threat), with what else is drawn on the player's turn.
+    const threat = threatAlert.value?.arrows ?? NO_ARROWS;
+    const withThreat = (a: Arrow[]): Arrow[] => (!threat.length ? a : a.length ? [...a, ...threat] : threat);
     if (m.kind === 'hint' && isLive.value && m.fen === liveFen.value) {
       const e = m.explanation;
-      return e?.arrows?.length && !locked('hint') ? e.arrows : NO_ARROWS;
+      return withThreat(e?.arrows?.length && !locked('hint') ? e.arrows : NO_ARROWS);
     }
     if (phase.value === 'review') {
       const ply = displayedPly.value;
       const cl = ply?.classification;
       if (!ply || !cl || !offersShowBest(cl, ply.uci) || locked('reviewDetails')) return NO_ARROWS;
+      // A weak move that can still be tried again: its answer waits for Show best (or the try).
+      if (tryAgainMoments.value.has(ply.index) && !answerShown(ply.index)) return NO_ARROWS;
       // A move about as good as the best (analysis/nearEqual.ts) is not corrected: the engine's
       // near-equal choices, as Show best draws them (nothing when it scored at least as well).
       if (isNearBest(cl, ply.uci)) {
@@ -974,11 +1259,17 @@ export function createStore(state: AppState): Store {
     }
     // Opening practice: the line's next move, under the best-move arrows when they are on.
     const guide = phase.value === 'playing' && humanToMove.value && isLive.value ? lineGuide.value : NO_ARROWS;
-    if (settings.value.showBestMoves && !locked('bestMoveArrows') && humanToMove.value && isLive.value) {
+    // A punishment still to be found (or the opponent's move still being rated, which may ask for
+    // one): no best-move arrow names it. Revealed ("Show me"): its arrow.
+    const p = punishView.value;
+    const best =
+      settings.value.showBestMoves && !locked('bestMoveArrows') && humanToMove.value && isLive.value && !p?.hidden && !punishPending.value;
+    if (best) {
       const r = liveForDisplayed.value;
-      return r ? [...guide, ...lineArrows(r)] : guide;
+      return withThreat(r ? [...guide, ...lineArrows(r)] : guide);
     }
-    return guide;
+    const shown = p && !p.hidden && p.punishment && playerTurnShown.value && !locked('showBest');
+    return withThreat(shown ? [...guide, ...uciArrow(p.punishment!.uci, 'best')] : guide);
   });
 
   /** During play, a move's rating shows when it is yours with the coach on, or the opponent's while they are rated. */
@@ -1046,6 +1337,27 @@ export function createStore(state: AppState): Store {
   };
 
   const board = computed<BoardView>(() => {
+    const pr = practice.value;
+    const ppos = practicePosition.value;
+    if (pr && ppos) {
+      // Trying a move again: the position before it, the player's side movable while a move is
+      // awaited; the attempt on the board while it is checked, and with its icon once found.
+      const movable = awaitsMove(pr) && ppos.dests.size > 0;
+      const a = pr.attempt;
+      const last = a ?? (pr.index > 0 ? practiceGamePlies.value[pr.index - 1] : null);
+      const view: BoardView = {
+        fen: ppos.fen,
+        orientation: practiceOrientation.value,
+        dests: movable ? ppos.dests : NO_DESTS,
+        check: ppos.check,
+        arrows: practiceArrows.value,
+        session: `practice:${pr.session}`,
+      };
+      if (movable) view.movableColor = pr.game.playerColor === 'w' ? 'white' : 'black';
+      if (last) view.lastMove = [last.uci.slice(0, 2), last.uci.slice(2, 4)];
+      if (pr.status === 'solved' && a?.rating && !concession(a.rating)) view.badge = { square: a.uci.slice(2, 4), cls: a.rating.classification.cls };
+      return withDrawings(view);
+    }
     const x = explorer.value;
     const xpos = explorerPosition.value;
     if (x && xpos) {
@@ -1095,7 +1407,7 @@ export function createStore(state: AppState): Store {
       colors: DRAW_COLORS,
       canClear: shapesAt(state.drawings.value, board.value.fen).length > 0,
       tip: on && state.drawTip.value,
-      yourMove: on && !explorer.value && humanToMove.value && isLive.value,
+      yourMove: on && (practice.value ? awaitsMove(practice.value) : !explorer.value && humanToMove.value && isLive.value),
     };
   });
 
@@ -1177,6 +1489,25 @@ export function createStore(state: AppState): Store {
   }
 
   const evalBar = computed<EvalBarView>(() => {
+    const pr = practice.value;
+    const ppos = practicePosition.value;
+    if (pr && ppos) {
+      // Trying a move again: what is known, never a live search that could hint at the answer: the
+      // game's eval of the position before the move, then the attempt's once checked (the bar
+      // pulses on the earlier one meanwhile).
+      const prev = pr.index > 0 ? practiceGamePlies.value[pr.index - 1] : null;
+      const start = pr.game.source === 'current' ? (pr.game.startEval ?? state.startEval.value) : (pr.game.startEval ?? null);
+      const beforeEval = prev ? (prev.evalWhite ?? null) : start;
+      const r = pr.attempt?.rating;
+      const known: KnownEval | null = pr.attempt
+        ? r
+          ? { score: r.evalWhite, depth: r.evalDepth }
+          : null
+        : beforeEval
+          ? { score: beforeEval, depth: Math.max(SHALLOW_DEPTH, prev?.evalDepth ?? 0) }
+          : null;
+      return barFor(ppos.fen, ppos, null, known, () => beforeEval, false, evalsVisible.value);
+    }
     const x = explorer.value;
     const xpos = explorerPosition.value;
     if (x && xpos) {
@@ -1217,6 +1548,21 @@ export function createStore(state: AppState): Store {
   const showsClass = (p: Ply): boolean => phase.value !== 'playing' || (ratedDuringPlay(p) && !concession(p));
 
   const evalGraph = computed<EvalGraphView>(() => {
+    const pr = practice.value;
+    if (pr) {
+      // Trying a move again: the tried game's graph, at the position before the move (App dims it).
+      const ps = practiceGamePlies.value;
+      const current = pr.game.source === 'current' && game.value?.id === pr.game.id;
+      const start = current ? (pr.game.startEval ?? state.startEval.value) : (pr.game.startEval ?? null);
+      const points: (number | null)[] = [start ? winForWhite(start, pr.game.startFen) : null];
+      for (const p of ps) points.push(p.evalWhite ? winForWhite(p.evalWhite, p.fenAfter) : null);
+      const o = current ? outcome.value : null;
+      if (o && o.winner === null) points[points.length - 1] = 0.5;
+      const markers = ps
+        .filter((p) => p.classification && KEY_CLASSES.has(p.classification.cls) && !concession(p))
+        .map((p) => ({ index: p.index + 1, cls: p.classification!.cls }));
+      return { visible: evalsVisible.value, points, current: pr.index, markers };
+    }
     const ps = plies.value;
     const g = game.value;
     const l = live.value;
@@ -1252,6 +1598,17 @@ export function createStore(state: AppState): Store {
   });
 
   const moveList = computed<MoveListView>(() => {
+    const pp = practicePlies.value;
+    if (pp) {
+      // Trying a move again: the game's moves up to it (the earlier ones' icons, as in the review), then the attempt.
+      return {
+        plies: pp.map((p) => (concession(p) ? stripClass(p) : p)),
+        current: pp.length,
+        showClassIcons: true,
+        iconSet: 'all',
+        emptyText: 'Start position',
+      };
+    }
     const x = explorer.value;
     const xplies = explorerPlies.value;
     if (x && xplies) {
@@ -1288,20 +1645,27 @@ export function createStore(state: AppState): Store {
     // Opening practice: the banner at the top of the panel, during the game and after it.
     const v = openingPractice.value;
     const tone = v?.status === 'complete' ? 'done' : v?.status === 'left' ? 'off' : 'on';
+    // Trying a move again shows only the try (no game banner, pairing or threat alert).
+    const trying = !!practice.value;
     const banner: CoachActionView | null =
-      v && (phase.value === 'playing' || phase.value === 'over')
+      v && !trying && (phase.value === 'playing' || phase.value === 'over')
         ? { id: 'opening', label: [v.name, v.statusText, tone].join('\t') }
         : null;
-    const paired = (phase.value === 'playing' && settings.value.coach && ratesOpponent.value) || !!banner;
+    const paired = (!trying && phase.value === 'playing' && settings.value.coach && ratesOpponent.value) || !!banner;
+    // Threat alerts: the warning above the coach's text (the live position on your turn).
+    const alert = phase.value === 'playing' && !trying ? threatAlert.value : null;
     return {
       ...view,
       ...(banner ? { actions: [banner, ...view.actions] } : {}),
+      ...(alert ? { alert: alert.text } : {}),
       collapsed: state.coachCollapsed.value ?? auto,
       paired,
     };
   });
 
   function coachContent(): CoachContent {
+    const pr = practice.value;
+    if (pr) return practiceCoach(pr);
     const status = (title: string, lines: string[], actions: CoachActionView[] = [], busy = false) => ({
       kind: 'status' as const,
       title,
@@ -1456,7 +1820,7 @@ export function createStore(state: AppState): Store {
           title: moveLabel(ply),
           lines: ['This move could not be analyzed.'],
           busy: false,
-          actions: [{ id: 'retryAnalysis', label: 'Try again', primary: true }],
+          actions: [{ id: 'retryAnalysis', label: 'Check again', primary: true }],
         };
       }
       return { kind: 'review', title: moveLabel(ply), lines: [], busy: true, actions: [] };
@@ -1469,9 +1833,99 @@ export function createStore(state: AppState): Store {
       return { kind: 'review', ...verdictTitle(ply), titleMove: moveLabel(ply), lines: [lockedTeaser(ply)], busy: false, actions, index: ply.index };
     }
     const voice: NearVoice = ply.color === game.value?.playerColor ? 'you' : 'neutral';
-    const lines = explanationLines(ply.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null, { cl, playedUci: ply.uci, voice });
+    // One of your weak moves among the key moments: try it again. Until its better move has been
+    // shown (Show best, or a try that ended), nothing here names it.
+    const tryable = tryAgainMoments.value.has(ply.index);
+    const lines = tryable && !answerShown(ply.index)
+      ? answerFreeLines(ply.explanation, cl)
+      : explanationLines(ply.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null, { cl, playedUci: ply.uci, voice });
     const actions: CoachActionView[] = showBest ? [showBestAction()] : [];
+    if (tryable) actions.unshift({ id: 'tryAgain', label: 'Try again', primary: true });
     return { kind: 'review', ...verdictTitle(ply), titleMove: moveLabel(ply), lines, busy: false, actions, index: ply.index };
+  }
+
+  /**
+   * Try again (game/practice.ts): the prompt ("Find a better move than Qxb2", what the move in the
+   * game was and why, never the answer), a move being checked, a move that was not better ("Not
+   * quite — try again", its verdict and why, without the answer), the hint shown, then a better move
+   * (its verdict and the coach's explanation) or the answer (the best move and why), with the next
+   * move to try, a new game from there and the way back.
+   */
+  function practiceCoach(p: Practice): CoachContent {
+    const ply = practicePly(p);
+    const answer = p.answer;
+    const back: CoachActionView = {
+      id: 'practiceExit',
+      label: p.game.source === 'current' && phase.value !== 'review' ? 'Back to game' : 'Back to review',
+    };
+    if (p.status === 'solved' || p.status === 'revealed') {
+      const next = practiceHasNext.value;
+      // A game the player has moved in is in progress (an earlier game tried meanwhile): a new one would abandon it.
+      const canPlayOn = !(phase.value === 'playing' && !outcome.value && humanMoved.value);
+      const actions: CoachActionView[] = [];
+      if (next) actions.push({ id: 'practiceNext', label: 'Next mistake', primary: true });
+      if (canPlayOn) actions.push({ id: 'practicePlayOn', label: 'Play on from here' });
+      actions.push(next ? back : { ...back, primary: true });
+      const end = [
+        ...(canPlayOn ? [] : ['Finish the game you’re playing to play on from here.']),
+        ...(next ? [] : [lastMomentLine(practiceGameNow.value ?? p.game)]),
+      ];
+      const a = p.attempt;
+      const r = a?.rating;
+      if (p.status === 'solved' && a && r) {
+        const cl = r.classification;
+        const tried = { fenBefore: a.fenBefore, san: a.san, color: a.color, index: p.index };
+        const lines = explanationLines(r.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null, { cl, playedUci: a.uci, voice: 'you' });
+        // The success is the news (the one-row panel of a short phone shows the title and the first
+        // line); the move's own verdict follows ("3. Bc4 is a book move."), unless it only says "best" again.
+        const verdict = verdictTitle({ ...tried, classification: cl, explanation: r.explanation });
+        return {
+          kind: 'practice',
+          title: solvedTitle(tried),
+          ...(verdict.cls ? { cls: verdict.cls } : {}),
+          lines: [solvedLine(a, ply.san), ...(cl.cls === 'best' ? [] : [`${verdict.title}.`]), ...lines, ...end],
+          busy: false,
+          actions,
+        };
+      }
+      if (answer === undefined) return { kind: 'practice', title: 'Best move', lines: [], busy: true, actions: [back] };
+      if (!answer) {
+        return { kind: 'practice', title: 'Best move', lines: ['The engine couldn’t check this position.', playedLine(ply), ...end], busy: false, actions };
+      }
+      return { kind: 'practice', cls: 'best', title: `Best was ${answer.san}`, lines: [...answer.lines, playedLine(ply), ...end], busy: false, actions };
+    }
+    // Waiting for a move (first, or after one that was not better), or checking one: nothing here
+    // names the answer (the explanations' lines that name it give way).
+    const hide = (ls: readonly string[]): string[] => (answer ? ls.filter((l) => !namesMove(l, answer.san)) : [...ls]);
+    const lines: string[] = [];
+    const t = p.status === 'wrong' ? p.tried : null;
+    if (t) {
+      lines.push(triedLine(t));
+      if (t.rating && !t.same) lines.push(...hide(answerFreeLines(t.rating.explanation, t.rating.classification)).slice(0, 1));
+    } else {
+      if (p.failed) lines.push('Couldn’t check that move. Try it again.');
+      lines.push(playedLine(ply));
+      const cl = ply.classification;
+      if (cl && ply.explanation) lines.push(...hide(answerFreeLines(ply.explanation, cl)).slice(0, 1));
+    }
+    // The hint asked for is the news: first (it is what a one-row panel on a short phone shows).
+    if (p.hint > 0) {
+      if (answer) lines.unshift(`Hint: ${lowerFirst(hintText(ply.fenBefore, answer.uci, p.hint as 1 | 2))}`);
+      else if (answer === null) lines.unshift('No hint is available for this position.');
+    }
+    const checking = p.status === 'checking' && !!p.attempt;
+    const actions: CoachActionView[] = [];
+    if (!checking) {
+      if (p.hint < 2) actions.push({ id: 'practiceHint', label: 'Hint' });
+      actions.push({ id: 'practiceAnswer', label: 'Show answer' });
+    }
+    return {
+      kind: 'practice',
+      title: checking ? `Checking ${p.attempt!.san}…` : t ? NOT_QUITE : practiceTitle(ply),
+      lines,
+      busy: checking || (p.hint > 0 && answer === undefined),
+      actions,
+    };
   }
 
   function playingCoach(): CoachContent {
@@ -1503,7 +1957,8 @@ export function createStore(state: AppState): Store {
       if (m.headline && !locked('coachExplanations')) lines.push(m.headline);
       // Opening practice: back on the line, its move (`showLineMoves`) after the prompt.
       lines.push(...practiceNotes.value);
-      return { kind: 'coach', title: 'Try again', lines, busy: false, actions: [] };
+      // "Retry" (the button that set it up): "Try again" is Game Review's practice of a key moment.
+      return { kind: 'coach', title: 'Retry', lines, busy: false, actions: [] };
     }
     // The verdict on your last move (the coach) and on the opponent's (while its moves are rated).
     const fb = s.coach && m.kind === 'feedback' ? (plies.value[m.index] ?? null) : null;
@@ -1523,13 +1978,16 @@ export function createStore(state: AppState): Store {
       // Your move stays expanded while it has something to fix (an inaccuracy or worse, something
       // given away, Retry, a failed check); otherwise the opponent's latest move is (while yours is
       // checked too, so the panel does not swap back and forth on every move).
+      // A "can you punish it?" on the opponent's latest move is the news of the moment: that move is
+      // expanded, with its question and Show me (its row would only say the verdict), and then with
+      // the punishment shown, until your move, unless the player picked theirs.
       const cf = state.coachFocus.value;
-      const focus: CoachSubject = cf && cf.at === plies.value.length ? cf.subject : needsAttention(mine) ? 'you' : 'opponent';
-      return withNotes(
-        focus === 'you'
-          ? { ...ownFeedback(mine), other: feedbackRow(theirs, 'opponent') }
-          : { ...opponentFeedback(theirs), other: feedbackRow(mine, 'you') },
-      );
+      const p = punishView.value;
+      const asking = !!p && p.ply.index === theirs.index;
+      const focus: CoachSubject =
+        cf && cf.at === plies.value.length ? cf.subject : asking || !needsAttention(mine) ? 'opponent' : 'you';
+      if (focus === 'you') return withNotes({ ...ownFeedback(mine), other: feedbackRow(theirs, 'opponent') });
+      return withNotes({ ...opponentFeedback(theirs), other: feedbackRow(mine, 'you') });
     }
     if (mine) return withNotes(ownFeedback(mine));
     if (theirs) return withNotes(opponentFeedback(theirs));
@@ -1558,10 +2016,19 @@ export function createStore(state: AppState): Store {
       // The move the coach is discussing may still be retried: keep its answer hidden here too.
       const base = m.kind === 'hint' ? m.prev : m;
       const hide = human && base.kind === 'feedback' && base.index === ply.index && canRetry(ply);
+      // The opponent's mistake whose punishment is still to be found: only the question.
+      const p = punishView.value;
+      const ask = !human && p?.hidden && p.ply.index === ply.index;
       return {
         kind: 'coach',
         ...head,
-        lines: hide ? answerFreeLines(ply.explanation, cl) : explanationLines(ply.explanation),
+        lines: ask
+          ? [punishPrompt(g.bot.name, cl.cls)]
+          : hide
+            ? answerFreeLines(ply.explanation, cl)
+            : human
+              ? explanationLines(ply.explanation)
+              : opponentLines(ply),
         busy: false,
         actions: back,
       };
@@ -1578,7 +2045,7 @@ export function createStore(state: AppState): Store {
   /** The coach's verdict on your move `ply` (busy until it is annotated). */
   function ownFeedback(ply: Ply): CoachContent {
     const g = game.value!;
-    const who = { subject: 'you' as const, who: 'You', verdict: shortVerdict(ply).verdict, index: ply.index };
+    const who = { subject: 'you' as const, who: 'You', verdict: rowVerdict(ply).verdict, index: ply.index };
     const cl = ply.classification;
     if (!cl || !ply.explanation) {
       if (analysisFailed(ply)) {
@@ -1588,22 +2055,51 @@ export function createStore(state: AppState): Store {
           title: `Couldn’t check ${ply.san}`,
           lines: ['The engine did not finish analyzing this move.'],
           busy: false,
-          actions: [{ id: 'retryAnalysis', label: 'Try again', primary: true }],
+          actions: [{ id: 'retryAnalysis', label: 'Check again', primary: true }],
         };
       }
       return { kind: 'coach', ...who, title: `Checking ${ply.san}…`, lines: [], busy: true, actions: [] };
     }
     const retry = canRetry(ply);
     const head = { kind: 'coach' as const, ...who, ...verdictTitle(ply), titleMove: moveLabel(ply) };
+    // The opponent's reply to this move is a mistake still to be punished: nothing here may name
+    // the punishment (this move's better one is often the same move, the mistake left it on).
+    const hp = punishView.value;
+    const secret = hp?.hidden && hp.ply.index > ply.index ? hp : null;
+    const namesSecret = (l: string) => !!secret?.punishment && namesMove(l, secret.punishment.san);
+    // Right after the opponent's mistake (its moves rated): did this move punish it? (Said without
+    // the move while it is the answer to the new question.)
+    const result = punishResult(ply);
+    const punish = result && namesSecret(result) ? PUNISH_MISSED_LINE : result;
+    const bestIsSecret =
+      !!secret && (!secret.punishment || cl.bestMoveUci === secret.punishment.uci || !!cl.equalBest?.some((m) => m.uci === secret.punishment!.uci));
+    const showBest = offersShowBest(cl, ply.uci) && !bestIsSecret;
     if (locked('coachExplanations')) {
       // The verdict and its icon are free; why, and what was better, are Pro.
       const actions: CoachActionView[] = [unlockAction('coachExplanations', true)];
-      if (offersShowBest(cl, ply.uci)) actions.push(showBestAction());
+      if (showBest) actions.push(showBestAction());
       if (retry) actions.push({ id: 'retry', label: 'Retry' });
-      return { ...head, lines: [lockedTeaser(ply)], busy: false, actions };
+      return { ...head, lines: punish ? [punish, lockedTeaser(ply)] : [lockedTeaser(ply)], busy: false, actions };
     }
     // While Retry is on offer, the text must not give the better move away ("Show best" does).
-    const lines = retry ? answerFreeLines(ply.explanation, cl) : explanationLines(ply.explanation);
+    let lines = retry ? answerFreeLines(ply.explanation, cl) : explanationLines(ply.explanation);
+    if (punish === PUNISHED_LINE) lines = [punish, ...lines];
+    else if (punish === PUNISH_MISSED_LINE) {
+      // Unless the text already says so ("You missed a chance to win material.").
+      if (!/^You missed\b/.test(lines[0] ?? '')) lines = [...lines.slice(0, 1), punish, ...lines.slice(1)];
+    } else if (punish && cl.bestMoveSan) {
+      // The punishment is said once, with what it does: the lines on it give way (those that name it,
+      // and the description of a missed tactic, which is the punishment's).
+      const best = cl.bestMoveSan;
+      const missed = ply.explanation.motifs?.some((m) => m === 'missedTactic' || m === 'missedMate') ?? false;
+      const kept = lines.map((l, i) => (namesMove(l, best) || (missed && i > 0) ? null : l));
+      const rest = kept.slice(1).filter((l): l is string => l !== null);
+      lines = kept[0] === null ? [punish, ...rest] : [kept[0], punish, ...rest];
+    }
+    if (secret && lines.some(namesSecret)) {
+      const kept = lines.filter((l) => !namesSecret(l));
+      lines = kept.length ? kept : answerFreeLines(ply.explanation, cl).filter((l) => !namesSecret(l));
+    }
     const reply = plies.value[ply.index + 1];
     const rc = reply?.classification?.cls;
     // Pointing out the bot's mistake is a live hint, so only in games that are unrated anyway (and
@@ -1613,18 +2109,21 @@ export function createStore(state: AppState): Store {
     }
     const actions: CoachActionView[] = [];
     // In a rated game Retry costs the rating, so the free "Show best" is the main action.
-    if (offersShowBest(cl, ply.uci)) actions.push(showBestAction(!g.assisted));
+    if (showBest) actions.push(showBestAction(!g.assisted));
     if (retry) actions.push({ id: 'retry', label: 'Retry', primary: g.assisted });
     if (!actions.some((a) => a.primary) && actions.length) actions[0] = { ...actions[0], primary: true };
     return { ...head, lines, busy: false, actions };
   }
 
-  /** Your move needs the coach panel's room: something to fix, to retry, or a check that failed. */
+  /**
+   * Your move needs the coach panel's room: something to fix, to retry, a check that failed, or the
+   * answer to "can you punish it?" (whether it punished the opponent's mistake).
+   */
   function needsAttention(ply: Ply): boolean {
     if (analysisFailed(ply)) return true;
     const cls = ply.classification?.cls;
     if (!cls || !ply.explanation) return false;
-    return ATTENTION_CLASSES.has(cls) || !!concession(ply) || canRetry(ply);
+    return ATTENTION_CLASSES.has(cls) || !!concession(ply) || canRetry(ply) || punishResult(ply) !== null;
   }
 
   /** "Pip’s 12… Nf6 is a mistake" (see coach.ts `verdictTitle`), with the move part and the class icon. */
@@ -1641,7 +2140,7 @@ export function createStore(state: AppState): Store {
    */
   function opponentFeedback(ply: Ply): CoachContent {
     const name = game.value!.bot.name;
-    const who = { subject: 'opponent' as const, who: name, verdict: shortVerdict(ply).verdict, index: ply.index };
+    const who = { subject: 'opponent' as const, who: name, verdict: rowVerdict(ply).verdict, index: ply.index };
     const cl = ply.classification;
     if (!cl || !ply.explanation) {
       if (analysisFailed(ply)) {
@@ -1651,20 +2150,78 @@ export function createStore(state: AppState): Store {
           title: `Couldn’t check ${name}’s ${ply.san}`,
           lines: ['The engine did not finish analyzing this move.'],
           busy: false,
-          actions: [{ id: 'retryAnalysis', label: 'Try again', primary: true }],
+          actions: [{ id: 'retryAnalysis', label: 'Check again', primary: true }],
         };
       }
       return { kind: 'coach', ...who, title: `Checking ${name}’s ${ply.san}…`, lines: [], busy: true, actions: [] };
     }
     const head = { kind: 'coach' as const, ...who, ...opponentTitle(ply) };
-    const showBest = offersShowBest(cl, ply.uci);
+    const p = punishView.value?.ply.index === ply.index ? punishView.value : null;
+    if (p?.hidden) {
+      // The player is to find the punishment: the verdict (free) and the question, nothing that names it.
+      const show: CoachActionView = { id: 'showPunishment', label: 'Show me', ...(locked('showBest') ? { locked: true } : {}) };
+      return { ...head, lines: [punishPrompt(name, cl.cls)], busy: false, actions: [show] };
+    }
+    // Your move after it may still be retried: Show best on this one could name the better one.
+    const reply = plies.value[ply.index + 1];
+    const showBest = offersShowBest(cl, ply.uci) && !(reply && canRetry(reply));
+    // With the coach off your move has no feedback of its own: whether it punished this one is said here.
+    const result = !settings.value.coach && reply ? punishResult(reply) : null;
+    // "Show me": the punishment first (and said once: the lines that name it give way).
+    const answer = p?.punishment && !locked('showBest') ? punishWithLine(p.punishment) : null;
+    const extra = (lines: string[]): string[] => {
+      const rest = answer ? lines.filter((l) => !namesMove(l, p!.punishment!.san)) : lines;
+      return [...(answer ? [answer] : []), ...rest, ...(result ? [result] : [])];
+    };
     if (locked('coachExplanations')) {
       // As for your moves: the verdict and its icon are free, the explanation and Show best are Pro.
       const actions: CoachActionView[] = [unlockAction('coachExplanations', true)];
       if (showBest) actions.push(showBestAction());
-      return { ...head, lines: [lockedTeaser(ply)], busy: false, actions };
+      return { ...head, lines: extra([lockedTeaser(ply)]), busy: false, actions };
     }
-    return { ...head, lines: explanationLines(ply.explanation), busy: false, actions: showBest ? [showBestAction(true)] : [] };
+    // The punishment shown and still to be played: the panel is about it. What the opponent should
+    // have played is a secondary "Pip’s best", never a primary "Show best" right under "Punish it with …".
+    const pipsBest = p ? { ...showBestAction(), label: `${name}’s best` } : showBestAction(true);
+    return { ...head, lines: extra(opponentLines(ply)), busy: false, actions: showBest ? [pipsBest] : [] };
+  }
+
+  /**
+   * The opponent's move's explanation, without what would give away a better move still to be found:
+   * while your move after it may be retried, no line names that move's better ones.
+   */
+  function opponentLines(ply: Ply): string[] {
+    // Whose better move it was: "Pip should have played Nc6, …", never a bare "Best was Nc6" that
+    // reads as advice for you (under "Punish it with Nxh4" above all).
+    const name = game.value?.bot.name ?? 'Your opponent';
+    const lines = explanationLines(ply.explanation).map((l) => (l.startsWith('Best was ') ? `${name} should have played ${l.slice(9)}` : l));
+    const reply = plies.value[ply.index + 1];
+    const cl = reply?.classification;
+    if (!reply || !cl || !canRetry(reply)) return lines;
+    const better = [cl.bestMoveSan, ...(cl.equalBest ?? []).map((m) => m.san)].filter(
+      (san): san is string => !!san && san !== cl.playedMoveSan,
+    );
+    const kept = lines.filter((l) => !better.some((san) => namesMove(l, san)));
+    return kept.length ? kept : [OPPONENT_CHANCE];
+  }
+
+  /**
+   * Your move right after the opponent's mistake, miss or blunder (its moves rated): "You punished
+   * it!" when it was the best move or about as good (analysis/nearEqual.ts), else "The punishment
+   * was Nxe5, which wins a knight." — or "You missed the punishment." while Retry is offered or the
+   * better move is Pro and locked. Null for any other move, or before it is checked.
+   */
+  function punishResult(ply: Ply): string | null {
+    const g = game.value;
+    const prev = plies.value[ply.index - 1];
+    const cl = ply.classification;
+    if (!g || !ratesOpponent.value || ply.color !== g.playerColor || !prev || prev.color === g.playerColor) return null;
+    if (prev.index < preplayed.value || !cl || !ply.explanation) return null;
+    const pcls = prev.classification?.cls;
+    if (!pcls || !PUNISH_CLASSES.has(pcls)) return null;
+    if (cl.bestMoveUci === ply.uci || cl.nearBest === true) return PUNISHED_LINE;
+    if (!cl.bestMoveSan || canRetry(ply) || locked('showBest') || locked('coachExplanations')) return PUNISH_MISSED_LINE;
+    const known = prev.punishment;
+    return punishmentWasLine(cl.bestMoveSan, known && known.uci === cl.bestMoveUci ? known.reason : null);
   }
 
   /** A short verdict for the compact row: "Mistake", "Gives up material", "Checking…". */
@@ -1676,13 +2233,26 @@ export function createStore(state: AppState): Store {
     return { verdict: classLabel(cl.cls), cls: cl.cls };
   }
 
+  /**
+   * The verdict of a compact row or of a half of the collapsed panel: the short verdict, or what is
+   * new about it (the opponent's mistake to punish: "Punish it?"; your move that did: "Punished!").
+   */
+  function rowVerdict(ply: Ply): { verdict: string; cls?: MoveClass; busy?: boolean } {
+    const v = shortVerdict(ply);
+    const g = game.value;
+    if (!g || v.busy) return v;
+    if (ply.color === g.playerColor) return punishResult(ply) === PUNISHED_LINE ? { ...v, verdict: PUNISHED_VERDICT } : v;
+    const p = punishView.value;
+    return p?.hidden && p.ply.index === ply.index ? { ...v, verdict: PUNISH_IT_VERDICT } : v;
+  }
+
   /** The other rated move as a compact row ("You" first, so the rows keep their order). */
   function feedbackRow(ply: Ply, subject: CoachSubject): CoachOtherView {
     return {
       subject,
       who: subject === 'you' ? 'You' : game.value!.bot.name,
       move: moveLabel(ply),
-      ...shortVerdict(ply),
+      ...rowVerdict(ply),
       place: subject === 'you' ? 'before' : 'after',
     };
   }
@@ -1706,15 +2276,18 @@ export function createStore(state: AppState): Store {
     }
     if (notes.length) return { kind: 'coach', title: 'Your move', lines: [...notes], busy: false, actions: [] };
     const lines: string[] = [];
-    if (first) lines.push(`${g.bot.name}: “${g.bot.greeting}”`);
+    // Play on from here (Try again): where the game comes from, in place of the greeting.
+    if (first) lines.push(g.practice ? practiceStartLine(g.practice) : `${g.bot.name}: “${g.bot.greeting}”`);
     const last = ps.at(-1);
     const o = last?.opening;
     if (o) lines.push(`Opening: ${o.name}`);
     const check = position.value.check;
     // A capture that can be answered in kind comes before any general advice (not in check,
-    // where the check tip already says to capture the checking piece).
+    // where the check tip already says to capture the checking piece). A threat alert above is
+    // the advice of the moment: no general tip under it.
     const recapture = check ? null : recaptureTip(liveFen.value, last, g.bot.name);
-    lines.push(recapture ?? coachTip(liveFen.value, ps.length, check));
+    if (recapture) lines.push(recapture);
+    else if (!threatAlert.value) lines.push(coachTip(liveFen.value, ps.length, check));
     return { kind: 'coach', title: 'Your move', lines, busy: false, actions: [] };
   }
 
@@ -1761,17 +2334,22 @@ export function createStore(state: AppState): Store {
 
   // --- players -----------------------------------------------------------------------------------
   const players = computed(() => {
-    const g = game.value;
-    const human = humanColor.value;
-    const bot: BotPersona = g?.bot ?? personaForSettings(settings.value, profile.value);
-    const botElo = g?.botElo ?? bot.elo;
+    // Trying a move again: the tried game's players (an earlier game's opponent), on the try's position.
+    const pr = practice.value;
+    const ppos = practicePosition.value;
+    const g = pr && ppos ? null : game.value;
+    const human = pr ? pr.game.playerColor : humanColor.value;
+    const bot: BotPersona = pr ? pr.game.bot : (g?.bot ?? personaForSettings(settings.value, profile.value));
+    const botElo = pr ? pr.game.botElo : (g?.botElo ?? bot.elo);
     // The explorer's position while exploring (its captures, material and side to move).
-    const xpos = explorerPosition.value;
+    const xpos = ppos ?? explorerPosition.value;
     const fen = xpos?.fen ?? displayedFen.value;
     // From the moves when the game began at the start (a promotion is not a capture), else from the board.
     const x = explorer.value;
-    const moves = x ? [...plies.value.slice(0, x.baseIndex), ...x.moves.slice(0, x.cursor)] : plies.value.slice(0, current.value);
-    const captured = g && fenKey(g.startFen) === fenKey(START_FEN) ? capturedByMoves(moves) : capturedPieces(fen);
+    const pp = practicePlies.value;
+    const moves = pp ?? (x ? [...plies.value.slice(0, x.baseIndex), ...x.moves.slice(0, x.cursor)] : plies.value.slice(0, current.value));
+    const startFen = pr ? pr.game.startFen : g?.startFen;
+    const captured = startFen && fenKey(startFen) === fenKey(START_FEN) ? capturedByMoves(moves) : capturedPieces(fen);
     const mat = material(fen);
     const turn = xpos?.turn ?? position.value.turn;
     const playing = phase.value === 'playing' || !!xpos;
@@ -1783,14 +2361,15 @@ export function createStore(state: AppState): Store {
       captured: captured[c],
       capturedColor: otherColor(c),
       materialDiff: Math.max(0, mat[c] - mat[otherColor(c)]),
-      active: playing && !!g && turn === c,
+      active: playing && (!!g || !!pr) && turn === c,
       // The bot thinking about the real game is the explorer panel's news, not the explored position's.
       thinking: !isHuman && botThinking.value && !xpos,
       ...(isHuman && g?.assisted ? { unrated: true } : {}),
     });
     const humanStrip = strip(human, true);
     const botStrip = strip(otherColor(human), false);
-    return flipped.value ? { top: humanStrip, bottom: botStrip } : { top: botStrip, bottom: humanStrip };
+    const turned = pr && ppos ? pr.flipped : flipped.value;
+    return turned ? { top: humanStrip, bottom: botStrip } : { top: botStrip, bottom: humanStrip };
   });
   const topPlayer = computed(() => players.value.top);
   const bottomPlayer = computed(() => players.value.bottom);
@@ -1804,10 +2383,41 @@ export function createStore(state: AppState): Store {
     const hasHumanPly = humanMoved.value;
     const m = coachMode.value;
     const x = explorer.value;
+    const off = { disabled: true };
+    // Try again's buttons: off unless trying a move again.
+    const noPractice = { practiceExit: off, practiceHint: off, practiceAnswer: off, practiceNext: off, practicePlayOn: off };
+    const pr = practice.value;
+    if (pr) {
+      // Trying a move again: Back, Flip, Hint, Answer, Next, Menu (the game's buttons are inactive).
+      const waiting = awaitsMove(pr);
+      return {
+        newGame: off,
+        undo: off,
+        hint: off,
+        flip: { disabled: false },
+        coach: { disabled: true, active: settings.value.coach },
+        menu: { disabled: false },
+        prev: off,
+        next: off,
+        review: { disabled: true, active: p === 'review' },
+        resign: off,
+        exportPgn: off,
+        explore: off,
+        explorerReset: off,
+        explorerReply: off,
+        explorerExit: off,
+        practiceExit: { disabled: false },
+        practiceHint: { disabled: !waiting || pr.hint >= 2 },
+        practiceAnswer: { disabled: !waiting },
+        practiceNext: { disabled: !practiceHasNext.value },
+        // A new game from there, once the try is over (never while a game the player has moved in is on).
+        practicePlayOn: { disabled: !practiceSettled(pr) || (playing && hasHumanPly) },
+      };
+    }
     if (x) {
       // Exploring: Reset, Flip, ‹, ›, Engine reply (with the engine on), Exit (the game's buttons are inactive).
-      const off = { disabled: true };
       return {
+        ...noPractice,
         newGame: off,
         undo: off,
         hint: off,
@@ -1831,6 +2441,7 @@ export function createStore(state: AppState): Store {
     }
     const explorable = !!g && (p === 'playing' || p === 'over' || p === 'review');
     return {
+      ...noPractice,
       newGame: { disabled: booting },
       undo: { disabled: !(playing && settings.value.allowTakebacks && hasHumanPly) },
       hint: {
@@ -1895,6 +2506,7 @@ export function createStore(state: AppState): Store {
               botElo: g.botElo,
               ...(rc ? { ratingChange: rc } : {}),
               ...(g.opening ? { practice: g.opening.line.name } : {}),
+              ...(g.practice ? { practiceLabel: practiceGameLabel(g.practice) } : {}),
               play: finishedPlay.value,
               rule: drawRuleText(o.reason),
               provisional: !!rc?.rated && !!rc.provisional,
@@ -1931,17 +2543,19 @@ export function createStore(state: AppState): Store {
   const review = computed<ReviewView | null>(() => {
     const r = state.reviewState.value;
     const g = game.value;
-    if (phase.value !== 'review' || !r || !g) return null;
+    // Trying a move again takes the panel (the summary comes back as it was).
+    if (phase.value !== 'review' || !r || !g || practice.value) return null;
     const botName = g.bot.name;
-    // Accuracy and counts are free; the key moments (each with its comment) are Pro.
+    // Accuracy and counts are free; the key moments (each with its comment) are Pro, and so is Try again.
     const hide = locked('reviewDetails');
+    const tries = tryAgainMoments.value;
     return {
       progress: r.progress,
       accuracy: r.accuracy,
       counts: r.counts,
       playerColor: g.playerColor,
       names: g.playerColor === 'w' ? { w: 'You', b: botName } : { w: botName, b: 'You' },
-      keyMoments: hide ? [] : r.keyMoments,
+      keyMoments: hide ? [] : tries.size ? r.keyMoments.map((m) => (tries.has(m.index) ? { ...m, tryAgain: true } : m)) : r.keyMoments,
       ...(hide ? { lockedMoments: r.keyMoments.length } : {}),
     };
   });
@@ -2002,7 +2616,7 @@ export function createStore(state: AppState): Store {
         if (!locked('coachExplanations')) view.lines = [r.explanation.headline, ...r.explanation.details.slice(0, 1)];
       } else if (mv.failed) {
         view.verdict = 'Couldn’t check this move';
-        view.actions.push({ id: 'retryRating', label: 'Try again' });
+        view.actions.push({ id: 'retryRating', label: 'Check again' });
       } else {
         view.verdict = 'Checking…';
         view.busy = true;
@@ -2084,6 +2698,10 @@ export function createStore(state: AppState): Store {
     explorerPanel,
     openingPractice,
     draw,
+    threatAlert,
+    punishView,
+    practicePosition,
+    tryAgainMoments,
   };
 }
 
@@ -2123,6 +2741,22 @@ const ENDING_TITLES: ReadonlySet<string> = new Set(['Checkmate', 'Stalemate', 'R
 
 /** A book move's plain reason, which repeats its verdict (see `explanationLines`). */
 const BOOK_ECHO = new RegExp(`^\\S+ ${BOOK_REASON}\\.$`);
+
+/** Play on from here's game, as the game-over sheet and the PGN name it: "Practice from move 12". */
+export function practiceGameLabel(p: GamePractice): string {
+  const n = /^(\d+)/.exec(p.from)?.[1];
+  return n ? `Practice from move ${n}` : 'Practice game';
+}
+
+/** The coach's first line in a Play on from here game: where it comes from, and that it is unrated. */
+export function practiceStartLine(p: GamePractice): string {
+  return `You’re playing on from your earlier game, ${p.after ? 'after' : 'before'} ${p.from}. This game is unrated.`;
+}
+
+/** "Move your knight." -> "move your knight." (after "Hint:"). */
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
 
 function stripClass(p: Ply): Ply {
   if (!p.classification) return p;

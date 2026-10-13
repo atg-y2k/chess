@@ -289,6 +289,8 @@ describe('a move clearly worse than the best', () => {
     expect(ply.explanation!.details).toContain('Best was c6 (c5 and g6 were about as good).');
     // A Mistake needs no second opinion: the position after c6 was not searched.
     expect(lastEngines!.analysis.searches.map((x) => fenKey(x.fen))).not.toContain(fenKey(fenOf('d4 d5 c4 Nf6 cxd5 c6')));
+    // (The reply is a mistake to punish: its question is the open one; yours is a tap away.)
+    controller.selectCoachFeedback('you');
     // Retry is on offer: no c6, c5 or g6 anywhere in the text.
     const coach = store.coach.value;
     expect(coach.actions.map((a) => a.id)).toContain('retry');
@@ -305,7 +307,7 @@ describe('a move clearly worse than the best', () => {
     controller.runAction('backToGame');
     controller.runAction('retry');
     await controller.idle();
-    expect(store.coach.value.title).toBe('Try again');
+    expect(store.coach.value.title).toBe('Retry');
     for (const line of store.coach.value.lines) expect(line).not.toMatch(/\b(c6|c5|g6)\b/);
   });
 });

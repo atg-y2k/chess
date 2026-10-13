@@ -19,6 +19,8 @@ export interface EvalBarProps {
    * of an evaluation, so the board keeps its place and size.
    */
   off?: boolean;
+  /** The words on an `off` bar (default "Engine off"; the game viewer's unanalyzed game: "Not analyzed"). */
+  offLabel?: string;
 }
 
 /**
@@ -35,12 +37,12 @@ export function isLongEvalText(text: string): boolean {
   return text.replace(/[.\-]/g, '').length >= 3;
 }
 
-export function EvalBar({ whiteWinProb, label, orientation, thinking, off = false }: EvalBarProps) {
+export function EvalBar({ whiteWinProb, label, orientation, thinking, off = false, offLabel = 'Engine off' }: EvalBarProps) {
   if (off) {
     return (
-      <div class="evalbar evalbar-off" role="img" aria-label="Evaluation: engine off" title="Engine off">
+      <div class="evalbar evalbar-off" role="img" aria-label={`Evaluation: ${offLabel.toLowerCase()}`} title={offLabel}>
         <span class="evalbar-off-text" aria-hidden="true">
-          Engine off
+          {offLabel}
         </span>
       </div>
     );

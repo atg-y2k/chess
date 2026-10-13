@@ -212,6 +212,19 @@
 .app-player:has(> .app-explore-tag) .pstrip-status {
   display: none;
 }
+/*
+ * Trying one of your moves again (Game Review's Try again): the same tag and frame in the accent
+ * color, so the position never passes for the game either.
+ */
+.app[data-practice] .app-board-cell > .board-host > .board {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 18px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.app-explore-tag.app-practice-tag {
+  background: var(--accent);
+  color: var(--accent-text);
+}
 /* The game's graph while exploring: still there, dimmed and not tappable. */
 .app-graph[data-dim] {
   opacity: 0.4;

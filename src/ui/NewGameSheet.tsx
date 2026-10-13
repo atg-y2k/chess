@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
 import type { Color, GameSettings } from '../game/types';
 import { formatRatingDelta } from '../rating/rating';
-import { IconBook, IconBotRated, IconChart, IconChevronRight, IconCoach, IconEye, IconSound, IconUndo } from './icons';
+import { IconBook, IconBotRated, IconChart, IconChevronRight, IconCoach, IconEye, IconSound, IconThreat, IconUndo } from './icons';
 import { LevelPicker, type StartingLevel } from './LevelPicker';
 import { IconLock } from './PaywallSheet';
 import { Sheet } from './Sheet';
@@ -41,7 +41,10 @@ export interface NewGameSheetProps {
    * Coach Pro") and a lock, stays off, and calls `onUnlock` (the paywall) instead.
    */
   arrowsLocked?: string | null;
+  /** Threat alerts are part of Pro and locked: like `arrowsLocked`, with `onUnlockThreats` (the paywall). */
+  threatsLocked?: string | null;
   onUnlock?: () => void;
+  onUnlockThreats?: () => void;
   /** Opens the Openings section (a "Learn openings" row; omitted: none). */
   onLearnOpenings?: () => void;
 }
@@ -51,22 +54,37 @@ export interface NewGameSheetProps {
  * unrated). It promises no explanations: those are Pro where Pro is sold.
  */
 export const RATE_OPPONENT_DESCRIPTION = 'See whether the computer found the best move, rated like your moves';
-/** The Menu's line on it: as for best-move arrows, what it does to the rating (the next games too). */
-export const RATE_OPPONENT_MENU_DESCRIPTION = 'Makes your games unrated while it’s on';
+/**
+ * The Menu's line on the help that makes a game unrated (best-move arrows, rating the opponent's
+ * moves): what it does to the rating, the next games too (they are settings). One phrasing for all.
+ */
+export const ASSIST_MENU_DESCRIPTION = 'Makes your games unrated while it’s on';
+/** The Menu's line on rating the opponent's moves. */
+export const RATE_OPPONENT_MENU_DESCRIPTION = ASSIST_MENU_DESCRIPTION;
+/** The New game sheet's line on threat alerts: what they do (its note says the game will be unrated). */
+export const THREAT_ALERTS_DESCRIPTION = 'Warns you when your opponent threatens something';
+/** The Menu's line on them: what they do, and (as for the other help) what they do to the rating. */
+export const THREAT_ALERTS_MENU_DESCRIPTION = 'Warns you of threats, and makes your games unrated while it’s on';
 
 /**
  * The note under the options: what makes a game unrated, or that this one will be (best-move
- * arrows or the opponent's move ratings are on).
+ * arrows, threat alerts or the opponent's move ratings are on).
  */
-export function unratedNote(o: { arrows: boolean; rateOpponent: boolean }): { text: string; warn: boolean } {
-  if (o.arrows && o.rateOpponent) {
-    return { text: 'Best-move arrows and your opponent’s move ratings are on, so this game won’t count for your rating.', warn: true };
+export function unratedNote(o: { arrows: boolean; rateOpponent: boolean; threatAlerts?: boolean }): { text: string; warn: boolean } {
+  const unrated = ', so this game won’t count for your rating.';
+  if (o.rateOpponent && !o.arrows && !o.threatAlerts) return { text: `Your opponent’s moves are rated${unrated}`, warn: true };
+  const on = [
+    ...(o.arrows ? ['best-move arrows'] : []),
+    ...(o.threatAlerts ? ['threat alerts'] : []),
+    ...(o.rateOpponent ? ['your opponent’s move ratings'] : []),
+  ];
+  if (on.length) {
+    const list = on.length === 1 ? on[0] : `${on.slice(0, -1).join(', ')} and ${on[on.length - 1]}`;
+    return { text: `${list[0].toUpperCase()}${list.slice(1)} are on${unrated}`, warn: true };
   }
-  if (o.arrows) return { text: 'Best-move arrows are on, so this game won’t count for your rating.', warn: true };
-  if (o.rateOpponent) return { text: 'Your opponent’s moves are rated, so this game won’t count for your rating.', warn: true };
   return {
     text:
-      'The coach, the evaluation bar and the explorer without its engine are fine in rated games; takebacks, hints, Retry, the explorer’s engine, best-move arrows and rating your opponent’s moves make a game unrated.',
+      'The coach, the evaluation bar and the explorer without its engine are fine in rated games; takebacks, hints, Retry, the explorer’s engine, best-move arrows, threat alerts and rating your opponent’s moves make a game unrated.',
     warn: false,
   };
 }
@@ -171,6 +189,7 @@ export function settingsFromDraft(
     showEvalBar: d.showEvalBar ?? initial.showEvalBar,
     showBestMoves: d.showBestMoves ?? initial.showBestMoves,
     rateOpponent: d.rateOpponent ?? initial.rateOpponent,
+    threatAlerts: d.threatAlerts ?? initial.threatAlerts,
     sound: d.sound ?? initial.sound,
     allowTakebacks: d.allowTakebacks ?? initial.allowTakebacks,
   };
@@ -196,7 +215,9 @@ export function NewGameSheet({
   levels,
   onSetLevel,
   arrowsLocked,
+  threatsLocked,
   onUnlock,
+  onUnlockThreats,
   onLearnOpenings,
 }: NewGameSheetProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial, bots));
@@ -263,11 +284,13 @@ export function NewGameSheet({
     });
   };
 
-  /** Best-move arrows as they will be: never on while they are locked. */
+  /** Best-move arrows and threat alerts as they will be: never on while they are locked. */
   const arrowsOn = draft.showBestMoves && !arrowsLocked;
-  const start = () => onStart(settingsFromDraft(initial, { ...draft, showBestMoves: arrowsOn }, bots, rating));
+  const threatsOn = draft.threatAlerts && !threatsLocked;
+  const start = () =>
+    onStart(settingsFromDraft(initial, { ...draft, showBestMoves: arrowsOn, threatAlerts: threatsOn }, bots, rating));
   const abandon = abandonNote(inProgress);
-  const note = unratedNote({ arrows: arrowsOn, rateOpponent: draft.rateOpponent });
+  const note = unratedNote({ arrows: arrowsOn, rateOpponent: draft.rateOpponent, threatAlerts: threatsOn });
 
   // The opponent by the name the game gives it ("Robot 800"); the cards say how it is chosen.
   const hero = draft.adaptive
@@ -409,7 +432,11 @@ export function NewGameSheet({
 
       <section class="sheet-section">
         <h3 class="sheet-label">Options</h3>
-        <div class="sheet-group" data-arrows-locked={arrowsLocked ? '' : undefined}>
+        <div
+          class="sheet-group"
+          data-arrows-locked={arrowsLocked ? '' : undefined}
+          data-threats-locked={threatsLocked ? '' : undefined}
+        >
           <Toggle
             id="coach"
             label="Coach"
@@ -436,6 +463,15 @@ export function NewGameSheet({
             onChange={arrowsLocked ? () => onUnlock?.() : (v) => set({ showBestMoves: v })}
             icon={arrowsLocked ? <IconLock /> : <IconEye />}
             iconColor={arrowsLocked ? 'var(--warning)' : 'var(--cls-brilliant)'}
+          />
+          <Toggle
+            id="threatAlerts"
+            label="Threat alerts"
+            description={threatsLocked || THREAT_ALERTS_DESCRIPTION}
+            checked={threatsOn}
+            onChange={threatsLocked ? () => onUnlockThreats?.() : (v) => set({ threatAlerts: v })}
+            icon={threatsLocked ? <IconLock /> : <IconThreat />}
+            iconColor={threatsLocked ? 'var(--warning)' : 'var(--danger)'}
           />
           <Toggle
             id="rateOpponent"

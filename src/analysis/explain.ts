@@ -60,6 +60,7 @@ import {
   materialOutcome,
   motifSquares,
   moveMotifs,
+  nullMoveFen,
   passTurn,
   playLine,
   principles,
@@ -1060,6 +1061,71 @@ export function describeThreat(fen: string, opts: { perspective?: Perspective } 
       title: first.kind === 'mate' ? 'Mate threat' : 'Threat',
       motifs: [kind(first)],
     };
+  } catch {
+    return null;
+  }
+}
+
+/** Options of `explainThreat`. */
+export interface ExplainThreatOptions {
+  /** Who threatens it, the side NOT to move in the position ("Pip"). */
+  name: string;
+}
+
+/** The tactics a threat is worded by (the material threats themselves are worded from the line). */
+const THREAT_TACTICS: readonly MotifKind[] = ['skewer', 'discovered', 'pin', 'trapped', 'doubleThreat', 'freeCapture'];
+
+/** "your queen and rook" (one of each), else "your rook on a1 and rook on h1". */
+function targetsText(targets: readonly PieceOn[]): string {
+  const types = targets.map((t) => t.type);
+  const distinct = new Set(types).size === types.length;
+  return `your ${joinAnd(distinct ? types.map((t) => NAME[t]) : targets.map(on))}`;
+}
+
+/**
+ * The opponent's threat in `fen` (the side NOT to move threatens it) in one sentence, as the engine
+ * sees it: "Pip threatens Nxf7, forking your queen and rook." `line` is the engine's best line in
+ * the null-move position (`nullMoveFen(fen)`: the opponent to move again, its score from the
+ * opponent's point of view), and its first move is the threat. It names the opponent's move only,
+ * never a defense. In order: a mate ("…, checkmate", "a forced mate in 2, starting with Qh7+"), a
+ * fork, the static detection's words when it finds the same move and it wins a piece or promotes
+ * (`describeThreat`'s "…, winning your knight on e5", "…, making a new queen"), the move's tactic
+ * ("…, which pins your knight on c6 to the king"), and the material the line wins ("…, which wins
+ * a knight"). The arrow is the threat's move ('threat'); `motifs` says which kind of threat it is.
+ * Null when the line has no legal first move there. Never throws.
+ */
+export function explainThreat(fen: string, line: PvLine, opts: ExplainThreatOptions): Explanation | null {
+  try {
+    const nf = nullMoveFen(fen);
+    const uci = line.pv[0];
+    if (!nf || !uci) return null;
+    const mm = moveMotifs(nf, uci);
+    if (!mm) return null;
+    const { move, motifs } = mm;
+    const san = move.san;
+    const arrows = arrow(uci, 'threat');
+    const say = (what: string, title: string, motif: string): Explanation => ({
+      headline: `${opts.name} threatens ${what}.`,
+      details: [],
+      arrows,
+      title,
+      motifs: [motif],
+    });
+    const mate = mateOf(line.score);
+    if (motifs.some((m) => m.kind === 'checkmate')) return say(`${san}, checkmate`, 'Mate threat', 'mateThreat');
+    if (mate !== null && mate > 0) return say(`a forced mate in ${mate}, starting with ${san}`, 'Mate threat', 'mateThreat');
+    const fork = motifs.find((m): m is Extract<Motif, { kind: 'fork' }> => m.kind === 'fork');
+    if (fork) return say(`${san}, forking ${targetsText(fork.targets)}`, 'Fork', 'fork');
+    // The static detection found the same move: its words, for a piece won or a promotion.
+    const stat = threatsAgainst(fen).find((t) => t.from === move.from && t.to === move.to);
+    if (stat?.kind === 'promotion') return say(`${stat.san}, making a new queen`, 'Promotion threat', 'promotionThreat');
+    if (stat?.kind === 'material' && stat.target && VALUE[stat.target.type] >= 3) {
+      return say(`${stat.san}, winning your ${on(stat.target)}`, 'Threat', 'threat');
+    }
+    const tactic = rankMotifs(motifs.filter((m) => THREAT_TACTICS.includes(m.kind))).find((m) => motifClause(m, 'your'));
+    if (tactic) return say(withWhich(san, motifClause(tactic, 'your')!), MOTIF_TITLE[tactic.kind] ?? 'Threat', tactic.kind);
+    const mat = describeMaterial(materialOutcome(nf, line.pv, move.color), 'you');
+    return say(mat ? withWhich(san, mat) : san, 'Threat', 'threat');
   } catch {
     return null;
   }

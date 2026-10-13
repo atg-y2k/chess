@@ -195,6 +195,8 @@ charged.
 - [ ] Menu → Engine → **Run engine self-test** says PASS.
 - [ ] Play a full game with the coach on, then a Game Review, on the oldest iPhone you support (memory
       with two engines).
+- [ ] Menu → Your stats: the rating chart (tap and drag along it), then a game from Recent games: step
+      through it with a swipe, Review it, and Back to the Menu.
 - [ ] Sounds follow the silent switch and don't stop your music; haptics on moves.
 - [ ] Export PGN opens the share sheet; Privacy Policy, Terms and Source code open in Safari.
 - [ ] Status bar readable in dark and light themes; nothing under the Dynamic Island or home indicator.
@@ -367,7 +369,8 @@ Play chess against the computer at any level, from complete beginner to grandmas
 
 PLAY
 • 16 computer opponents from 100 to 3200 Elo, a custom strength slider, and "Match my rating"
-• Your own rating, with your stats and recent games
+• Your own rating, with a chart of how it moved and your recent games
+• Replay any of your recent games move by move, with its analysis, and export it
 • Takebacks, board flip and PGN export
 • The explorer: try moves for both sides on the board before you play them, on your own (your game stays rated)
 • Draw arrows and circles on the board with your finger to plan your moves
@@ -390,7 +393,8 @@ LEARN MORE WITH PRO (one-time purchase)
 • Show best: the move you should have played, and why
 • The engine in the explorer: its evaluation, best moves and a rating for every move you try
 • Best-move arrows while you play
-• A full review of every game, with its key moments and a comment on every move
+• Threat alerts: a warning when your opponent threatens something
+• A full review of every game, with its key moments, a comment on every move, and Try again on your mistakes
 • Opening lessons and drills: why the key moves of an opening are played, the plans and traps, and drills with your progress saved
 Pro is a single in-app purchase, not a subscription, and Family Sharing shares it with your family.
 
@@ -417,11 +421,11 @@ App Store Connect → the version → App Review Information: your contact detai
 ```text
 Chess Coach is a chess trainer that runs entirely on the device. The Stockfish chess engine (open source, GPL) is bundled in the app, so it works offline and needs no account or sign-in. There is no server.
 
-FREE: all 16 computer opponents (100-3200 Elo), the player's rating, the evaluation bar and graph, the rating of every move (Best, Mistake, Blunder...), also of the computer's moves with the "Rate opponent's moves" option, and accuracy after the game. The explorer (the Explore button during or after a game): trying moves for both sides on the board, with the engine off. Draw (the pencil under the board): drawing arrows and circles on the board. The Openings section (Menu > Openings, or "Learn openings" on the New game sheet): browsing and searching 3,800 named opening lines, exploring them move by move, stepping through any line on a board, and playing an opening against the computer.
+FREE: all 16 computer opponents (100-3200 Elo), the player's rating, the evaluation bar and graph, the rating of every move (Best, Mistake, Blunder...), also of the computer's moves with the "Rate opponent's moves" option, and accuracy after the game. The explorer (the Explore button during or after a game): trying moves for both sides on the board, with the engine off. Draw (the pencil under the board): drawing arrows and circles on the board. The rating chart and the game viewer (Menu > Your stats, and any game under Recent games): replaying an earlier game with its move ratings, evaluation graph and accuracy, and exporting it. The Openings section (Menu > Openings, or "Learn openings" on the New game sheet): browsing and searching 3,800 named opening lines, exploring them move by move, stepping through any line on a board, and playing an opening against the computer.
 
-PRO is one non-consumable in-app purchase (io.github.atgy2k.chesscoach.pro, Family Sharing on). It unlocks the coach's explanations of each move, Hint, Show best, the engine in the explorer (its evaluation, best moves, arrows and move ratings while trying moves; the "Engine" switch in the explorer's panel), best-move arrows, the key moments and per-move comments of the post-game review, and in the Openings section the opening guides (the "why" of each move, the plans, traps and key variations) and the opening drills with saved progress.
+PRO is one non-consumable in-app purchase (io.github.atgy2k.chesscoach.pro, Family Sharing on). It unlocks the coach's explanations of each move, Hint, Show best, the engine in the explorer (its evaluation, best moves, arrows and move ratings while trying moves; the "Engine" switch in the explorer's panel), best-move arrows, threat alerts (a warning when the opponent threatens something), the key moments and per-move comments of the post-game review, also of earlier games in the game viewer (with Try again: replaying the player's own mistakes to find a better move), and in the Openings section the opening guides (the "why" of each move, the plans, traps and key variations) and the opening drills with saved progress.
 
-WHERE TO FIND THE PURCHASE: tap Play on the New game sheet and make any move. The coach panel under the board rates the move and shows "Unlock to see why", which opens the purchase screen. The purchase screen also opens from the Hint button, from the "Engine" switch in the explorer (tap Explore, then the switch), from Menu > Chess Coach Pro > Unlock, and in the Openings section (Menu > Openings, then any opening under "Start here") from the guide's "Unlock" button and from "Drill it". Restore Purchases is in the Menu and on the purchase screen.
+WHERE TO FIND THE PURCHASE: tap Play on the New game sheet and make any move. The coach panel under the board rates the move and shows "Unlock to see why", which opens the purchase screen. The purchase screen also opens from the Hint button, from the "Engine" switch in the explorer (tap Explore, then the switch), from Menu > Chess Coach Pro > Unlock, from the "Threat alerts" switch (New game sheet and Menu), from "Show me" (with "Rate opponent's moves" on, when the computer blunders), from "Unlock" in the Game Review report and in the game viewer (Menu > Recent games > a game), and in the Openings section (Menu > Openings, then any opening under "Start here") from the guide's "Unlock" button and from "Drill it". Restore Purchases is in the Menu and on the purchase screen.
 
 OPEN SOURCE: the app is free software under the GNU GPL v3 or later. Menu > About links to the exact source code of this build (https://github.com/atg-y2k/chess/tree/ios-vX.Y.Z-bN) and shows the licenses, the Privacy Policy, the Terms of Use and Support. Our custom EULA states that the GPL governs the software.
 
