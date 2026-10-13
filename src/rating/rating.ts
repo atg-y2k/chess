@@ -104,12 +104,42 @@ export const STARTING_LEVELS: readonly { id: string; label: string; rating: numb
 /**
  * Sets the player's rating to a chosen starting level. The rating becomes provisional again
  * (`gamesPlayed` = 0, so the next games move it a lot) and settles from there. The record and
- * history are kept; the peak keeps its maximum once rated games have been played. Pure.
+ * history are kept. The peak is the highest rating reached after a rated game: once there is one,
+ * a chosen level does not change it (before that it is the level). Pure.
  */
 export function setStartingRating(profile: PlayerProfile, rating: number): PlayerProfile {
   const r = clampRating(rating);
   const earned = profile.history.some((g) => g.rated);
-  return { ...profile, rating: r, gamesPlayed: 0, peak: earned ? Math.max(profile.peak, r) : r };
+  return { ...profile, rating: r, gamesPlayed: 0, peak: earned ? profile.peak : r };
+}
+
+/** A rating is "new" (moves fast, see `kFactor`) for this many rated games after it was (re)set. */
+export const PROVISIONAL_GAMES = 10;
+
+/**
+ * The rating is still new and moves fast (fewer than PROVISIONAL_GAMES rated games since it was
+ * set, or made provisional again by a run of surprising results, see `effectiveGames`).
+ */
+export function isProvisional(profile: PlayerProfile): boolean {
+  return effectiveGames(profile) < PROVISIONAL_GAMES;
+}
+
+/**
+ * What a rated result against a bot of `botElo` would do to the rating (the same maths as
+ * `applyGameResult`), e.g. to say before a resignation what it costs. Pure.
+ */
+export function ratingAfterResult(profile: PlayerProfile, botElo: number, playerScore: 1 | 0.5 | 0): { before: number; after: number } {
+  const before = profile.rating;
+  const delta = kFactor(effectiveGames(profile)) * (playerScore - expectedScore(before, botElo));
+  return { before, after: clampRating(before + delta) };
+}
+
+/** A rating change as the app writes it: "+12", "−8" (true minus sign) or "±0". */
+export function formatRatingDelta(delta: number): string {
+  const d = Math.round(delta);
+  if (d > 0) return `+${d}`;
+  if (d < 0) return `−${-d}`;
+  return '±0';
 }
 
 /** A fresh profile: rating 800, no games. */
@@ -257,10 +287,17 @@ export function sanitizeProfile(raw: unknown): PlayerProfile {
   }
   // A lost rating is recovered from the newest game when possible.
   const rating = isFiniteNumber(raw.rating) ? clampRating(raw.rating) : (history[0]?.ratingAfter ?? DEFAULT_RATING);
+  // The peak is the highest rating after a rated game (see setStartingRating): a level set later may
+  // be above it. Before any rated game it is the rating.
+  const rated = history.filter((r) => r.rated);
+  const storedPeak = isFiniteNumber(raw.peak) ? clampRating(raw.peak) : null;
+  const peak = rated.length
+    ? (storedPeak ?? Math.max(...rated.map((r) => r.ratingAfter)))
+    : Math.max(rating, storedPeak ?? rating);
   return {
     rating,
     gamesPlayed: count(raw.gamesPlayed),
-    peak: Math.max(rating, isFiniteNumber(raw.peak) ? clampRating(raw.peak) : rating),
+    peak,
     wins: count(raw.wins),
     draws: count(raw.draws),
     losses: count(raw.losses),

@@ -10,7 +10,10 @@ import {
   defaultProfile,
   effectiveGames,
   expectedScore,
+  formatRatingDelta,
+  isProvisional,
   kFactor,
+  ratingAfterResult,
   loadProfile,
   playerScoreFor,
   saveProfile,
@@ -275,6 +278,31 @@ describe('starting level and convergence', () => {
     expect(p.gamesPlayed).toBe(40); // input not mutated
   });
 
+  it('a level set after rated games never raises the peak, also after a save and load', () => {
+    // One rated loss: 800 -> 625, peak 800. Expert (2000) is a level, not a rating reached in play.
+    const lost = applyGameResult(profile(), game({ botElo: 800, result: '0-1', playerScore: 0 })).profile;
+    expect(lost.peak).toBe(800);
+    const expert = setStartingRating(lost, 2000);
+    expect(expert).toMatchObject({ rating: 2000, peak: 800 });
+    expect(setStartingRating(expert, 800).peak).toBe(800);
+    saveProfile(expert);
+    expect(loadProfile()).toMatchObject({ rating: 2000, peak: 800 });
+    // Before any rated game the peak is the level (as at first launch).
+    expect(loadProfile(null).peak).toBe(800);
+    expect(setStartingRating(defaultProfile(), 1600).peak).toBe(1600);
+  });
+
+  it('isProvisional and ratingAfterResult preview what a result does', () => {
+    expect(isProvisional(profile())).toBe(true);
+    expect(isProvisional(profile({ gamesPlayed: 9 }))).toBe(true);
+    expect(isProvisional(profile({ gamesPlayed: 10 }))).toBe(false);
+    const p = profile({ rating: 834, gamesPlayed: 4 });
+    const preview = ratingAfterResult(p, 850, 0);
+    const real = applyGameResult(p, game({ botElo: 850, result: '0-1', playerScore: 0 }));
+    expect(preview).toEqual({ before: 834, after: real.record.ratingAfter });
+    expect(formatRatingDelta(preview.after - preview.before)).toMatch(/^−\d+$/);
+  });
+
   /** Mean rating after each game when a player of true strength `strength` always plays "Match my rating". */
   function simulate(strength: number, start: PlayerProfile, games: number, trials = 600): number[] {
     const rng = mulberry32(strength);
@@ -383,7 +411,8 @@ describe('profile persistence', () => {
     const p = loadProfile();
     expect(p.rating).toBe(3200);
     expect(p.gamesPlayed).toBe(0);
-    expect(p.peak).toBe(3200);
+    // A lost peak comes back from the rated games (a level set later may be above it).
+    expect(p.peak).toBe(Math.max(good.ratingAfter, p.history[1].ratingAfter));
     expect([p.wins, p.draws, p.losses]).toEqual([3, 0, 2]);
     expect(p.history.map((r) => r.id)).toEqual([good.id, 'no-score']);
     expect(p.history[1].playerScore).toBe(1); // derived from result + colour

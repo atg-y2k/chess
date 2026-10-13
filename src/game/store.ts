@@ -15,6 +15,7 @@ import { personaById, customPersona, BOTS } from '../bot/personas';
 import type { BotPersona } from '../bot/types';
 import {
   START_FEN,
+  capturedByMoves,
   capturedPieces,
   fenKey,
   material,
@@ -24,12 +25,13 @@ import {
   uciToSan,
 } from '../chess/utils';
 import type { AnalysisResult, Score } from '../engine/types';
-import { suggestedOpponentElo } from '../rating/rating';
+import { isProvisional, ratingAfterResult, suggestedOpponentElo } from '../rating/rating';
 import type { PlayerProfile } from '../rating/types';
 import type { BoardProps } from '../ui/Board';
 import type { CoachOther, CoachPanelProps } from '../ui/CoachPanel';
 import type { EvalBarProps } from '../ui/EvalBar';
 import type { EvalGraphProps } from '../ui/EvalGraph';
+import type { GameOverPlay } from '../ui/GameOverSheet';
 import type { MoveListProps } from '../ui/MoveList';
 import type { PlayerStripProps } from '../ui/PlayerStrip';
 import type { ReviewPanelProps } from '../ui/ReviewPanel';
@@ -42,6 +44,7 @@ import {
   classLabel,
   coachTip,
   concession,
+  drawRuleText,
   lockedTeaser,
   mentionsMove,
   moveLabel,
@@ -54,7 +57,7 @@ import { DRAW_COLORS, NO_DRAWINGS, NO_SHAPES, shapesAt, type DrawColor, type Dra
 import type { ProFeature } from './entitlements';
 import { currentMove, drawReason, explorerFen, type DrawReason, type Explorer, type ExplorerMove } from './explorer';
 import { lineMoveNumber, lineMoves, lineProgress, type LineMove, type LineStatus, type OpeningTarget } from './opening';
-import type { ReviewSummary } from './review';
+import { summarizeGame, type ReviewSummary } from './review';
 import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings, type Ply } from './types';
 
 // -------------------------------------------------------------------------------------------------
@@ -85,6 +88,8 @@ export interface PendingAssist {
   kind: AssistKind;
   /** Retry: the human ply to take back. */
   index?: number;
+  /** The sheet the question was asked from (the Menu's Rate opponent's moves): either answer goes back to it. */
+  returnTo?: SheetName;
 }
 
 /** Depth below which the live eval is shown as "still thinking". */
@@ -137,6 +142,8 @@ export interface RatingChange {
   before: number;
   after: number;
   rated: boolean;
+  /** The rating was new when this game was played (rating.ts `isProvisional`): it moves fast. */
+  provisional?: boolean;
 }
 
 /** What the coach panel is doing (besides the phase defaults). */
@@ -185,6 +192,11 @@ export interface AppState {
   engineDownload: Signal<number | null>;
   settings: Signal<GameSettings>;
   profile: Signal<PlayerProfile>;
+  /**
+   * "Set my level" chosen during a rated game the player has moved in: that game still counts at
+   * the rating it was paired at, and the level applies when it ends (or is abandoned). Null when none.
+   */
+  pendingLevel: Signal<number | null>;
   game: Signal<GameInfo | null>;
   plies: Signal<Ply[]>;
   /** White-POV eval of the start position, when known. */
@@ -367,14 +379,29 @@ export interface SheetsView {
     initial: GameSettings;
     playerRating: number;
     bots: BotPersona[];
-    /** A game the human has moved in is still going: starting another ends it (a loss unless unrated). */
-    inProgress: { rated: boolean } | null;
+    /**
+     * A game the human has moved in is still going: starting another ends it (a loss unless
+     * unrated), with what the loss does to the rating when it is rated.
+     */
+    inProgress: { rated: boolean; before?: number; after?: number } | null;
     /** No games played yet: the sheet offers a starting level ("Your level"). */
     newPlayer: boolean;
   };
   /** The unrated-help confirmation (null unless one is pending). */
   assist: { kind: AssistKind } | null;
-  menu: { settings: GameSettings; profile: PlayerProfile; canResign: boolean };
+  menu: {
+    settings: GameSettings;
+    profile: PlayerProfile;
+    canResign: boolean;
+    /** A level chosen now would wait for the end of the game in progress (a rated game the player has moved in). */
+    levelAfterGame: boolean;
+    /** The level that applies when the game in progress ends (`pendingLevel`), or null. */
+    pendingLevel: number | null;
+    /** The rating is still new and moves fast (rating.ts `isProvisional`). */
+    provisional: boolean;
+    /** What resigning the game in progress does to the rating (null when there is none to resign). */
+    resign: { rated: boolean; before?: number; after?: number } | null;
+  };
   /** Null until a game has finished. */
   gameOver: {
     outcome: GameOutcome;
@@ -386,6 +413,12 @@ export interface SheetsView {
     ratingChange?: RatingChange;
     /** Opening practice: the line's name ("Opening practice: Italian Game" on the sheet). */
     practice?: string;
+    /** Accuracy and the player's weak moves, once every move is checked ('pending' until then). */
+    play: GameOverPlay | 'pending' | null;
+    /** A draw rule in plain words (coach.ts `drawRuleText`), or null. */
+    rule: string | null;
+    /** The rated change came while the rating was new (it moves fast). */
+    provisional: boolean;
   } | null;
 }
 
@@ -666,6 +699,7 @@ export function createState(init: {
     engineDownload: signal<number | null>(null),
     settings: signal<GameSettings>(init.settings ?? { ...DEFAULT_SETTINGS }),
     profile: signal<PlayerProfile>(init.profile),
+    pendingLevel: signal<number | null>(null),
     game: signal<GameInfo | null>(null),
     plies: signal<Ply[]>([]),
     startEval: signal<Score | null>(null),
@@ -1176,11 +1210,11 @@ export function createStore(state: AppState): Store {
   });
 
   /**
-   * Classifications visible on the graph during play: the human's moves, and the opponent's while
-   * they are rated (the finished game and the review show all).
+   * Classifications visible on the graph during play, as on the board and in the move list: your
+   * moves with the coach on, and the opponent's while they are rated (`ratedDuringPlay`), never a
+   * concession's (the finished game and the review show all).
    */
-  const showsClass = (p: Ply): boolean =>
-    phase.value !== 'playing' || p.color === game.value?.playerColor || ratesOpponent.value;
+  const showsClass = (p: Ply): boolean => phase.value !== 'playing' || (ratedDuringPlay(p) && !concession(p));
 
   const evalGraph = computed<EvalGraphView>(() => {
     const ps = plies.value;
@@ -1248,7 +1282,9 @@ export function createStore(state: AppState): Store {
   // --- coach -------------------------------------------------------------------------------------
   const coach = computed<CoachView>(() => {
     const view = coachContent();
-    const auto = view.kind === 'minimal';
+    // Expanded unless the player collapsed it (on a short phone the app shows one row anyway): the
+    // coach-off view too, so the opening's whole name and the last move fit.
+    const auto = false;
     // Opening practice: the banner at the top of the panel, during the game and after it.
     const v = openingPractice.value;
     const tone = v?.status === 'complete' ? 'done' : v?.status === 'left' ? 'off' : 'on';
@@ -1297,18 +1333,52 @@ export function createStore(state: AppState): Store {
     }
   }
 
+  /**
+   * The finished game on its final position: the result, what a draw rule means, the coach's
+   * verdict on the move that decided it (what it was, why; the class icon and Show best as for any
+   * move), and what to do next.
+   */
   function overCoach(): CoachContent {
     const o = outcome.value;
     const g = game.value;
     const human = g?.playerColor ?? 'w';
-    const title = !o || o.winner === null ? 'Draw' : o.winner === human ? 'You won!' : 'You lost';
-    const lines = [o ? `${o.reason}.` : 'The game is over.', 'Review the game to see where it was won and lost.'];
+    const draw = !o || o.winner === null;
+    const title = draw ? 'Draw' : o.winner === human ? 'You won!' : 'You lost';
+    // A draw rule in plain words ("Stalemate: the side to move has no legal move…").
+    const lines = [o ? (drawRuleText(o.reason) ?? `${o.reason}.`) : 'The game is over.'];
+    // The last move, when it ended the game on the board (not a resignation or an abandoned game).
+    const last = plies.value.at(-1);
+    const deciding = last && o && ENDED_ON_BOARD.has(o.reason) && last.index >= preplayed.value ? last : null;
+    const cl = deciding?.classification;
+    let index: number | undefined;
+    let showBest = false;
+    if (deciding && cl && deciding.explanation) {
+      const v = verdictTitle(deciding);
+      const who = deciding.color === human ? '' : `${g!.bot.name}’s `;
+      lines.push(`${who}${v.title}.`);
+      if (locked('reviewDetails')) lines.push(lockedTeaser(deciding));
+      else {
+        const voice: NearVoice = deciding.color === human ? 'you' : 'neutral';
+        const ex = explanationLines(deciding.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null, {
+          cl,
+          playedUci: deciding.uci,
+          voice,
+        });
+        // The first line says how the game ended: keep what else the move did and what was better.
+        lines.push(...(ENDING_TITLES.has(deciding.explanation.title ?? '') ? ex.slice(1) : ex).slice(0, 2));
+      }
+      index = deciding.index;
+      showBest = offersShowBest(cl, deciding.uci) && !locked('reviewDetails');
+    }
+    lines.push(draw ? 'Review the game to see its key moments.' : 'Review the game to see where it was won and lost.');
     return {
       kind: 'status',
       title,
       lines,
       busy: false,
+      ...(index !== undefined ? { index } : {}),
       actions: [
+        ...(showBest ? [showBestAction()] : []),
         { id: 'review', label: 'Game Review', primary: true },
         { id: 'rematch', label: 'Rematch' },
         { id: 'newGame', label: 'New game' },
@@ -1698,7 +1768,10 @@ export function createStore(state: AppState): Store {
     // The explorer's position while exploring (its captures, material and side to move).
     const xpos = explorerPosition.value;
     const fen = xpos?.fen ?? displayedFen.value;
-    const captured = capturedPieces(fen);
+    // From the moves when the game began at the start (a promotion is not a capture), else from the board.
+    const x = explorer.value;
+    const moves = x ? [...plies.value.slice(0, x.baseIndex), ...x.moves.slice(0, x.cursor)] : plies.value.slice(0, current.value);
+    const captured = g && fenKey(g.startFen) === fenKey(START_FEN) ? capturedByMoves(moves) : capturedPieces(fen);
     const mat = material(fen);
     const turn = xpos?.turn ?? position.value.turn;
     const playing = phase.value === 'playing' || !!xpos;
@@ -1785,13 +1858,17 @@ export function createStore(state: AppState): Store {
     const g = game.value;
     const o = outcome.value;
     const rc = state.ratingChange.value;
-    const inProgress = g && phase.value === 'playing' && !o && humanMoved.value ? { rated: !g.assisted } : null;
+    // What a loss now (resigning, or abandoning for a new game) does to the rating.
+    const loss = g && !g.assisted ? ratingAfterResult(profile.value, g.botElo, 0) : null;
+    const inProgress = g && phase.value === 'playing' && !o && humanMoved.value ? { rated: !g.assisted, ...(loss ?? {}) } : null;
+    const canResign = phase.value === 'playing' && !o;
     const pending = state.pendingAssist.value;
     return {
       open: state.sheet.value,
       newGame: {
         initial: settings.value,
-        playerRating: profile.value.rating,
+        // A level waiting for the game in progress to end is the rating the next game is matched to.
+        playerRating: state.pendingLevel.value ?? profile.value.rating,
         bots: BOTS,
         inProgress,
         newPlayer: isNewPlayer(profile.value),
@@ -1800,7 +1877,12 @@ export function createStore(state: AppState): Store {
       menu: {
         settings: settings.value,
         profile: profile.value,
-        canResign: phase.value === 'playing' && !o,
+        canResign,
+        levelAfterGame: !!inProgress?.rated,
+        pendingLevel: state.pendingLevel.value,
+        provisional: isProvisional(profile.value),
+        // Resigning before your first move costs no rating.
+        resign: canResign ? (inProgress ? { ...inProgress } : { rated: false }) : null,
       },
       gameOver:
         g && o
@@ -1813,8 +1895,35 @@ export function createStore(state: AppState): Store {
               botElo: g.botElo,
               ...(rc ? { ratingChange: rc } : {}),
               ...(g.opening ? { practice: g.opening.line.name } : {}),
+              play: finishedPlay.value,
+              rule: drawRuleText(o.reason),
+              provisional: !!rc?.rated && !!rc.provisional,
             }
           : null,
+    };
+  });
+
+  /**
+   * The finished game in numbers for the game-over sheet: both sides' accuracy and the player's weak
+   * moves (free, as in Game Review), once every move is checked; 'pending' until then (the last
+   * moves are checked in the background). The moves the game started with are left out, as in the review.
+   */
+  const finishedPlay = computed<GameOverPlay | 'pending' | null>(() => {
+    const g = game.value;
+    if (!g || !outcome.value) return null;
+    const ps = plies.value;
+    const pre = Math.min(preplayed.value, ps.length);
+    const own = ps.slice(pre);
+    if (!own.some((p) => p.color === g.playerColor)) return null;
+    const failed = state.failedAnnotations.value;
+    if (!own.every((p) => (p.classification && p.evalWhite) || failed.has(annotationKey(g.id, p)))) return 'pending';
+    const sum = pre
+      ? summarizeGame(ps[pre - 1].fenAfter, ps[pre - 1].evalWhite ?? null, own, g.playerColor)
+      : summarizeGame(g.startFen, state.startEval.value, ps, g.playerColor);
+    const c = sum.counts[g.playerColor];
+    return {
+      accuracy: { you: sum.accuracy[g.playerColor], bot: sum.accuracy[otherColor(g.playerColor)] },
+      counts: { blunder: c.blunder ?? 0, mistake: c.mistake ?? 0, miss: c.miss ?? 0, inaccuracy: c.inaccuracy ?? 0 },
     };
   });
 
@@ -1999,6 +2108,18 @@ export function explanationLines(
   }
   return lines;
 }
+
+/** Results reached on the board by the last move (not a resignation or an abandoned game). */
+const ENDED_ON_BOARD: ReadonlySet<string> = new Set([
+  'Checkmate',
+  'Stalemate',
+  'Threefold repetition',
+  'Insufficient material',
+  '50-move rule',
+]);
+
+/** Explanation titles that only say how the game ended (the result line says it already). */
+const ENDING_TITLES: ReadonlySet<string> = new Set(['Checkmate', 'Stalemate', 'Repetition', 'Draw']);
 
 /** A book move's plain reason, which repeats its verdict (see `explanationLines`). */
 const BOOK_ECHO = new RegExp(`^\\S+ ${BOOK_REASON}\\.$`);

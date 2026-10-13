@@ -6,7 +6,7 @@ import type { BotPersona } from '../../src/bot/types';
 import { beginnerFamilies, families, mainLine, search } from '../../src/openings/catalog';
 import { guideFor } from '../../src/data/opening-guides';
 import { checkMove, createDrill, drillHint, playOpponent } from '../../src/openings/drill';
-import { drillPage, linePage } from '../../src/openings/session';
+import { drillPage, linePage, targetPages } from '../../src/openings/session';
 import { dotState } from '../../src/ui/openings/DrillPage';
 import {
   branchTarget,
@@ -14,6 +14,7 @@ import {
   commonWord,
   deepestCatalogPrefix,
   difficultyLabel,
+  distinctTitles,
   drillFeedback,
   endsGame,
   familyHits,
@@ -36,11 +37,13 @@ import {
   sideSentence,
   starterFamilies,
   studySteps,
+  trapHits,
   treePosition,
   ucisOf,
 } from '../../src/ui/openings/model';
 import { lineEnd, movesCount } from '../../src/ui/openings/LinePage';
 import { pageTitle } from '../../src/ui/openings/OpeningsView';
+import { keyVariationTitles } from '../../src/ui/openings/FamilyPage';
 import { playSettings } from '../../src/ui/openings/PlaySheet';
 import { evalFromResult, verdictFor } from '../../src/ui/openings/useEval';
 
@@ -255,8 +258,12 @@ describe('wording', () => {
     expect(difficultyLabel('beginner')).toBe('Beginner-friendly');
     expect(plyOfLabel('3. Bc4')).toBe(4);
     expect(plyOfLabel('3... Bc5')).toBe(5);
-    expect(movesCount(5)).toBe('5 moves: 3 by White, 2 by Black');
-    expect(movesCount(6)).toBe('6 moves: 3 by White, 3 by Black');
+    // Full moves, as the game banner and the drills count them (13 plies of the Italian: 7 moves).
+    expect(movesCount(5)).toBe('3 moves (White plays 3, Black 2)');
+    expect(movesCount(6)).toBe('3 moves (White plays 3, Black 3)');
+    expect(movesCount(13)).toBe('7 moves (White plays 7, Black 6)');
+    expect(movesCount(4)).toBe('2 moves (White plays 2, Black 2)'); // the Fool's Mate
+    expect(movesCount(2)).toBe('1 move (White plays 1, Black 1)');
     expect(movesCount(1)).toBe('1 move, by White');
   });
 
@@ -342,5 +349,63 @@ describe('the evaluation bar', () => {
     expect(verdictFor(v, fen.replace(' 0 1', ' 3 7'))).toEqual({ kind: 'cp', value: 30 }); // move counters aside
     expect(verdictFor(v, other)).toBeNull();
     expect(verdictFor({ ...v, thinking: true }, fen)).toBeNull();
+  });
+});
+
+describe('play-through fixes (October 2026)', () => {
+  it('"Next variation" after a drill always has a new move to find for the side drilled', () => {
+    const next = nextLineId('guide:Italian Game', 'w');
+    expect(next).not.toBe('c55-italian-game-two-knights-defense');
+    const main = resolveLine('guide:Italian Game')!.san.filter((_, k) => k % 2 === 0);
+    const mine = resolveLine(next!)!.san.filter((_, k) => k % 2 === 0);
+    expect(mine.length > main.length || mine.some((m, k) => m !== main[k])).toBe(true);
+    // Learn pages (no side) are unchanged.
+    expect(nextLineId('guide:Italian Game')).toBe(nextLineId('guide:Italian Game'));
+  });
+
+  it('titles a line page after the position it was opened at', () => {
+    // Learn this line from 1. e4 e5 2. Nf3: the King's Knight Opening, not the Closed Ruy Lopez it goes on to.
+    const pos = treePosition(['e2e4', 'e7e5', 'g1f3']);
+    const learn = learnTarget(pos)!;
+    expect(pageTitle(linePage(learn.lineId, learn.ply))).toBe("King's Knight Opening");
+    // A branch from the Italian main line at 3... Nf6: the Two Knights Defense, not its Knorre Variation.
+    const t = branchTarget(['e4', 'e5', 'Nf3', 'Nc6', 'Bc4'], { san: 'Nf6', uci: 'g8f6', lineId: undefined });
+    expect('lineId' in t).toBe(true);
+    if ('lineId' in t) expect(pageTitle(linePage(t.lineId, t.ply))).toBe('Two Knights Defense');
+    // Opened at its start (a row of the family page), a line keeps its own name.
+    expect(pageTitle(linePage('b90-sicilian-defense-najdorf-variation'))).toBe('Najdorf Variation');
+    // A target names its line (opening practice's banner at the game's move): its own title at any move.
+    const banner = targetPages({ lineId: 'guide:Italian Game', family: 'Italian Game', ply: 2 }).at(-1)!;
+    expect(banner).toMatchObject({ kind: 'line', ply: 2 });
+    expect(pageTitle(banner)).toBe('Main line');
+  });
+
+  it('makes rows that would read the same distinguishable', () => {
+    const rows = [
+      { san: ['e4', 'c6'], v: '' },
+      { san: ['e4', 'c6', 'Nc3'], v: '' },
+      { san: ['e4', 'c6', 'd4', 'd5'], v: '' },
+      { san: ['e4', 'c6', 'd4', 'd5', 'exd5'], v: 'Exchange Variation' },
+    ];
+    const titles = distinctTitles(rows, (r) => r.v || 'Starting moves');
+    expect(new Set(titles).size).toBe(titles.length);
+    expect(titles[1]).toBe('Starting moves · 2. Nc3');
+    expect(titles[3]).toBe('Exchange Variation');
+    expect(keyVariationTitles(["Queen's Pawn Game: London System", 'Indian Defense: London System', 'London System: Poisoned Pawn'], 'London System')).toEqual([
+      "Queen's Pawn Game: London System",
+      'Indian Defense: London System',
+      'Poisoned Pawn',
+    ]);
+  });
+
+  it('finds the guides’ traps by name', () => {
+    expect(trapHits("scholar's mate").map((t) => t.title)).toEqual(["Scholar's Mate"]);
+    expect(trapHits('scholars mate').map((t) => t.title)).toEqual(["Scholar's Mate"]);
+    expect(trapHits('legal').map((t) => t.title)).toEqual(["Légal's Mate"]);
+    expect(trapHits('legal trap').map((t) => t.title)).toEqual(["Légal's Mate"]);
+    expect(trapHits('fried liver').map((t) => t.id)).toEqual([expect.stringMatching(/^trap:Italian Game:\d+$/)]);
+    expect(trapHits('elephant')).toHaveLength(1);
+    expect(trapHits('trap')).toEqual([]);
+    for (const t of trapHits('mate trap legal scholar')) expect(resolveLine(t.id)).not.toBeNull();
   });
 });

@@ -125,8 +125,8 @@ function DrillSetup({ page, line }: { page: DrillPageState; line: StudyLine }) {
           />
           <p class="op-note">
             {page.acceptAlternatives
-              ? 'Another well-known move is not counted as a mistake, but you still play this line’s move to go on.'
-              : 'Only this line’s moves count. Another well-known move counts as a mistake.'}
+              ? 'Another well-known move is fine: you are told so and try again, and it does not count against you. You still play this line’s move to go on.'
+              : 'Only this line’s moves count. Another well-known move counts as a mistake, and the line’s move is shown.'}
           </p>
           {dubious.length > 0 && (
             <p class="op-dubious" data-id="drill-dubious">
@@ -234,7 +234,8 @@ function DrillRun({ ctx, page, line, state: s }: { ctx: PageContext; page: Drill
       recorded: null,
       before: getProgress(line.id).mastery,
     }));
-  const next = nextLineId(line.id);
+  // A next drill with something new to find for the side drilled.
+  const next = nextLineId(line.id, s.playerColor);
 
   // Board decorations: the hint (a circle on the piece, then the arrow), the verdict badge.
   const arrows: Arrow[] = [];
@@ -433,7 +434,16 @@ function DrillEnd({
           </ul>
         </div>
       )}
-      {rec && progress && (
+      {rec && progress && s.playerColor !== line.side && (
+        <p class="op-drill-mastery" data-id="drill-mastery" data-practice="">
+          <MasteryRing level={rec.after} size={30} />
+          <span>
+            <strong>Practice run.</strong> Not counted towards your progress as {colorName(line.side)}, the side that plays this
+            opening ({MASTERY_LABELS[rec.after]}).
+          </span>
+        </p>
+      )}
+      {rec && progress && s.playerColor === line.side && (
         <p class="op-drill-mastery" data-id="drill-mastery">
           <MasteryRing level={rec.after} size={30} />
           <span>
@@ -447,10 +457,8 @@ function DrillEnd({
             ) : (
               <strong>{MASTERY_LABELS[rec.after]}</strong>
             )}{' '}
-            {s.playerColor !== line.side
-              ? `This run was practice: mastery counts the drills as ${colorName(line.side)}, the side that plays this opening.`
-              : rec.after < 3 &&
-                `Mastered: clean runs on ${MASTERED_DAYS} different days (${Math.min(progress.cleanDays.length, MASTERED_DAYS)} so far).`}
+            {rec.after < 3 &&
+              `Mastered: clean runs on ${MASTERED_DAYS} different days (${Math.min(progress.cleanDays.length, MASTERED_DAYS)} so far).`}
           </span>
         </p>
       )}

@@ -283,3 +283,20 @@ describe('families', () => {
     expect(dup.map((l) => l.id)).toEqual(['a00-barnes-opening-gedult-gambit', 'a00-barnes-opening-gedult-gambit-1dmuenk']);
   });
 });
+
+describe('search: forgiving queries (play-through, October 2026)', () => {
+  it('reads moves written with "…", as the app writes Black’s moves', async () => {
+    await loadCatalog();
+    const ascii = search('1.e4 c5 2.Nf3 2...d6').map((r) => r.line.id);
+    expect(ascii.length).toBeGreaterThan(0);
+    expect(search('1.e4 c5 2.Nf3 2…d6').map((r) => r.line.id)).toEqual(ascii);
+    expect(search('1. e4 1… c5').map((r) => r.line.id)).toEqual(search('1. e4 1... c5').map((r) => r.line.id));
+    expect(search('1. e4 … c5').map((r) => r.line.id)).toEqual(search('e4 c5').map((r) => r.line.id));
+  });
+
+  it('takes names run together ("carokann")', async () => {
+    await loadCatalog();
+    expect(search('carokann').some((r) => r.line.family === 'Caro-Kann Defense')).toBe(true);
+    expect(search('kingsindian').some((r) => r.line.family === "King's Indian Defense")).toBe(true);
+  });
+});

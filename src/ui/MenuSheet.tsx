@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
 import type { ProFeature } from '../game/entitlements';
 import type { GameSettings } from '../game/types';
+import { PROVISIONAL_GAMES, formatRatingDelta } from '../rating/rating';
 import type { GameRecord, PlayerProfile } from '../rating/types';
 import type { ThemePref } from '../theme';
 import { About } from './About';
@@ -62,6 +63,17 @@ export interface MenuSheetProps {
   levels?: readonly StartingLevel[];
   /** Called after the "Set my level" confirmation with the chosen rating. */
   onSetLevel?: (rating: number) => void;
+  /**
+   * A rated game the player has moved in is going on: a level chosen now applies when it ends (the
+   * game still counts at the current rating), and the note says so.
+   */
+  levelAfterGame?: boolean;
+  /** A level chosen during the game in progress, waiting for it to end. */
+  pendingLevel?: number | null;
+  /** The rating is still new and moves fast (rating/rating.ts `isProvisional`): a "New" tag beside it. */
+  provisional?: boolean;
+  /** What resigning does to the rating (see `resignNote`); omitted: "It counts as a loss." */
+  resign?: ResignInfo | null;
   /** Pro, where it is sold: its row (Unlock, or Unlocked) and Restore Purchases. Omitted: no section. */
   pro?: ProMenuInfo;
   /** Opens the paywall (for `feature` when a locked feature was tapped). */
@@ -116,13 +128,24 @@ export function engineModeLabel(info: EngineInfo, now: Date = new Date(), locale
 /** How many games the "Recent games" list shows. */
 export const RECENT_GAMES = 10;
 
-/** "+12", "−8" (true minus sign) or "±0". */
-export function formatRatingDelta(delta: number): string {
-  const d = Math.round(delta);
-  if (d > 0) return `+${d}`;
-  if (d < 0) return `−${-d}`;
-  return '±0';
+/** What resigning the game in progress does to the rating. */
+export interface ResignInfo {
+  /** False for an unrated game, or before the player's first move. */
+  rated: boolean;
+  /** Rated: the rating now and after the loss. */
+  before?: number;
+  after?: number;
 }
+
+/** "It counts as a loss: your rating goes from 904 to 834 (−70)." / "…, but your rating stays the same." */
+export function resignNote(r: ResignInfo | null | undefined): string {
+  if (!r) return 'It counts as a loss.';
+  if (!r.rated) return 'It counts as a loss, but your rating stays the same.';
+  if (r.before === undefined || r.after === undefined) return 'It counts as a loss.';
+  return `It counts as a loss: your rating goes from ${r.before} to ${r.after} (${formatRatingDelta(r.after - r.before)}).`;
+}
+
+export { formatRatingDelta };
 
 /** Win / draw / loss from the player's point of view. */
 export function recordOutcome(r: Pick<GameRecord, 'playerScore'>): 'win' | 'draw' | 'loss' {
@@ -173,6 +196,10 @@ export function MenuSheet({
   offlineReady = false,
   levels,
   onSetLevel,
+  levelAfterGame = false,
+  pendingLevel = null,
+  provisional = false,
+  resign,
   pro,
   onUnlock,
   onRestore,
@@ -210,7 +237,7 @@ export function MenuSheet({
           <div class="menu-confirm" role="group" aria-labelledby={confirmId}>
             <div class="menu-confirm-text" id={confirmId}>
               <strong>Resign this game?</strong>
-              <span>It counts as a loss.</span>
+              <span data-id="resign-note">{resignNote(resign)}</span>
             </div>
             <div class="menu-confirm-btns">
               <button type="button" class="btn" data-id="resign-cancel" onClick={() => setConfirming(false)}>
@@ -341,7 +368,15 @@ export function MenuSheet({
 
       <section class="sheet-section">
         <h3 class="sheet-label">Your stats</h3>
-        <ProfileCard profile={profile} open={open} levels={levels} onSetLevel={onSetLevel} />
+        <ProfileCard
+          profile={profile}
+          open={open}
+          levels={levels}
+          onSetLevel={onSetLevel}
+          levelAfterGame={levelAfterGame}
+          pendingLevel={pendingLevel}
+          provisional={provisional}
+        />
       </section>
 
       <section class="sheet-section">
@@ -510,9 +545,12 @@ interface ProfileCardProps {
   open: boolean;
   levels?: readonly StartingLevel[];
   onSetLevel?: (rating: number) => void;
+  levelAfterGame?: boolean;
+  pendingLevel?: number | null;
+  provisional?: boolean;
 }
 
-function ProfileCard({ profile, open, levels, onSetLevel }: ProfileCardProps) {
+function ProfileCard({ profile, open, levels, onSetLevel, levelAfterGame, pendingLevel, provisional }: ProfileCardProps) {
   const total = profile.wins + profile.draws + profile.losses;
   const last = profile.history.find((r) => r.rated);
   const lastDelta = last ? last.ratingAfter - last.ratingBefore : null;
@@ -521,6 +559,11 @@ function ProfileCard({ profile, open, levels, onSetLevel }: ProfileCardProps) {
       <div class="menu-profile-top">
         <div class="menu-profile-rating">
           <span class="menu-profile-num">{Math.round(profile.rating)}</span>
+          {provisional && (
+            <span class="menu-new" data-id="rating-new" title="New ratings move fast at first">
+              New
+            </span>
+          )}
           {lastDelta !== null && (
             <span class="menu-delta" data-sign={Math.sign(lastDelta)} title="Last rated game">
               {formatRatingDelta(lastDelta)}
@@ -558,15 +601,37 @@ function ProfileCard({ profile, open, levels, onSetLevel }: ProfileCardProps) {
           <b>{profile.losses}</b> lost
         </span>
       </div>
+      {provisional && (
+        <p class="menu-profile-note" data-id="rating-new-note">
+          New ratings move fast at first. They settle after about {PROVISIONAL_GAMES} rated games.
+        </p>
+      )}
+      {pendingLevel != null && (
+        <p class="menu-profile-note" data-id="pending-level">
+          Your new level, {pendingLevel}, starts when this game ends.
+        </p>
+      )}
       {levels?.length && onSetLevel ? (
-        <SetLevel rating={Math.round(profile.rating)} open={open} levels={levels} onSetLevel={onSetLevel} />
+        <SetLevel
+          rating={Math.round(pendingLevel ?? profile.rating)}
+          open={open}
+          levels={levels}
+          onSetLevel={onSetLevel}
+          afterGame={!!levelAfterGame}
+        />
       ) : null}
     </div>
   );
 }
 
-/** Sentence under the level chooser: what setting the level does. */
-export function setLevelNote(rating: number): string {
+/**
+ * Sentence under the level chooser: what setting the level does. During a rated game the player
+ * has moved in (`afterGame`), the game still counts at the current rating and the level waits for its end.
+ */
+export function setLevelNote(rating: number, afterGame = false): string {
+  if (afterGame) {
+    return `This game still counts at your current rating. When it ends, your rating becomes ${rating} and moves quickly over your next games while it settles. Your game history stays.`;
+  }
   return `Your rating becomes ${rating} and moves quickly over your next games while it settles. Your game history stays.`;
 }
 
@@ -576,11 +641,13 @@ function SetLevel({
   open,
   levels,
   onSetLevel,
+  afterGame,
 }: {
   rating: number;
   open: boolean;
   levels: readonly StartingLevel[];
   onSetLevel: (rating: number) => void;
+  afterGame: boolean;
 }) {
   const [choice, setChoice] = useState<number | null>(null);
   const labelId = useId();
@@ -606,7 +673,7 @@ function SetLevel({
         Set my level
       </div>
       <LevelPicker levels={levels} value={choice} onChange={setChoice} labelledBy={labelId} id="menu-level" />
-      <p class="menu-level-note">{setLevelNote(choice)}</p>
+      <p class="menu-level-note">{setLevelNote(choice, afterGame)}</p>
       <div class="menu-level-btns">
         <button type="button" class="btn" data-id="set-level-cancel" onClick={() => setChoice(null)}>
           Cancel
@@ -620,7 +687,7 @@ function SetLevel({
             onSetLevel(choice);
           }}
         >
-          Set to {choice}
+          {afterGame ? `${choice} after this game` : `Set to ${choice}`}
         </button>
       </div>
     </div>

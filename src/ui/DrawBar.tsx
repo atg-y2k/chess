@@ -1,5 +1,5 @@
 import { DRAW_COLOR_NAMES, type DrawColor } from '../game/drawings';
-import { IconPencil, IconTrash } from './icons';
+import { IconChevronRight, IconPencil, IconTrash } from './icons';
 import './DrawBar.css';
 
 export interface DrawToggleProps {
@@ -38,6 +38,11 @@ export interface DrawBarProps {
    * which brings back moving pieces, pulses a few times.
    */
   yourMove?: boolean;
+  /**
+   * Browsing earlier moves: the way back to the game's position (the "Back to game" chip on the
+   * strip under the bar), in the pencil's place. `label` is short: "Back" or "Final".
+   */
+  back?: { label: string; ariaLabel: string; onClick: () => void } | null;
   onColor: (color: DrawColor) => void;
   onClear: () => void;
   /** Leaves Draw mode (the drawings stay). */
@@ -48,13 +53,20 @@ export interface DrawBarProps {
  * Draw mode's bar, in the Draw toggle's place (it covers the player strip it sits on, so nothing
  * moves): the four colors, Clear (this position's drawings) and Done.
  */
-export function DrawBar({ color, colors, canClear, tip, yourMove = false, onColor, onClear, onDone }: DrawBarProps) {
+export function DrawBar({ color, colors, canClear, tip, yourMove = false, back, onColor, onClear, onDone }: DrawBarProps) {
   return (
     <div class="drawbar" role="toolbar" aria-label="Draw" data-color={color} data-your-move={yourMove ? '' : undefined}>
-      <span class="drawbar-mode" aria-hidden="true">
-        {yourMove ? <span class="drawbar-turn" /> : <IconPencil size={16} />}
-        <span class="drawbar-mode-label">{yourMove ? 'Your move' : 'Draw'}</span>
-      </span>
+      {back ? (
+        <button type="button" class="drawbar-btn drawbar-back" data-id="draw-back" aria-label={back.ariaLabel} onClick={back.onClick}>
+          {back.label}
+          <IconChevronRight size={15} />
+        </button>
+      ) : (
+        <span class="drawbar-mode" aria-hidden="true">
+          {yourMove ? <span class="drawbar-turn" /> : <IconPencil size={16} />}
+          <span class="drawbar-mode-label">{yourMove ? 'Your move' : 'Draw'}</span>
+        </span>
+      )}
       <span class="visually-hidden" role="status">
         {yourMove ? 'Your move. Tap Done to move a piece.' : ''}
       </span>

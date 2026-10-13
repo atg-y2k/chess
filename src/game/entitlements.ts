@@ -126,13 +126,13 @@ export const FEATURE_INFO: Readonly<Record<ProFeature, FeatureInfo>> = {
   },
   openingGuides: {
     title: 'Opening lessons',
-    detail: 'Why every move is played, the plans and the traps',
-    context: 'Learn why every move is played, and drill lines until you know them.',
+    detail: 'Why the key moves are played, the plans and the traps',
+    context: 'Learn why the key moves are played, and drill lines until you know them.',
   },
   openingDrills: {
     title: 'Opening drills',
     detail: 'Practice lines until you know them, with your progress saved',
-    context: 'Drill lines until you know them, and learn why every move is played.',
+    context: 'Drill lines until you know them, and learn why the key moves are played.',
   },
 };
 
@@ -219,6 +219,34 @@ export interface EntitlementsOptions {
   /** Where the flag is cached (default: localStorage; null = no cache). */
   storage?: KeyValue | null;
   tiers?: Readonly<Record<ProFeature, Tier>>;
+  /** The clock (default Date.now), for how long an Ask to Buy request is remembered. */
+  now?: () => number;
+}
+
+/** localStorage key: when a purchase was last left waiting for a parent's approval (Ask to Buy). */
+export const PRO_PENDING_KEY = 'chesscoach.pro-pending';
+/**
+ * How long a request waiting for approval is remembered across launches (StoreKit tells the app
+ * about an approval, never about a decline, and nothing about either at launch).
+ */
+export const PENDING_TTL_MS = 7 * 24 * 3_600_000;
+
+function readPending(storage: KeyValue | null, now: number): boolean {
+  try {
+    const at = Date.parse(storage?.getItem(PRO_PENDING_KEY) ?? '');
+    return Number.isFinite(at) && at <= now && now - at < PENDING_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+function writePending(storage: KeyValue | null, at: number | null): void {
+  try {
+    if (at === null) storage?.removeItem(PRO_PENDING_KEY);
+    else storage?.setItem(PRO_PENDING_KEY, new Date(at).toISOString());
+  } catch {
+    // Full or blocked storage: the Menu just forgets the request after a restart.
+  }
 }
 
 function defaultStorage(): KeyValue | null {
@@ -254,11 +282,14 @@ export function createEntitlements(opts: EntitlementsOptions): Entitlements {
   const enabled = opts.enabled;
   const tiers = opts.tiers ?? FEATURE_TIERS;
   const storage = opts.storage === undefined ? defaultStorage() : opts.storage;
+  const now = opts.now ?? Date.now;
   const pro = signal(enabled ? readCache(storage) : true);
   const locked = computed(() => lockedFeatures(enabled, pro.value, tiers));
   const product = signal<ProProduct | null>(null);
   const productState = signal<ProductState>('loading');
-  const status = signal<PurchaseStatus>('idle');
+  /** An Ask to Buy request still waiting (remembered for a week across launches). */
+  const stillPending = (): boolean => enabled && !pro.peek() && readPending(storage, now());
+  const status = signal<PurchaseStatus>(stillPending() ? 'pending' : 'idle');
   const paywall = signal<PaywallState>({ open: false, feature: null });
 
   const isAllowed = (feature: ProFeature): boolean => !locked.value.has(feature);
@@ -295,6 +326,7 @@ export function createEntitlements(opts: EntitlementsOptions): Entitlements {
   const setPro = (unlocked: boolean): void => {
     version++;
     writeCache(storage, unlocked);
+    if (unlocked) writePending(storage, null);
     batch(() => {
       pro.value = unlocked;
       // Unlocked (here, by Ask to Buy approval, or on another device): the open paywall says thanks.
@@ -329,7 +361,7 @@ export function createEntitlements(opts: EntitlementsOptions): Entitlements {
     if (disposed) return;
     batch(() => {
       paywall.value = { open: true, feature };
-      if (TRANSIENT.has(status.value)) status.value = 'idle';
+      if (TRANSIENT.has(status.value)) status.value = stillPending() ? 'pending' : 'idle';
     });
     if (productState.value !== 'ready') void loadProduct();
   };
@@ -338,7 +370,7 @@ export function createEntitlements(opts: EntitlementsOptions): Entitlements {
     batch(() => {
       // Keep the feature, so the sheet does not change while it slides away.
       if (paywall.value.open) paywall.value = { ...paywall.value, open: false };
-      if (TRANSIENT.has(status.value)) status.value = 'idle';
+      if (TRANSIENT.has(status.value)) status.value = stillPending() ? 'pending' : 'idle';
     });
   };
 
@@ -359,8 +391,11 @@ export function createEntitlements(opts: EntitlementsOptions): Entitlements {
         setPro(true);
         status.value = paywall.value.open ? 'success' : 'idle';
       } else {
-        // Approved later (Ask to Buy) or bought elsewhere: onChange unlocks it then.
-        status.value = r === 'pending' ? 'pending' : r === 'failed' ? 'failed' : 'idle';
+        // Approved later (Ask to Buy) or bought elsewhere: onChange unlocks it then. The request is
+        // remembered across launches, and an earlier one still waiting is not forgotten by a
+        // cancelled or failed new attempt.
+        if (r === 'pending') writePending(storage, now());
+        status.value = r === 'pending' ? 'pending' : r === 'failed' ? 'failed' : stillPending() ? 'pending' : 'idle';
       }
       return r;
     })().finally(() => {

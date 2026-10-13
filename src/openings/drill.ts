@@ -38,9 +38,11 @@ export interface DrillLine {
 
 export interface DrillOptions {
   /**
-   * Another book move is a near miss, not counted in `mistakes` (default false: it is a mistake).
-   * Either way the player is told the line's move and must play it to go on, so the move counts as
-   * not found first time (`missed`): it lowers the score and the run is not clean.
+   * "Allow them": another book move is fine, not a mistake. The player is told it is a good move
+   * too, but not the line's move, and tries again: the line's move found then still counts as
+   * found first time. A second other book move at the same move, a wrong move or a hint does count
+   * (`missed`). Default false ("Strict"): another book move is a mistake, the line's move is shown,
+   * and the move counts as not found (it lowers the score and the run is not clean).
    */
   acceptAlternatives?: boolean;
   /** Plies played automatically before the drill starts, e.g. to skip "1. e4 c5" (default 0). */
@@ -108,6 +110,12 @@ export interface DrillCheck {
   alternatives: DrillMove[];
   /** Plain-English feedback. */
   message: string;
+  /**
+   * The move now counts as not found first time (a wrong move, a Strict other book move, a second
+   * one in Allow mode). False for the first other book move in Allow mode: the line's move is not
+   * shown, and finding it next still counts.
+   */
+  missed: boolean;
 }
 
 export interface DrillHint {
@@ -299,7 +307,7 @@ function bookAlternatives(s: DrillState, book: DrillBook, chess: Chess): DrillMo
  * move is a known blunder (a trap line drilled from the losing side, see `dubiousPlayerMoves`).
  */
 export function checkMove(s: DrillState, uci: string, book: DrillBook = DEFAULT_BOOK): DrillCheck {
-  const none = { played: null, alternatives: [] as DrillMove[] };
+  const none = { played: null, alternatives: [] as DrillMove[], missed: false };
   if (s.status !== 'player') {
     const message = s.status === 'complete' ? 'This line is complete.' : "Wait for the opponent's move.";
     return { state: s, result: 'illegal', expected: null, message, ...none };
@@ -322,19 +330,24 @@ export function checkMove(s: DrillState, uci: string, book: DrillBook = DEFAULT_
     const message = expected.dubious
       ? `Correct for this line: ${played.label}. It is a known mistake, and this line shows how it gets punished.`
       : `Correct: ${played.label}.`;
-    return { state: advance(s), result: 'correct', played, expected, alternatives, message };
+    return { state: advance(s), result: 'correct', played, expected, alternatives, message, missed: false };
   }
   const isAlternative = book.isBookMove(s.fen, played.uci, fenAfter);
   if (isAlternative) {
+    // Allow mode: the first other book move at this move is fine (nothing shown, nothing counted);
+    // after a wrong move, a hint or another try it counts, so the answer cannot be fished for.
+    const free = s.acceptAlternatives && s.triesThisMove === 0 && s.hintLevel === 0;
     const state = freeze({
       ...s,
       alternatives: s.alternatives + 1,
       mistakes: s.mistakes + (s.acceptAlternatives ? 0 : 1),
-      missed: withMissed(s.missed, s.ply),
+      missed: free ? s.missed : withMissed(s.missed, s.ply),
       triesThisMove: s.triesThisMove + 1,
     });
-    const message = `${played.label} is also a book move, but this line continues with ${expected.label}.`;
-    return { state, result: 'alternative', played, expected, alternatives, message };
+    const message = free
+      ? `${played.label} is a good book move too, but this line goes another way. Try again.`
+      : `${played.label} is also a book move, but this line continues with ${expected.label}.`;
+    return { state, result: 'alternative', played, expected, alternatives, message, missed: !free };
   }
   const trap = isBlunder(book, s.fen, played.uci);
   const state = freeze({
@@ -346,7 +359,7 @@ export function checkMove(s: DrillState, uci: string, book: DrillBook = DEFAULT_
   const message = trap
     ? `${played.label} is a known mistake here. Try again.`
     : `${played.label} is not part of the opening theory here. Try again.`;
-  return { state, result: 'wrong', played, expected, alternatives, message };
+  return { state, result: 'wrong', played, expected, alternatives, message, missed: true };
 }
 
 /**

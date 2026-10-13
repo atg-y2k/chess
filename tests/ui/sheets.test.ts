@@ -26,7 +26,7 @@ describe('snapElo / strengthLabel', () => {
   });
   it('labels every tier', () => {
     expect([100, 549, 550, 999, 1000, 1399, 1400, 1799, 1800, 2199, 2200, 2499, 2500, 2999, 3000, 3200].map(strengthLabel)).toEqual([
-      'Beginner', 'Beginner', 'Novice', 'Novice', 'Intermediate', 'Intermediate', 'Advanced', 'Advanced',
+      'Beginner', 'Beginner', 'Casual', 'Casual', 'Intermediate', 'Intermediate', 'Advanced', 'Advanced',
       'Expert', 'Expert', 'Master', 'Master', 'Grandmaster', 'Grandmaster', 'Engine', 'Engine',
     ]);
   });

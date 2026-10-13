@@ -10,6 +10,10 @@ export interface KeyMoment {
   index: number;
   cls: MoveClass;
   san: string;
+  /** The move number as the move list writes it: "12." (White) or "12…" (Black). */
+  label?: string;
+  /** Whose move it is (the row says "You" or the opponent's name). */
+  color?: Color;
   text: string;
   /**
    * The class praises the move but `text` says what it gives away (`Explanation.concedes`): the
@@ -58,9 +62,9 @@ export function formatAccuracy(a: number | null): string {
   return a == null || !Number.isFinite(a) ? '–' : (Math.round(a * 10) / 10).toFixed(1);
 }
 
-/** "12." for White's ply 22, "12…" for Black's ply 23 (assumes the game started from move 1 with White). */
-function moveLabel(index: number): string {
-  return `${Math.floor(index / 2) + 1}${index % 2 === 0 ? '.' : '…'}`;
+/** The moment's move number ("12." / "12…"); from the ply index for a moment without its label (a game from move 1). */
+function moveLabel(m: Pick<KeyMoment, 'index' | 'label'>): string {
+  return m.label ?? `${Math.floor(m.index / 2) + 1}${m.index % 2 === 0 ? '.' : '…'}`;
 }
 
 const SIDES: Color[] = ['w', 'b'];
@@ -233,7 +237,12 @@ export function ReviewPanel({
                     {m.concedes ? <ConcessionIcon label={momentLabel(m)} size={24} /> : <ClassIcon cls={m.cls} size={24} />}
                     <span class="review-moment-main">
                       <span class="review-moment-head">
-                        <span class="review-moment-no">{moveLabel(m.index)}</span>
+                        {m.color && (
+                          <span class="review-moment-who" data-you={m.color === playerColor ? '' : undefined}>
+                            {m.color === playerColor ? 'You' : names[m.color]}
+                          </span>
+                        )}
+                        <span class="review-moment-no">{moveLabel(m)}</span>
                         <span class="review-moment-san">{m.san}</span>
                         <span class="review-moment-cls">{momentLabel(m)}</span>
                       </span>

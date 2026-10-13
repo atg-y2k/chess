@@ -65,6 +65,9 @@ describe('mastery', () => {
       bestScore: 0,
       cleanDays: [],
       mastery: 0,
+      practiceRuns: 0,
+      lastPracticeAt: null,
+      practiceBest: 0,
     });
 
     let p = recordDrill(NAJDORF, { clean: false, score: 60 }, { storage, now: day(1, 9) });
@@ -139,10 +142,18 @@ describe('mastery', () => {
     const black = drillResult(finish(createDrill(line, 'b')))!;
     expect(black).toMatchObject({ playerColor: 'b', playerMoves: 2, clean: true });
     for (const d of [2, 4, 6]) recordDrill(ITALIAN, black, { storage, now: day(d), side: 'w' });
-    expect(getProgress(ITALIAN, { storage })).toMatchObject({ attempts: 3, cleanRuns: 0, cleanDays: [], mastery: 1 });
+    // Practice only: kept apart, the line stays New for White and is not due for review.
+    const practiced = getProgress(ITALIAN, { storage });
+    expect(practiced).toMatchObject({ attempts: 0, cleanRuns: 0, cleanDays: [], mastery: 0, lastPracticed: null, bestScore: 0 });
+    expect(practiced).toMatchObject({ practiceRuns: 3, lastPracticeAt: day(6).toISOString(), practiceBest: 100 });
+    expect(isDue(practiced, day(7))).toBe(false);
+    expect(familyProgress('Italian Game', { storage }).practiced).toBe(0);
     // The opening's own side counts; without `side` every full drill does (as before).
     const white = drillResult(finish(createDrill(line, 'w')))!;
-    expect(recordDrill(ITALIAN, white, { storage, now: day(8), side: 'w' })).toMatchObject({ cleanRuns: 1, mastery: 2 });
+    expect(recordDrill(ITALIAN, white, { storage, now: day(8), side: 'w' })).toMatchObject({ attempts: 1, cleanRuns: 1, mastery: 2, practiceRuns: 3 });
+    // A practice run after a clean own-side run does not make the line due again.
+    const after = recordDrill(ITALIAN, { ...black, clean: false, score: 0 }, { storage, now: day(9), side: 'w' });
+    expect(after).toMatchObject({ lastClean: true, mastery: 2, practiceRuns: 4 });
     expect(recordDrill(NAJDORF, black, { storage, now: day(8) })).toMatchObject({ cleanRuns: 1, mastery: 2 });
   });
 

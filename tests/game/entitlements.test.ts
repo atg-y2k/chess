@@ -5,6 +5,7 @@ import {
   PRO_CACHE_KEY,
   PRO_NAME,
   createEntitlements,
+  PRO_PENDING_KEY,
   lockedFeatures,
   proFeatures,
   type Entitlements,
@@ -205,6 +206,41 @@ describe('with the paywall', () => {
       store.emit(true);
       expect(ent.pro.value).toBe(true);
       expect(ent.status.value).toBe('idle'); // the paywall is closed: the app shows a toast
+    });
+
+    it('a request waiting for approval is remembered across launches, for a week, until approved', async () => {
+      const storage = new MemoryStorage();
+      let t = Date.parse('2026-10-13T12:00:00Z');
+      const open = (store = new FakePurchases()) => {
+        const ent = createEntitlements({ enabled: true, purchases: store, storage, now: () => t });
+        made.push(ent);
+        return { ent, store };
+      };
+      const first = open();
+      const p = first.ent.buy();
+      first.store.purchases[0].resolve('pending');
+      expect(await p).toBe('pending');
+      expect(storage.getItem(PRO_PENDING_KEY)).toBe(new Date(t).toISOString());
+      first.ent.dispose();
+      // iOS closed the app: the Menu still says "Waiting for approval".
+      t += 2 * 86_400_000;
+      const second = open();
+      expect(second.ent.status.value).toBe('pending');
+      // A new attempt the player cancels does not forget it; Restore's "none" passes, it stays.
+      const q = second.ent.buy();
+      second.store.purchases[0].resolve('cancelled');
+      expect(await q).toBe('cancelled');
+      expect(second.ent.status.value).toBe('pending');
+      // Approved: unlocked, and forgotten.
+      second.store.emit(true);
+      expect(second.ent.status.value).toBe('idle');
+      expect(storage.getItem(PRO_PENDING_KEY)).toBeNull();
+      second.ent.dispose();
+      // Never answered (a decline is never reported): forgotten after a week.
+      storage.removeItem(PRO_CACHE_KEY);
+      storage.setItem(PRO_PENDING_KEY, new Date(t).toISOString());
+      t += 8 * 86_400_000;
+      expect(open().ent.status.value).toBe('idle');
     });
 
     it('failed (or the store threw): an error status; buying again retries', async () => {

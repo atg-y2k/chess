@@ -156,7 +156,8 @@ function LineBody({ ctx, page, line }: { ctx: PageContext; page: LinePageState; 
     pad.current = null;
     if (!p) return;
     const target = e.target instanceof Element ? e.target : null;
-    if (target?.closest('button, a, input')) return;
+    // A term and its explanation (ⓘ) are read, not tapped to step.
+    if (target?.closest('button, a, input, .op-term, [role="note"]')) return;
     const dx = e.clientX - p.x;
     const dy = e.clientY - p.y;
     if (Math.abs(dx) >= SWIPE_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
@@ -164,6 +165,9 @@ function LineBody({ ctx, page, line }: { ctx: PageContext; page: LinePageState; 
       step1(dx < 0 ? 1 : -1);
       return;
     }
+    // A move off the book stays until "Back to the line" (or a swipe): a stray tap on its card
+    // never throws it away with the engine's verdict.
+    if (off) return;
     if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && performance.now() - p.t < 500) {
       const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
       setAuto(false);
@@ -330,7 +334,7 @@ function LineBody({ ctx, page, line }: { ctx: PageContext; page: LinePageState; 
                     compact
                     id="note-teaser"
                     title="Why is this move played?"
-                    text="Unlock explanations for every move."
+                    text="Unlock the explanations for this line."
                     onUnlock={() => ctx.unlock('openingGuides')}
                   />
                 )
@@ -422,12 +426,17 @@ export function lineEnd(line: Pick<StudyLine, 'trap' | 'playable'>, mate: boolea
   return `That is the end of this line. Next, try ${next}${othersBelow ? ', or look at the other moves below' : ''}.`;
 }
 
-/** "5 moves: 3 by White, 2 by Black". */
+/**
+ * A line's length as chess players count it: a move is White's and Black's ("1. e4 e5" is move 1),
+ * as the game banner ("Move 3 of 7") and the drills count. "7 moves (White plays 7, Black 6)" for a
+ * line of 13 plies; the Fool's Mate (4 plies) is "2 moves (White plays 2, Black 2)".
+ */
 export function movesCount(plies: number): string {
   const white = Math.ceil(plies / 2);
   const black = Math.floor(plies / 2);
+  const moves = Math.ceil(plies / 2);
   if (plies === 1) return '1 move, by White';
-  return `${plies} moves: ${white} by White, ${black} by Black`;
+  return `${moves} ${moves === 1 ? 'move' : 'moves'} (White plays ${white}, Black ${black})`;
 }
 
 /** What the line is, at its start position. */

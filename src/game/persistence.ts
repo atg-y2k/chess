@@ -63,6 +63,23 @@ export interface SavedGame {
    * opening practice): book moves, not analyzed, not counted for accuracy. Absent = 0.
    */
   preplayed?: number;
+  /**
+   * The game's opponent follows the player's rating ("Match my rating"), so a rematch re-matches
+   * it. Absent in older saves (the New game default is used then).
+   */
+  adaptive?: boolean;
+  /** "Set my level" chosen during this rated game: applies when it ends (game in progress only). */
+  pendingLevel?: number;
+  /**
+   * A hint was open on the player's turn (the position it was for): a restore shows it again
+   * (game in progress only; the game is already unrated by it).
+   */
+  hint?: SavedHint;
+}
+
+/** An open hint (the coach's 'hint' mode): the position it was asked for. */
+export interface SavedHint {
+  fen: string;
 }
 
 /** Opening practice (see GameController `newGame(settings, { opening })`). */
@@ -90,7 +107,8 @@ export interface SavedRetry {
 /** How a saved game ended. */
 export interface SavedResult {
   outcome: GameOutcome;
-  ratingChange: { before: number; after: number; rated: boolean };
+  /** `provisional`: the rating was new then (the game-over sheet says it moves fast). */
+  ratingChange: { before: number; after: number; rated: boolean; provisional?: boolean };
 }
 
 const UCI_RE = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
@@ -226,6 +244,12 @@ export function sanitizeSavedGame(raw: unknown): SavedGame | null {
   const preplayed = raw.preplayed;
   if (Number.isInteger(preplayed) && (preplayed as number) > 0) game.preplayed = Math.min(preplayed as number, moves.length);
   else delete game.preplayed;
+  if (typeof raw.adaptive !== 'boolean') delete game.adaptive;
+  if (!over && isFiniteNumber(raw.pendingLevel)) game.pendingLevel = clampElo(raw.pendingLevel);
+  else delete game.pendingLevel;
+  const hint = raw.hint;
+  if (!over && isObject(hint) && typeof hint.fen === 'string' && hint.fen.length > 0 && hint.fen.length <= 100) game.hint = { fen: hint.fen };
+  else delete game.hint;
   return game;
 }
 
@@ -261,9 +285,12 @@ function sanitizeResult(v: unknown): SavedResult | null {
   const { result, winner, reason } = v.outcome;
   const expected = result === '1-0' ? 'w' : result === '0-1' ? 'b' : result === '1/2-1/2' ? null : undefined;
   if (expected === undefined || winner !== expected || typeof reason !== 'string') return null;
-  const { before, after, rated } = v.ratingChange;
+  const { before, after, rated, provisional } = v.ratingChange;
   if (!isFiniteNumber(before) || !isFiniteNumber(after) || typeof rated !== 'boolean') return null;
-  return { outcome: { result: result as GameOutcome['result'], winner: expected, reason }, ratingChange: { before, after, rated } };
+  return {
+    outcome: { result: result as GameOutcome['result'], winner: expected, reason },
+    ratingChange: { before, after, rated, ...(provisional === true ? { provisional: true } : {}) },
+  };
 }
 
 /** Plays a UCI (or SAN) move; returns its UCI, or null when illegal. */

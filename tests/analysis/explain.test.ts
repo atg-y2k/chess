@@ -602,7 +602,10 @@ describe('promotions in material lines', () => {
       [pvLine(cp(-13), ['h7g7', 'f8e6', 'g7f7'])],
       [0.96, 0.51],
     );
-    expect(e.headline).toBe('f8=N+ promotes to a knight instead of a queen.');
+    // King and knight against a king: the game ends there, too little material to checkmate.
+    expect(e.headline).toBe(
+      'f8=N+ promotes to a knight instead of a queen and leaves too little material for either side to checkmate, so the game is a draw.',
+    );
     expect(text(e).join(' ')).not.toMatch(/loses material/);
   });
 

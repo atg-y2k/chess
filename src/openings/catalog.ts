@@ -509,7 +509,10 @@ function normMove(san: string): string {
 /** "1. e4 c5 2.Nf3" -> ["e4", "c5", "nf3"] when the query is a list of moves, else null. */
 function queryMoves(query: string): string[] | null {
   const tokens = query
-    .replace(/\d+\.(\.\.)?/g, ' ')
+    // Move numbers in any style: "2.", "2...", "2…" (as the app itself writes Black's moves, and as
+    // iOS Smart Punctuation turns a typed "..." into), and a lone "…".
+    .replace(/(?<![a-z])\d+\s*(?:\.{1,3}|…)/gi, ' ')
+    .replace(/…/g, ' ')
     .split(/[\s,]+/)
     .filter(Boolean)
     .map(normMove);
@@ -542,6 +545,9 @@ function textMatch(e: SearchEntry, q: string, qt: string[], alias: ReturnType<ty
   if (e.parts.some((p) => p.startsWith(q))) return 'variation';
   if (qt.every((t) => e.words.some((w) => w.startsWith(t)))) return 'words';
   if (e.name.includes(q)) return 'substring';
+  // Run together ("carokann", "kingsindian"): the name without its spaces.
+  const joined = q.replace(/ /g, '');
+  if (joined.length >= 5 && e.name.replace(/ /g, '').includes(joined)) return 'substring';
   return null;
 }
 

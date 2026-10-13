@@ -19,10 +19,12 @@ import {
   lineOpenedAlone,
   navDirection,
   openingsPages,
+  openingsLoadFailedText,
   openOpenings,
   pushPage,
   rememberScroll,
   replacePage,
+  setOpeningsShown,
   takeNamedTarget,
   type OpeningsPage,
 } from '../../openings/session';
@@ -32,7 +34,7 @@ import { FamiliesPage, FamilyPage } from './FamilyPage';
 import { HomePage } from './HomePage';
 import { LinePage } from './LinePage';
 import { leaveSectionDraw } from './OpeningBoard';
-import { loadOpeningsData, resolveLine, type OpeningStart } from './model';
+import { loadOpeningsData, resolveLine, studySteps, type OpeningStart } from './model';
 import type { PageContext } from './parts';
 import { PlaySheet, type PlaySetup } from './PlaySheet';
 import { TreePage } from './TreePage';
@@ -71,7 +73,12 @@ export function pageTitle(p: OpeningsPage): string {
       return 'Drill';
     case 'line': {
       const l = resolveLine(p.lineId);
-      return l ? l.variation || l.family : 'Line';
+      if (!l) return 'Line';
+      // Opened at a position (a branch, "Learn this line"): the opening there, as the player picked
+      // it ("Two Knights Defense"), not the deep variation the line goes on to.
+      const at = p.entryPly ? studySteps(l)[p.entryPly]?.name : null;
+      if (at) return at.variation ? at.variation.split(',')[0].trim() : at.family;
+      return l.variation || l.family;
     }
   }
 }
@@ -107,6 +114,12 @@ export function OpeningsView(props: OpeningsViewProps) {
     };
   }, [attempt]);
 
+  // Pages with state of their own show only once the data is in (see `openingsShown`).
+  useEffect(() => {
+    setOpeningsShown(load === 'ready');
+    return () => setOpeningsShown(false);
+  }, [load]);
+
   if (load !== 'ready') {
     return (
       <div class="op-view">
@@ -119,6 +132,16 @@ export function OpeningsView(props: OpeningsViewProps) {
 }
 
 /**
+ * Loads the section's lazy data chunks into the page's module map without setting anything up (the
+ * catalog and guides are built when the section opens): once they are in, an app update that
+ * removes the old build's files can no longer break the section in a page that keeps running the
+ * old build (a game in progress is never reloaded). Called at idle after the app starts.
+ */
+export function prefetchOpeningsData(): Promise<void> {
+  return Promise.all([import('../../data/opening-lines.json'), import('../../data/opening-guides')]).then(() => undefined);
+}
+
+/**
  * Completes a target that needed the data: an opening asked for by name (a game's position) opens
  * its line with its family under it, and a line opened alone gets its family's page under it.
  */
@@ -127,7 +150,16 @@ function resolveTargets(): void {
   if (asked) {
     const found = findLine(asked.name, asked.eco) ?? findLine(asked.name);
     const family = asked.name.split(':')[0];
-    if (found) openOpenings({ lineId: found.id, family: found.family });
+    // At the named position, the game's (the line's end), with the board from the player's side.
+    const side = found ? resolveLine(found.id)?.side : undefined;
+    if (found) {
+      openOpenings({
+        lineId: found.id,
+        family: found.family,
+        ply: found.san.length,
+        ...(asked.color && side && asked.color !== side ? { flipped: true } : {}),
+      });
+    }
     else if (getFamily(family)) openOpenings({ family });
   }
   if (!lineOpenedAlone()) return;
@@ -140,7 +172,7 @@ function resolveTargets(): void {
 export function OpeningsLoading({ failed, onRetry }: { failed: boolean; onRetry: () => void }) {
   return failed ? (
     <div class="op-loading" role="alert">
-      <p>Couldn’t load the openings. Check your connection and try again.</p>
+      <p>{openingsLoadFailedText()}</p>
       <button type="button" class="btn btn-primary" onClick={onRetry}>
         Try again
       </button>
@@ -312,6 +344,10 @@ function Section({ entitlements, analysis, evalHidden = false, setup, onStartGam
             onStartGame(settings, opening);
           }}
           onClose={() => setPlay((p) => (p ? { ...p, open: false } : p))}
+          onBackToGame={() => {
+            setPlay((p) => (p ? { ...p, open: false } : p));
+            onClose();
+          }}
         />
       )}
     </div>

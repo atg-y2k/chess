@@ -703,11 +703,12 @@ describe('annotations and coach', () => {
     controller.newGame(settings({ coach: false }));
     await playAll(controller, ['e2e4']);
     expect(store.coach.value.kind).toBe('minimal');
-    expect(store.coach.value.collapsed).toBe(true);
+    // Expanded (a short phone shows one row anyway): the opening's whole name and the last move fit.
+    expect(store.coach.value.collapsed).toBe(false);
     expect(store.coach.value.lines[0]).toBe('Pip played 1… e5.');
     expect(store.board.value.badge).toBeUndefined();
     controller.toggleCoachCollapsed();
-    expect(store.coach.value.collapsed).toBe(false);
+    expect(store.coach.value.collapsed).toBe(true);
     controller.setSettings({ sound: false });
     expect(sound.enabled).toBe(false);
     controller.toggleCoach();
@@ -918,7 +919,14 @@ describe('review and PGN', () => {
     expect(review.names).toEqual({ w: 'You', b: 'Pip' });
     const blunder = store.plies.value[4];
     const moment = review.keyMoments.find((k) => k.index === 4);
-    expect(moment).toEqual({ index: 4, cls: blunder.classification!.cls, san: 'Qxf7+', text: blunder.explanation!.headline });
+    expect(moment).toEqual({
+      index: 4,
+      cls: blunder.classification!.cls,
+      san: 'Qxf7+',
+      label: '3.',
+      color: 'w',
+      text: blunder.explanation!.headline,
+    });
     const record = loadProfile(storage).history[0];
     expect(record.accuracy).toBe(Math.round(review.accuracy.w! * 10) / 10);
 
@@ -1008,8 +1016,8 @@ describe('helpers', () => {
     expect(r.accuracy.w).toEqual(expect.any(Number));
     expect(r.accuracy.b).toEqual(expect.any(Number));
     expect(r.keyMoments).toEqual([
-      { index: 1, cls: 'inaccuracy', san: 'e5', text: 'headline 1' },
-      { index: 2, cls: 'blunder', san: 'Nf3', text: 'headline 2' },
+      { index: 1, cls: 'inaccuracy', san: 'e5', label: '1…', color: 'b', text: 'headline 1' },
+      { index: 2, cls: 'blunder', san: 'Nf3', label: '2.', color: 'w', text: 'headline 2' },
     ]);
   });
 
@@ -1028,10 +1036,10 @@ describe('helpers', () => {
     };
     // A few moments: the concession is listed with its headline, and inaccuracies fill up to three.
     let r = summarizeGame(START_FEN, null, annotate((i) => (i === 3 ? 'inaccuracy' : i === 6 ? 'blunder' : 'good'), { 5: 'material' }));
-    expect(r.keyMoments).toEqual([
-      { index: 3, cls: 'inaccuracy', san: 'Nc6', text: 'headline 3' },
-      { index: 5, cls: 'good', san: 'a6', text: 'headline 5', concedes: 'material' },
-      { index: 6, cls: 'blunder', san: 'Ba4', text: 'headline 6' },
+    expect(r.keyMoments).toMatchObject([
+      { index: 3, cls: 'inaccuracy', san: 'Nc6', label: '2…', text: 'headline 3' },
+      { index: 5, cls: 'good', san: 'a6', label: '3…', text: 'headline 5', concedes: 'material' },
+      { index: 6, cls: 'blunder', san: 'Ba4', label: '4.', text: 'headline 6' },
     ]);
     expect(r.counts.b.good).toBe(7); // still counted as its class
     // A flag on a class that already says the move was weak adds nothing.
@@ -1189,7 +1197,7 @@ describe('abandoning and aborting', () => {
     controller.newGame(settings({ botId: 'custom', botElo: 1500 }));
     expect(store.sheets.value.newGame.inProgress).toBeNull(); // no move yet
     await playAll(controller, ['e2e4']);
-    expect(store.sheets.value.newGame.inProgress).toEqual({ rated: true });
+    expect(store.sheets.value.newGame.inProgress).toMatchObject({ rated: true });
     const id = store.game.value!.id;
     controller.openSheet('new');
     controller.newGame(settings());
@@ -1211,7 +1219,8 @@ describe('abandoning and aborting', () => {
     await playAll(controller, ['e2e4']);
     controller.openSheet('new');
     const sheet = store.sheets.value.newGame;
-    expect(sheet.inProgress).toEqual({ rated: true });
+    // What the loss costs, as applyGameResult will record it.
+    expect(sheet.inProgress).toEqual({ rated: true, before: 800, after: 625 });
     expect(sheet.playerRating).toBe(800);
     controller.newGame(sheet.initial);
     expect(store.profile.value.rating).toBeLessThan(800); // the abandoned game was lost...
@@ -1430,6 +1439,12 @@ describe('restore', () => {
       await second.controller.boot();
       const s = second.store;
       expect(s.plies.value.map((p) => p.san)).toEqual(['e4', 'e5', 'Qh5', 'Nc6']);
+      if (withHint) {
+        // The open hint comes back over it; closing it shows the prompt.
+        await vi.waitFor(() => expect(s.coach.value.kind).toBe('hint'));
+        await vi.waitFor(() => expect(s.coach.value.busy).toBe(false));
+        second.controller.dismissHint();
+      }
       expect(s.coach.value.title).toBe('Try again');
       expect(s.coach.value.lines).toEqual(tryAgain.lines);
       expect(s.coach.value.actions).toEqual([]);

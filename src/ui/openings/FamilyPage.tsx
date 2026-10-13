@@ -13,7 +13,7 @@ import {
   type FamilyPage as FamilyPageState,
 } from '../../openings/session';
 import { IconLock } from '../PaywallSheet';
-import { colorName, familyFacts, mainStudyLineId, movesSummary, movesText, resolveLine, sideSentence, TRAP_PREFIX } from './model';
+import { colorName, distinctTitles, familyFacts, mainStudyLineId, movesSummary, movesText, resolveLine, sideSentence, TRAP_PREFIX } from './model';
 import { GLOSSARY, MasteryRing, RowChevron, Segmented, Teaser, Term, WarnGlyph, type PageContext } from './parts';
 
 /** Variations listed before "Show all". */
@@ -86,6 +86,16 @@ export function FamilyPage({ ctx, page }: { ctx: PageContext; page: FamilyPageSt
   return <FamilyBody ctx={ctx} page={page} family={family} />;
 }
 
+/**
+ * Key variations' titles: the name after the opening's ("Ruy Lopez: Berlin Defense" -> "Berlin
+ * Defense"), but the whole name where that would read as the opening itself or as another row
+ * ("Queen's Pawn Game: London System" and "Indian Defense: London System" on the London System's page).
+ */
+export function keyVariationTitles(names: readonly string[], family: string): string[] {
+  const short = names.map((n) => (n.includes(':') ? n.slice(n.indexOf(':') + 1).trim() : n));
+  return names.map((n, i) => (short[i] === family || short.filter((x) => x === short[i]).length > 1 ? n : short[i]));
+}
+
 function FamilyBody({ ctx, page, family: f }: { ctx: PageContext; page: FamilyPageState; family: OpeningFamily }) {
   const facts = useMemo(() => familyFacts(f), [f]);
   const guide = facts.guide;
@@ -98,6 +108,9 @@ function FamilyBody({ ctx, page, family: f }: { ctx: PageContext; page: FamilyPa
   // A game follows the line Learn and Drill teach (a guide's main line with its own moves).
   const playId = main?.playable ? main.id : f.mainLineId;
   const shown = page.showAll ? lines : lines.slice(0, VARIATIONS_SHOWN);
+  // Rows that would read the same ("Starting moves" three times) say where they part.
+  const titles = useMemo(() => distinctTitles(shown, (l) => l.variation || 'Starting moves'), [shown]);
+  const keyTitles = useMemo(() => keyVariationTitles(guide?.keyVariations?.map((v) => v.name) ?? [], f.name), [guide, f]);
   const ownGuide = guide && guide.family === f.name;
   const yours = f.side;
   const ideas = guide ? (yours === 'w' ? [guide.ideasWhite, guide.ideasBlack] : [guide.ideasBlack, guide.ideasWhite]) : null;
@@ -223,7 +236,7 @@ function FamilyBody({ ctx, page, family: f }: { ctx: PageContext; page: FamilyPa
               <>
                 <h3 class="op-label">Key variations</h3>
                 <ul class="op-group" data-id="key-variations">
-                  {guide.keyVariations.map((v) => {
+                  {guide.keyVariations.map((v, k) => {
                     const l = findLine(v.name);
                     return (
                       <li key={v.name}>
@@ -234,7 +247,7 @@ function FamilyBody({ ctx, page, family: f }: { ctx: PageContext; page: FamilyPa
                           onClick={() => l && ctx.go(linePage(l.id))}
                         >
                           <span class="op-row-text">
-                            <span class="op-row-title">{v.name.includes(':') ? v.name.slice(v.name.indexOf(':') + 1).trim() : v.name}</span>
+                            <span class="op-row-title">{keyTitles[k]}</span>
                             <span class="op-row-note">{v.note}</span>
                           </span>
                           {l && <RowChevron />}
@@ -251,7 +264,7 @@ function FamilyBody({ ctx, page, family: f }: { ctx: PageContext; page: FamilyPa
             <Teaser
               id="guide-teaser"
               title={`What’s the idea behind the ${f.name}?`}
-              text="The plans for both sides, the traps to watch for, the key variations and why each move is played."
+              text="The plans for both sides, the traps to watch for, the key variations and why the key moves are played."
               onUnlock={() => ctx.unlock('openingGuides')}
             />
           </section>
@@ -284,7 +297,7 @@ function FamilyBody({ ctx, page, family: f }: { ctx: PageContext; page: FamilyPa
                 {ctx.drills && <MasteryRing level={progress[l.id]?.mastery ?? 0} size={24} />}
                 <span class="op-row-text">
                   <span class="op-row-title">
-                    {l.variation || 'Starting moves'}
+                    {titles[i]}
                     {i === 0 && main?.kind !== 'guide' && <span class="op-badge-main">Main</span>}
                   </span>
                   <span class="op-row-moves">{movesSummary(l.san)}</span>

@@ -9,16 +9,30 @@
 import { batch } from '@preact/signals';
 import { Chess, type Move } from 'chess.js';
 import { classifyMove, nearBestRecheck, type ClassifyMoveInput } from '../analysis/classify';
-import { explainBestMove, explainMove, type PrevMove } from '../analysis/explain';
+import { cutAtRepetition, explainBestMove, explainMove, type PrevMove } from '../analysis/explain';
 import { ALTERNATIVES_SUFFIX, alternativesSentence, equalAlternatives } from '../analysis/nearEqual';
 import type { Classification, Explanation } from '../analysis/types';
-import { resultScore } from '../analysis/winprob';
+import { resultScore, scoreToWin } from '../analysis/winprob';
 import { BotPlayer } from '../bot/BotPlayer';
 import { currentOpening, isBookMove, loadOpenings, openingsLoaded } from '../bot/book';
 import { customPersona, personaById } from '../bot/personas';
 import { hashSeed, mulberry32 } from '../bot/strength';
 import type { BotMove } from '../bot/types';
-import { START_FEN, fenKey, formatLine, isThirdRepetition, otherColor, parseUci, pvToSan, toWhitePov, uciToSan } from '../chess/utils';
+import {
+  START_FEN,
+  fenKey,
+  formatLine,
+  isThirdRepetition,
+  otherColor,
+  parseUci,
+  pvToSan,
+  repetitionReplies,
+  seenPositions,
+  toWhitePov,
+  uciToSan,
+  withPosition,
+  type SeenPositions,
+} from '../chess/utils';
 import { AnalysisService, defaultEnsureNodes, type AnalysisServiceOptions, type EnsureOptions } from '../engine/AnalysisService';
 import { createEngines, type EngineLoadProgress, type EngineSet } from '../engine/createEngines';
 import { EngineLoadError, engineFailureKind } from '../engine/errors';
@@ -26,10 +40,12 @@ import { inspectPosition } from '../engine/StockfishEngine';
 import type { AnalysisResult, ChessEngine, Score } from '../engine/types';
 import { engineSupported } from '../engine/workerTransport';
 import { catalogLoaded, getLine } from '../openings/catalog';
-import { openingsOpen, openOpenings } from '../openings/session';
+import { openingsOpen, openingsShown, openOpenings } from '../openings/session';
 import { loadExplorer } from '../openings/tree';
 import {
   applyGameResult,
+  clampRating,
+  isProvisional,
   loadProfile,
   playerScoreFor,
   saveProfile,
@@ -318,6 +334,25 @@ function restoredCoachMode(plies: readonly Ply[], playerColor: Color, preplayed 
     if (plies[i].color === playerColor) return { kind: 'feedback', index: i };
   }
   return { kind: 'idle' };
+}
+
+/**
+ * The move to `fen` lets the opponent end the game by repetition: every legal reply repeats a
+ * position for the third time, or one does and the opponent is worse off (`after`, the search of
+ * `fen`, from its side), so it would take the draw. `seen` counts the game's positions, `fen` included.
+ */
+function letsOpponentRepeat(fen: string, seen: SeenPositions, after: AnalysisResult): boolean {
+  const repeats = repetitionReplies(fen, seen);
+  if (!repeats.length) return false;
+  let legal = 0;
+  try {
+    legal = new Chess(fen).moves().length;
+  } catch {
+    return false;
+  }
+  if (repeats.length >= legal) return true;
+  const score = after.lines[0]?.score;
+  return !!score && scoreToWin(score) < 0.5;
 }
 
 function isScore(v: unknown): v is Score {
@@ -677,7 +712,8 @@ export class GameController {
         playerColor: saved.playerColor,
         botId: persona.id,
         botElo: saved.botElo,
-        adaptive: settings.adaptive && persona.id === 'custom',
+        // "Match my rating" as the game was started (older saves: the New game default).
+        adaptive: saved.adaptive ?? (settings.adaptive && persona.id === 'custom'),
       },
     };
     const target = saved.opening ? openingTarget(saved.opening) : null;
@@ -716,12 +752,18 @@ export class GameController {
       s.botThinking.value = false;
       s.sheet.value = null;
       s.pendingAssist.value = null;
+      s.pendingLevel.value = over ? null : (saved.pendingLevel ?? null);
       s.phase.value = over ? 'over' : 'playing';
     });
     this.updateWatch();
     this.kickAnnotations();
     if (over) this.ensureRecorded(game, over);
-    else if (!this.checkGameEnd()) this.requestBotMove();
+    else if (!this.checkGameEnd()) {
+      this.requestBotMove();
+      // The hint that was open on the player's turn comes back (the engine finds it again; the
+      // game is unrated by it already, so nothing is asked).
+      if (saved.hint && fenKey(saved.hint.fen) === fenKey(chess.fen()) && this.entitlements.isAllowed('hint')) void this.hint();
+    }
   }
 
   /** A restored finished game whose result is missing from the history (e.g. the profile failed to save) is recorded now. */
@@ -811,12 +853,36 @@ export class GameController {
    * saves the profile: the New Game sheet's "Your level" for a brand-new player, and the Menu's
    * "Set my level". The rating becomes provisional again; "Match my rating" follows it.
    */
-  setStartingRating(rating: number): void {
-    if (!Number.isFinite(rating)) return;
+  setStartingRating(rating: number): 'now' | 'afterGame' | null {
+    if (!Number.isFinite(rating)) return null;
+    const s = this.s;
+    const g = s.game.value;
+    // A rated game the player has moved in was paired at the current rating and still counts at it
+    // (with its K-factor): the new level waits until it ends. (Before the first move it applies at
+    // once: the game does not count yet, and a new game drops it.)
+    if (g && this.ratedGameInProgress() && this.humanMoved(g)) {
+      s.pendingLevel.value = clampRating(rating);
+      this.save();
+      return 'afterGame';
+    }
+    s.pendingLevel.value = null;
+    this.applyLevel(rating);
+    return 'now';
+  }
+
+  private applyLevel(rating: number): void {
     const s = this.s;
     const profile = withStartingRating(s.profile.value, rating);
     saveProfile(profile, this.storage);
     s.profile.value = profile;
+  }
+
+  /** A level chosen during the game that just ended (or was abandoned) applies now. */
+  private applyPendingLevel(): void {
+    const level = this.s.pendingLevel.peek();
+    if (level === null) return;
+    this.s.pendingLevel.value = null;
+    this.applyLevel(level);
   }
 
   private startGame(settings: GameSettings, startFen = START_FEN, opening?: OpeningTarget): void {
@@ -834,9 +900,12 @@ export class GameController {
     }
     const s = this.s;
     // The opponent the New Game sheet showed: an adaptive ("Match my rating") Elo comes from the
-    // rating before the loss that abandoning the current game records below.
-    const bot = personaForSettings(settings, s.profile.value);
+    // rating before the loss that abandoning the current game records below, or from the level
+    // chosen during that game (it applies once the game is recorded).
+    const level = s.pendingLevel.peek();
+    const bot = personaForSettings(settings, level === null ? s.profile.value : withStartingRating(s.profile.value, level));
     this.abandonCurrent();
+    this.applyPendingLevel();
     this.abortBot();
     this.dropExplorer();
     this.exitDraw();
@@ -1119,7 +1188,10 @@ export class GameController {
     const g = s.game.value!;
     this.abortBot();
     this.epoch++;
+    const provisional = isProvisional(s.profile.value);
     const record = this.recordResult(g, outcome, (opts.rated ?? true) && !g.assisted);
+    // "Set my level" during the game: the game counted at its own rating, the level starts now.
+    this.applyPendingLevel();
     // Ended by the bot's move while the player explores (the explorer says so) or while the
     // Openings section covers the game: the game-over sheet waits until it closes, and Draw mode
     // stays on there (the explorer carries on undisturbed; leaving it ends Draw mode).
@@ -1128,7 +1200,12 @@ export class GameController {
     else this.exitDraw();
     batch(() => {
       s.outcome.value = outcome;
-      s.ratingChange.value = { before: record.ratingBefore, after: record.ratingAfter, rated: record.rated };
+      s.ratingChange.value = {
+        before: record.ratingBefore,
+        after: record.ratingAfter,
+        rated: record.rated,
+        ...(provisional && record.rated ? { provisional } : {}),
+      };
       s.phase.value = 'over';
       if (!deferred) s.sheet.value = 'gameOver';
       // A question about help in the game that just ended (the explorer's engine) has no point now.
@@ -1140,6 +1217,31 @@ export class GameController {
     this.save();
     this.sound.play('gameEnd');
     this.updateWatch();
+    this.recordAccuracy();
+  }
+
+  /**
+   * Saves the player's accuracy in the finished game's record (Recent games) once every move is
+   * checked, also without a Game Review (the review saves it too).
+   */
+  private recordAccuracy(): void {
+    const s = this.s;
+    const g = s.game.value;
+    if (!g || !s.outcome.value) return;
+    const record = s.profile.value.history.find((r) => r.id === g.id);
+    if (!record || record.accuracy !== undefined) return;
+    const pre = preplayedOf(g);
+    const failed = s.failedAnnotations.value;
+    const own = s.plies.value.slice(pre);
+    if (!own.some((p) => p.color === g.playerColor)) return;
+    if (!own.every((p) => isSettled(p, pre) || failed.has(annotationKey(g.id, p)))) return;
+    const acc = this.summary(g).accuracy[g.playerColor];
+    if (acc === null) return;
+    const profile = updateGameRecord(s.profile.value, g.id, { accuracy: Math.round(acc * 10) / 10 });
+    if (profile !== s.profile.value) {
+      s.profile.value = profile;
+      saveProfile(profile, this.storage);
+    }
   }
 
   /** Adds the game's result to the profile (rating + history, once per game id) and saves it. */
@@ -1176,8 +1278,11 @@ export class GameController {
     this.exitDraw();
     this.truncate(target);
     this.markAssisted();
+    const g = s.game.value!;
     batch(() => {
-      s.coachMode.value = { kind: 'idle' };
+      // Back on the position before the move taken back, the panel shows what it showed there:
+      // the verdict on your previous move (beside the opponent's reply, while it is rated).
+      s.coachMode.value = restoredCoachMode(s.plies.value, g.playerColor, preplayedOf(g));
       s.viewIndex.value = null;
     });
     this.updateWatch();
@@ -1309,6 +1414,7 @@ export class GameController {
         prevMove: prev ? prevMoveOf(prev) : undefined,
         perspective: 'you',
         lines: r.lines,
+        seen: seenPositions(g.startFen, s.plies.value),
       });
       explanation = { ...e, arrows: e.arrows?.length ? e.arrows : uciArrow(line.pv[0], 'best') };
       this.markAssisted();
@@ -1316,6 +1422,7 @@ export class GameController {
       explanation = { headline: 'No hint is available for this position.', details: [] };
     }
     s.coachMode.value = { ...now, explanation };
+    this.save(); // the open hint comes back if iOS closes the app
   }
 
   private canHint(): boolean {
@@ -1353,8 +1460,10 @@ export class GameController {
     this.exitDraw();
     if (s.game.value?.assisted === false) {
       if (a.kind === 'undo' || a.kind === 'retry') this.abortBot();
+      // Asked from the Menu (Rate opponent's moves): either answer goes back to it.
+      const from = s.sheet.peek();
       batch(() => {
-        s.pendingAssist.value = a;
+        s.pendingAssist.value = from === 'menu' ? { ...a, returnTo: 'menu' } : a;
         s.sheet.value = 'assist';
       });
       return;
@@ -1362,13 +1471,13 @@ export class GameController {
     this.runAssist(a);
   }
 
-  /** Runs the help waiting in the 'assist' sheet. */
+  /** Runs the help waiting in the 'assist' sheet (and goes back to the Menu when it was asked there). */
   confirmAssist(): void {
     const s = this.s;
     const a = s.pendingAssist.value;
     batch(() => {
       s.pendingAssist.value = null;
-      if (s.sheet.value === 'assist') s.sheet.value = null;
+      if (s.sheet.value === 'assist') s.sheet.value = a?.returnTo ?? null;
     });
     if (a) this.runAssist(a);
     this.requestBotMove(); // the held reply, when nothing was taken back after all
@@ -1391,7 +1500,10 @@ export class GameController {
   /** Hides the hint (back to what the coach showed before). */
   dismissHint(): void {
     const m = this.s.coachMode.value;
-    if (m.kind === 'hint') this.s.coachMode.value = m.prev;
+    if (m.kind === 'hint') {
+      this.s.coachMode.value = m.prev;
+      this.save();
+    }
     this.updateWatch();
   }
 
@@ -1562,6 +1674,8 @@ export class GameController {
       !alternatives.length || alternatives.every((a) => ls.some((l) => mentionsMove(l, a)));
     const lines: string[] = [];
     if (line) {
+      // The game's positions up to this one: engine lines stop at a third repetition.
+      const seen = seenPositions(g.startFen, s.plies.value, ply.index);
       const e = explainBestMove(ply.fenBefore, line, {
         prevMove: prev ? prevMoveOf(prev) : undefined,
         perspective: human ? 'you' : 'neutral',
@@ -1569,8 +1683,9 @@ export class GameController {
         lines: before?.lines,
         // The near-equal list above ranks the moves: no "only move" or "more precise than c5" here.
         ...(near.length ? { compare: false } : {}),
+        seen,
       });
-      const san = pvToSan(ply.fenBefore, line.pv, 8);
+      const san = pvToSan(ply.fenBefore, cutAtRepetition(ply.fenBefore, line, seen).pv, 8);
       // "Best line" when the best move was clearly better, "Engine line" when several were about as good.
       const bestLine = san.length > 1 ? `${near.length ? 'Engine line' : 'Best line'}: ${formatLine(ply.fenBefore, san)}` : null;
       // The variation below already shows the line: skip the explanation's own copy. Which moves
@@ -1717,11 +1832,16 @@ export class GameController {
     this.requestBotMove(); // a cancelled takeback releases the bot's reply
   }
 
-  /** Closes the open sheet (cancelling a pending assist, which lets a held bot reply go ahead). */
+  /**
+   * Closes the open sheet (cancelling a pending assist, which lets a held bot reply go ahead). A
+   * question asked from the Menu goes back to the Menu.
+   */
   closeSheet(): void {
+    const s = this.s;
+    const back = s.sheet.value === 'assist' ? (s.pendingAssist.value?.returnTo ?? null) : null;
     batch(() => {
-      this.s.pendingAssist.value = null;
-      this.s.sheet.value = null;
+      s.pendingAssist.value = null;
+      s.sheet.value = back;
     });
     this.requestBotMove();
   }
@@ -2258,14 +2378,18 @@ export class GameController {
     const isBook = prevBook && isBookMove(m.fenBefore, m.uci, m.fenAfter);
     const human = m.color === g.playerColor;
     const prevMove = prev ? prevMoveOf(prev) : undefined;
-    // A third repetition (counting the game's positions up to the starting one) is a draw.
+    // A third repetition (counting the game's positions up to the starting one) is a draw, and so
+    // is a move that lets the other side repeat (see `annotate`).
     const line = [...plies.slice(0, now.baseIndex), ...now.moves.slice(0, index + 1)];
+    const seen = seenPositions(g.startFen, line, line.length - 1);
     const repetition = isThirdRepetition(g.startFen, line, line.length - 1);
+    const allows = !repetition && letsOpponentRepeat(m.fenAfter, withPosition(seen, m.fenAfter), after);
+    const drawn = repetition || allows;
     const input: ClassifyMoveInput = {
       fenBefore: m.fenBefore,
       moveUci: m.uci,
       before,
-      after: repetition ? { ...after, terminal: 'stalemate' } : after,
+      after: drawn ? { ...after, terminal: 'stalemate' } : after,
       opponentPrevWinLoss: prevExplored ? prevExplored.rating?.classification.winLoss : prevPly?.classification?.winLoss,
       isBook,
       playerRating: human ? s.profile.value.rating : g.botElo,
@@ -2275,8 +2399,9 @@ export class GameController {
     const bestAfter = await this.secondOpinion(svc, input, signal);
     if (!alive()) return;
     const classification = classifyMove({ ...input, ...(bestAfter ? { bestAfter } : {}) });
-    const explanation = repetition
-      ? repetitionExplanation(m.san, classification, { human, botName: g.bot.name })
+    // The player makes both sides' moves here: the computer's side is said by its color.
+    const explanation = drawn
+      ? repetitionExplanation(m.san, classification, { human, botName: g.bot.name, neutral: true, mover: m.color, allows })
       : explainMove({
           fenBefore: m.fenBefore,
           moveUci: m.uci,
@@ -2285,13 +2410,14 @@ export class GameController {
           after,
           prevMove,
           perspective: human ? 'you' : 'neutral',
+          seen,
         });
     // The second opinion took a search: other ratings may have landed meanwhile.
     s.explorer.value = setRating(s.explorer.value!, index, path, {
       rating: {
         classification,
         explanation,
-        evalWhite: repetition ? { kind: 'cp', value: 0 } : toWhitePov(afterScore, m.fenAfter),
+        evalWhite: drawn ? { kind: 'cp', value: 0 } : toWhitePov(afterScore, m.fenAfter),
         evalDepth: after.depth,
         isBook,
       },
@@ -2388,8 +2514,8 @@ export class GameController {
   private summary(g: GameInfo): ReturnType<typeof summarizeGame> {
     const ps = this.s.plies.value;
     const pre = Math.min(preplayedOf(g), ps.length);
-    if (!pre) return summarizeGame(g.startFen, this.s.startEval.value, ps);
-    return summarizeGame(ps[pre - 1].fenAfter, ps[pre - 1].evalWhite ?? null, ps.slice(pre));
+    if (!pre) return summarizeGame(g.startFen, this.s.startEval.value, ps, g.playerColor);
+    return summarizeGame(ps[pre - 1].fenAfter, ps[pre - 1].evalWhite ?? null, ps.slice(pre), g.playerColor);
   }
 
   private updateReviewProgress(): void {
@@ -2425,7 +2551,10 @@ export class GameController {
       const ply = this.s.plies.value.find((p) => !isSettled(p, pre) && !failed.has(annotationKey(g.id, p)));
       if (!ply) return;
       const res = await this.annotate(g.id, ply);
-      if (res === 'failed') this.markFailed(annotationKey(g.id, ply));
+      if (res === 'failed') {
+        this.markFailed(annotationKey(g.id, ply));
+        this.recordAccuracy();
+      }
     }
   }
 
@@ -2487,13 +2616,18 @@ export class GameController {
     const isBook = (index === 0 || prev?.isBook === true) && isBookMove(ply.fenBefore, ply.uci, ply.fenAfter);
     const prevMove = prev ? prevMoveOf(prev) : undefined;
     // The engine sees positions, not the game: a third repetition ends the game in a draw, which
-    // it cannot know. Classify the move against that result (a terminal draw for classifyMove).
+    // it cannot know. Classify the move against that result (a terminal draw for classifyMove):
+    // the move that repeats, and the move that lets the opponent repeat (its only reply, or a draw
+    // it would take, being worse off), which is where a won game is given away.
+    const seen = seenPositions(g.startFen, plies, index);
     const repetition = isThirdRepetition(g.startFen, plies, index);
+    const allows = !repetition && letsOpponentRepeat(ply.fenAfter, withPosition(seen, ply.fenAfter), after);
+    const drawn = repetition || allows;
     const input: ClassifyMoveInput = {
       fenBefore: ply.fenBefore,
       moveUci: ply.uci,
       before,
-      after: repetition ? { ...after, terminal: 'stalemate' } : after,
+      after: drawn ? { ...after, terminal: 'stalemate' } : after,
       opponentPrevWinLoss: prev?.classification?.winLoss,
       isBook,
       playerRating: human ? s.profile.value.rating : g.botElo,
@@ -2503,8 +2637,8 @@ export class GameController {
     const bestAfter = await this.secondOpinion(svc, input);
     if (!current()) return 'stale';
     const classification = classifyMove({ ...input, ...(bestAfter ? { bestAfter } : {}) });
-    const explanation = repetition
-      ? repetitionExplanation(ply.san, classification, { human, botName: g.bot.name })
+    const explanation = drawn
+      ? repetitionExplanation(ply.san, classification, { human, botName: g.bot.name, allows })
       : explainMove({
           fenBefore: ply.fenBefore,
           moveUci: ply.uci,
@@ -2513,13 +2647,15 @@ export class GameController {
           after,
           prevMove,
           perspective: human ? 'you' : 'neutral',
+          // Engine lines stop where the game would end by repetition.
+          seen,
         });
     // The second opinion took a search: moves may have been played meanwhile.
     const latest = s.plies.value;
     const next = latest.slice();
     next[index] = {
       ...latest[index],
-      evalWhite: repetition ? { kind: 'cp', value: 0 } : toWhitePov(afterScore, ply.fenAfter),
+      evalWhite: drawn ? { kind: 'cp', value: 0 } : toWhitePov(afterScore, ply.fenAfter),
       evalDepth: after.depth,
       classification,
       explanation,
@@ -2540,6 +2676,7 @@ export class GameController {
     });
     this.save();
     this.updateReviewProgress();
+    this.recordAccuracy();
     return 'done';
   }
 
@@ -2657,8 +2794,10 @@ export class GameController {
     const pro = this.entitlements;
     if (pro.paywall.value.open || pro.status.value === 'buying' || pro.status.value === 'restoring') return false;
     if (s.explorer.value) return false;
-    // The Openings section's pages (a drill in progress, the line on the board) are not saved.
-    if (openingsOpen.peek()) return false;
+    // The Openings section's pages (a drill in progress, the line on the board) are not saved. A
+    // section that shows only "Loading…" or "Couldn't load" (its chunk is gone after an update)
+    // holds nothing: the reload onto the new build is what fixes it.
+    if (openingsOpen.peek() && openingsShown.peek()) return false;
     if (p === 'setup' || p === 'error') return true;
     if (p === 'over') return s.sheet.value === null || opts.hidden === true;
     return false;
@@ -2667,12 +2806,24 @@ export class GameController {
   // -----------------------------------------------------------------------------------------------
   // PGN & persistence
 
-  /** PGN of the current / last game, with `[%eval]` comments and NAGs where annotated ('' without a game). */
+  /**
+   * PGN of the current / last game, with `[%eval]` comments and NAGs where annotated ('' without a
+   * game). During the game only the marks the app shows then: your moves' with the coach on, the
+   * computer's while they are rated (`rateOpponent`, an unrated game), so a rated game's export
+   * never reveals the computer's mistakes.
+   */
   exportPgn(): string {
-    return this.pgnText(this.s.outcome.value, true);
+    const s = this.s;
+    const g = s.game.value;
+    const playing = s.phase.value === 'playing' && !s.outcome.value;
+    const nag =
+      playing && g
+        ? (p: Ply) => (p.color === g.playerColor ? s.settings.value.coach : s.settings.value.rateOpponent && g.assisted)
+        : undefined;
+    return this.pgnText(s.outcome.value, true, nag);
   }
 
-  private pgnText(outcome: GameOutcome | null, annotations: boolean): string {
+  private pgnText(outcome: GameOutcome | null, annotations: boolean, nag?: (p: Ply) => boolean): string {
     const s = this.s;
     const g = s.game.value;
     if (!g) return '';
@@ -2692,6 +2843,7 @@ export class GameController {
       ...(outcome ? { termination: outcome.reason } : {}),
       opening,
       annotations,
+      ...(nag ? { nag } : {}),
     });
   }
 
@@ -2726,7 +2878,9 @@ export class GameController {
       assisted: g.assisted,
       startedAt: g.startedAt,
       annotations,
+      adaptive: g.settings.adaptive,
     };
+    if (playing && s.pendingLevel.value !== null) saved.pendingLevel = s.pendingLevel.value;
     if (g.opening) {
       const { line, mode, showLineMoves, custom } = g.opening;
       saved.opening = { lineId: line.id, mode, showLineMoves };
@@ -2740,6 +2894,7 @@ export class GameController {
     const m0 = s.coachMode.value;
     const m = m0.kind === 'hint' ? m0.prev : m0;
     if (playing && m.kind === 'retry') saved.retry = { san: m.san, cls: m.cls, headline: m.headline };
+    if (playing && m0.kind === 'hint') saved.hint = { fen: m0.fen };
     if (finished && o) {
       const rc = s.ratingChange.value;
       const rating = s.profile.value.rating;

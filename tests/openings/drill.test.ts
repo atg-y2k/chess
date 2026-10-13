@@ -102,30 +102,66 @@ describe('drilling as White', () => {
     expect(drillResult(s)).toMatchObject({ playerMoves: 3, found: 2, mistakes: 2, alternatives: 1, clean: false, score: 67 });
   });
 
-  it('does not count another book move as a mistake with acceptAlternatives, but as not found', () => {
+  it('"Allow them": another book move is fine, does not give the answer away, and is not counted', () => {
     let s = playOpponent(checkMove(createDrill(ruy, 'w', { acceptAlternatives: true }), 'e2e4').state);
     const alt = checkMove(s, 'b1c3');
     expect(alt.result).toBe('alternative');
-    expect(alt.message).toBe('2. Nc3 is also a book move, but this line continues with 2. Nf3.');
-    expect(alt.state).toMatchObject({ mistakes: 0, alternatives: 1, missed: [2] });
+    expect(alt.missed).toBe(false);
+    expect(alt.message).toBe('2. Nc3 is a good book move too, but this line goes another way. Try again.');
+    expect(alt.message).not.toMatch(/Nf3/);
+    expect(alt.state).toMatchObject({ mistakes: 0, alternatives: 1, missed: [] });
     s = finish(alt.state);
-    expect(drillResult(s)).toMatchObject({ mistakes: 0, alternatives: 1, found: 2, clean: false, score: 67 });
+    expect(drillResult(s)).toMatchObject({ mistakes: 0, alternatives: 1, found: 3, clean: true, score: 100 });
+    // Strict: the same moves are a mistake, the line's move is shown and not found.
+    let strict = playOpponent(checkMove(createDrill(ruy, 'w'), 'e2e4').state);
+    const salt = checkMove(strict, 'b1c3');
+    expect(salt.message).toBe('2. Nc3 is also a book move, but this line continues with 2. Nf3.');
+    strict = finish(salt.state);
+    expect(drillResult(strict)).toMatchObject({ mistakes: 1, found: 2, clean: false, score: 67 });
+  });
+
+  it('"Allow them" still counts a second other book move, or one after a hint, and then shows the move', () => {
+    const s = playOpponent(checkMove(createDrill(ruy, 'w', { acceptAlternatives: true }), 'e2e4').state);
+    const first = checkMove(s, 'b1c3');
+    const second = checkMove(first.state, 'd2d4');
+    expect(second).toMatchObject({ result: 'alternative', missed: true });
+    expect(second.message).toMatch(/continues with 2\. Nf3/);
+    expect(second.state.missed).toEqual([2]);
+    const hinted = checkMove(drillHint(s).state, 'b1c3');
+    expect(hinted).toMatchObject({ missed: true });
   });
 
   it('cannot be gamed by playing another book move to read the answer', () => {
-    // The message reveals the line's move, so an alternative must not count as found.
+    // A free other book move ("Allow them") never names the line's move; a try that shows it (a
+    // second other book move, or a wrong move first) makes the move count as not found.
     const closed = getLine('c84-ruy-lopez-closed')!;
     let s = createDrill(closed, 'w', { acceptAlternatives: true });
+    let shown = 0;
     while (s.status !== 'complete') {
       if (s.status === 'opponent') {
         s = playOpponent(s);
         continue;
       }
-      const c = checkMove(s, 'h2h4'); // probe: never this line's move
-      const probe = checkMove(s, c.alternatives[0]?.uci ?? 'h2h4');
-      s = checkMove(probe.state, probe.expected!.uci).state;
+      const expected = s.sans[s.ply];
+      const alts = checkMove(s, s.moves[s.ply]).alternatives;
+      let t = s;
+      if (alts[0]) {
+        const free = checkMove(t, alts[0].uci);
+        expect(free.missed).toBe(false);
+        expect(free.message).not.toContain(expected);
+        t = free.state;
+      }
+      // Fishing for the answer: another try names it, and the move is lost.
+      const fish = checkMove(t, alts[1]?.uci ?? 'h2h3');
+      if (fish.result !== 'correct') {
+        expect(fish.missed).toBe(true);
+        shown++;
+        t = fish.state;
+      }
+      s = checkMove(t, s.moves[s.ply]).state;
     }
-    expect(drillResult(s)).toMatchObject({ playerMoves: 5, found: 0, mistakes: 0, clean: false, score: 0 });
+    expect(shown).toBeGreaterThan(0);
+    expect(drillResult(s)).toMatchObject({ playerMoves: 5, found: 5 - shown, clean: false });
   });
 
   it('flags a line whose own move is a known blunder (a trap drilled from the losing side)', () => {

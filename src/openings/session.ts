@@ -26,9 +26,16 @@ export interface OpeningsTarget {
   lineId?: string;
   /** With `lineId`: the move of the line on the board (plies from the initial position; default 0). */
   ply?: number;
+  /** With `lineId`: the board turned around from the line's side (the player's side, from a game). */
+  flipped?: boolean;
   family?: string;
   name?: string;
   eco?: string;
+  /**
+   * With `name` (a game's opening chip): the player's side in the game. The line opens at the
+   * named position, the game's, with the board from that side.
+   */
+  color?: Color;
 }
 
 interface PageBase {
@@ -80,6 +87,11 @@ export interface LinePage extends PageBase {
   flipped?: boolean;
   /** "Other moves here" lists every book move, not the first few. */
   moreOthers?: boolean;
+  /**
+   * The ply the page was opened at (a branch or "Learn this line" from a position): the page is
+   * titled after the opening there, what the player picked, not after the line's far end.
+   */
+  entryPly?: number;
 }
 
 /** "Explore by moves": the book's moves from a position. */
@@ -125,10 +137,34 @@ export type OpeningsPage = HomePage | FamiliesPage | FamilyPage | LinePage | Tre
 export type NavDirection = 'forward' | 'back' | 'none';
 
 const openSignal = signal(false);
+const shownSignal = signal(false);
+
+/**
+ * The section shows its pages (its code and data have loaded): only then does it hold state a
+ * reload would lose (a drill in progress, the line on the board). While it shows only "Loading…"
+ * or "Couldn't load", a service-worker update may reload the page (see GameController.canReloadNow).
+ */
+export const openingsShown: ReadonlySignal<boolean> = shownSignal;
+
+/**
+ * What a failed load of the section says: offline, the connection; online, most likely an app
+ * update that removed the old build's files (the page keeps running the old build during a game),
+ * which only a restart fixes.
+ */
+export function openingsLoadFailedText(online = typeof navigator === 'undefined' || navigator.onLine !== false): string {
+  return online
+    ? 'Couldn’t load the openings. Chess Coach may have just been updated: close the app and open it again (your game is saved), or try again.'
+    : 'Couldn’t load the openings. Check your connection and try again.';
+}
+
+/** The section's pages are showing (OpeningsView), or not (loading, failed, closed). */
+export function setOpeningsShown(shown: boolean): void {
+  shownSignal.value = shown;
+}
 const stack = signal<readonly OpeningsPage[]>([]);
 const direction = signal<NavDirection>('none');
 /** An opening asked for by name, waiting for the data (see `takeNamedTarget`). */
-let named: { name: string; eco?: string } | null = null;
+let named: { name: string; eco?: string; color?: Color } | null = null;
 /** Opened on a line without its family: the family's page goes under it once known (`insertFamilyBelow`). */
 let lineAlone = false;
 let nextKey = 1;
@@ -145,7 +181,8 @@ const keyed = <P extends OpeningsPage>(p: P): P => ({ ...p, key: nextKey++ });
 
 /** A line page at its start. */
 export function linePage(lineId: string, ply = 0): LinePage {
-  return { kind: 'line', lineId, ply: Math.max(0, Math.floor(ply) || 0), offBook: null };
+  const at = Math.max(0, Math.floor(ply) || 0);
+  return { kind: 'line', lineId, ply: at, offBook: null, ...(at > 0 ? { entryPly: at } : {}) };
 }
 
 /** A drill page on its setup. */
@@ -157,7 +194,13 @@ export function drillPage(lineId: string, color: Color, acceptAlternatives = fal
 export function targetPages(target: OpeningsTarget = {}): OpeningsPage[] {
   const pages: OpeningsPage[] = [{ kind: 'home' }];
   if (target.family) pages.push({ kind: 'family', family: target.family });
-  if (target.lineId) pages.push(linePage(target.lineId, target.ply));
+  if (target.lineId) {
+    // A target names its line (the one practiced in a game, the game's opening): the page keeps the
+    // line's own title at any move, where a branch or "Learn this line" is titled after the position.
+    const page = linePage(target.lineId, target.ply);
+    delete page.entryPly;
+    pages.push({ ...page, ...(target.flipped ? { flipped: true } : {}) });
+  }
   return pages.map(keyed);
 }
 
@@ -166,7 +209,10 @@ export function targetPages(target: OpeningsTarget = {}): OpeningsPage[] {
  * walks up); without one, where it was left (Home the first time).
  */
 export function openOpenings(target?: OpeningsTarget): void {
-  named = target?.name && !target.lineId && !target.family ? { name: target.name, ...(target.eco ? { eco: target.eco } : {}) } : null;
+  named =
+    target?.name && !target.lineId && !target.family
+      ? { name: target.name, ...(target.eco ? { eco: target.eco } : {}), ...(target.color ? { color: target.color } : {}) }
+      : null;
   lineAlone = !!target?.lineId && !target.family;
   batch(() => {
     if (target && (target.lineId || target.family || target.name)) stack.value = targetPages(target);
@@ -180,7 +226,7 @@ export function openOpenings(target?: OpeningsTarget): void {
  * The opening asked for by name (`openOpenings({ name, eco })`), once: the section resolves it
  * to its line when its data has loaded.
  */
-export function takeNamedTarget(): { name: string; eco?: string } | null {
+export function takeNamedTarget(): { name: string; eco?: string; color?: Color } | null {
   const t = named;
   named = null;
   return t;

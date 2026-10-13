@@ -100,6 +100,8 @@
 }
 .sheet-head[data-hide-title] .sheet-titlebar {
   position: absolute;
+  /* Above the body's positioned content (the game-over sheet's), which comes later in the page. */
+  z-index: 2;
   top: 4px;
   right: max(0px, var(--safe-right));
   padding: 0 6px 0 0;

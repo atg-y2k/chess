@@ -13,7 +13,7 @@ import { linePage, treeAdvance, treeTo, updatePage, type TreePage as TreePageSta
 import { IconChevronLeft, IconFlip } from '../icons';
 import { commonWord, evalWords, learnTarget, MISTAKE_NOTE, playTarget, resolveLine, treePosition } from './model';
 import { OpeningBoard, OpeningDrawControls, squaresOf } from './OpeningBoard';
-import { EvalHiddenNote, GLOSSARY, ShareBar, StarGlyph, Term, WarnGlyph, type PageContext } from './parts';
+import { centeredScroll, EvalHiddenNote, GLOSSARY, ShareBar, StarGlyph, Term, WarnGlyph, type PageContext } from './parts';
 import { useEval, verdictFor } from './useEval';
 
 export function TreePage({ ctx, page }: { ctx: PageContext; page: TreePageState }) {
@@ -35,7 +35,7 @@ export function TreePage({ ctx, page }: { ctx: PageContext; page: TreePageState 
     const box = trail.current;
     const el = box?.querySelector<HTMLElement>('[aria-current="true"]');
     if (!box || !el) return;
-    box.scrollTo({ left: Math.max(0, el.offsetLeft - (box.clientWidth - el.offsetWidth) / 2), behavior: 'smooth' });
+    box.scrollTo({ left: Math.max(0, centeredScroll(box, el)), behavior: 'smooth' });
   }, [depth, page.path]);
 
   const advance = (uci: string) => updatePage('tree', (p) => treeAdvance(treeTo(p, depth), uci));

@@ -10,7 +10,17 @@
  */
 import { Chess, type Color, type Move, type PieceSymbol, type Square } from 'chess.js';
 import type { AnalysisResult, PvLine, Score } from '../engine/types';
-import { formatLine, PIECE_NAMES, pvToSan, sideToMove, uciToSan } from '../chess/utils';
+import {
+  fenKey,
+  formatLine,
+  parseUci,
+  PIECE_NAMES,
+  pvToSan,
+  sideToMove,
+  uciToSan,
+  withPosition,
+  type SeenPositions,
+} from '../chess/utils';
 import type { Arrow, ArrowBrush, Classification, Explanation, MoveClass } from './types';
 import { detectSacrifice } from './sacrifice';
 import { scoreToWin } from './winprob';
@@ -89,6 +99,35 @@ export interface ExplainMoveInput {
   prevMove?: PrevMove;
   /** Default 'you'. Use 'neutral' when reviewing the opponent's (bot's) moves. */
   perspective?: Perspective;
+  /**
+   * The game's positions up to `fenBefore` (included), with how often each occurred: engine lines
+   * are cut where they would repeat a position for the third time (see `cutAtRepetition`), so no
+   * mate or line is described past a draw. The engine itself sees positions, not the game.
+   */
+  seen?: SeenPositions;
+}
+
+/**
+ * An engine line from `fen`, cut at the move that would repeat a position for the third time
+ * (counting the game's positions in `seen`, which include `fen`): the game would end there in a
+ * draw, so what the line says after it (a mate, the material it wins) cannot happen. A cut line
+ * keeps its moves up to that one and scores 0.00 (`cut` is set). Unchanged otherwise.
+ */
+export function cutAtRepetition(fen: string, line: PvLine, seen: SeenPositions): PvLine & { cut?: true } {
+  const counts = new Map(seen);
+  try {
+    const c = new Chess(fen);
+    for (let i = 0; i < line.pv.length; i++) {
+      c.move(parseUci(line.pv[i]));
+      const k = fenKey(c.fen());
+      const n = (counts.get(k) ?? 0) + 1;
+      counts.set(k, n);
+      if (n >= 3) return { ...line, pv: line.pv.slice(0, i + 1), score: { kind: 'cp', value: 0 }, cut: true };
+    }
+  } catch {
+    /* an illegal move: the line as it is */
+  }
+  return line;
 }
 
 // ------------------------------------------------------------------ wording helpers
@@ -338,6 +377,8 @@ function principleText(p: Principle): string {
       return 'castles the king to safety and brings the rook into play';
     case 'kingWalk':
       return 'moves the king and gives up the right to castle';
+    case 'kingExposed':
+      return 'walks the king toward the middle of the board, where it can be attacked';
     case 'develops':
       return `develops the ${NAME[p.piece]}`;
     case 'centrePawn':
@@ -382,6 +423,7 @@ function principleText(p: Principle): string {
 const OPENING_PRINCIPLES = new Set<Principle['kind']>([
   'castles',
   'kingWalk',
+  'kingExposed',
   'develops',
   'centrePawn',
   'centreControl',
@@ -642,6 +684,18 @@ function explainLine(fen: string, line: Line, v: Voice, prev?: PrevMove, opts: L
           : reason.replace(/(and )?promotes to/, (_, and) => `${and ?? ''}then promotes to`);
     }
     const keyLine = out.sans.length > 1 ? `Key line: ${out.sans.slice(0, 6).join(' ')}.` : null;
+    // Out of check without taking anything: the move itself wins nothing (12.Kf1 g6 13.Qxb7 Kg7
+    // 14.Qxa8: the queen takes later). Say what it does, then which later moves win the material.
+    if (pre.inCheck() && !move.captured && !move.promotion) {
+      const caps = out.sans.filter((x, i) => i > 0 && i % 2 === 0 && x.includes('x'));
+      if (caps.length && /^wins /.test(reason)) {
+        const win = caps.length === 1 ? reason : reason.replace(/^wins /, 'win ');
+        return res('Check', `${escapeText(undefined, move.piece)}, and then ${joinAnd(caps)} ${win}`, keyLine ? [keyLine] : [], {
+          motifs: ['escapesCheck', 'winsMaterial'],
+          targets: hot,
+        });
+      }
+    }
     // "promotes to a queen" already says what the promotion motif would.
     const said = tactic?.kind === 'promotion' && /promotes/.test(reason);
     const detail = tactic && !said ? `It ${motifClause(tactic, v.victim)}.` : keyLine;
@@ -926,6 +980,8 @@ export interface ExplainBestMoveOptions {
    * "about as good" as others.
    */
   compare?: boolean;
+  /** The game's positions up to `fen` (see `ExplainMoveInput.seen`): lines are cut at a third repetition. */
+  seen?: SeenPositions;
 }
 
 /**
@@ -937,6 +993,11 @@ export interface ExplainBestMoveOptions {
  */
 export function explainBestMove(fen: string, line: PvLine, opts: ExplainBestMoveOptions = {}): Explanation {
   try {
+    if (opts.seen) {
+      const seen = opts.seen;
+      line = cutAtRepetition(fen, line, seen);
+      if (opts.lines) opts = { ...opts, lines: opts.lines.map((l) => cutAtRepetition(fen, l, seen)) };
+    }
     const v = voice(sideToMove(fen), opts.perspective);
     const r = explainLine(fen, { pv: line.pv, score: line.score }, v, opts.prevMove, { lines: opts.lines });
     if (!r) return { headline: 'There is no move to suggest here.', details: [] };
@@ -1031,11 +1092,22 @@ function fallbackExplanation(p: ExplainMoveInput): Explanation {
   };
 }
 
-function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
-  const { fenBefore, moveUci, classification: cl } = p;
+function explainMoveUnsafe(input: ExplainMoveInput): Explanation {
+  const { fenBefore, moveUci, classification: cl } = input;
   const mm = moveMotifs(fenBefore, moveUci);
-  if (!mm) return fallbackExplanation(p);
+  if (!mm) return fallbackExplanation(input);
   const { move, after: fenAfter } = mm;
+  // Engine lines stop where the game would end by repetition (the engine sees positions only).
+  let p = input;
+  let replyCut = false;
+  if (input.seen) {
+    const seen = input.seen;
+    const seenAfter = withPosition(seen, fenAfter);
+    const before = { ...input.before, lines: input.before.lines.map((l) => cutAtRepetition(fenBefore, l, seen)) };
+    const afterLines = input.after?.lines.map((l) => cutAtRepetition(fenAfter, l, seenAfter));
+    replyCut = !!afterLines?.[0]?.cut;
+    p = { ...input, before, ...(input.after && afterLines ? { after: { ...input.after, lines: afterLines } } : {}) };
+  }
   const me = move.color;
   const opp = other(me);
   const Opp = SIDE[opp];
@@ -1120,6 +1192,26 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
       ['stalemate'],
     );
   }
+  // A draw by rule: too little material to checkmate, or the 50-move rule.
+  const insufficient = board.isInsufficientMaterial();
+  if (insufficient || board.isDrawByFiftyMoves()) {
+    const under = move.promotion && move.promotion !== 'q' ? ` promotes to ${withArticle(move.promotion)} instead of a queen and` : '';
+    const headline = insufficient
+      ? `${move.san}${under} leaves too little material for either side to checkmate, so the game is a draw.`
+      : `${move.san} makes it 50 moves by each side without a capture or a pawn move, so the game is a draw (the 50-move rule).`;
+    const winning = cl.winBefore >= 0.6;
+    if (winning && !isBest) arrows.push(...arrow(bestUci, 'best'));
+    return done(
+      headline,
+      [
+        winning && (v.you ? 'You were winning, so this draw gives the win away.' : `${SIDE[me]} was winning, so this draw gives the win away.`),
+        winning && !isBest && bestSan && bestWas(),
+        cl.winBefore <= 0.4 && 'A draw is a good result from a lost position.',
+      ],
+      'Draw',
+      [insufficient ? 'insufficientMaterial' : 'fiftyMoves'],
+    );
+  }
 
   // 2. Mates allowed, suffered or missed.
   const replyMate = mateOf(reply?.score);
@@ -1168,7 +1260,7 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
   // Mate distances in moves from before this move, like `bestMate` (the reply's score counts from after it).
   const iHadMate = bestMate !== null && bestMate > 0 ? bestMate : 0;
   const iStillMate = replyMate !== null && replyMate <= 0 ? -replyMate + 1 : 0;
-  if (iHadMate && !iStillMate && !isBest && bestSan && bestLine) {
+  if (iHadMate && !iStillMate && !replyCut && !isBest && bestSan && bestLine) {
     const line = playLine(fenBefore, bestLine.pv, 2 * iHadMate - 1).sans;
     arrows.push(...arrow(bestUci, 'best'));
     return done(
@@ -1420,7 +1512,11 @@ function explainMoveUnsafe(p: ExplainMoveInput): Explanation {
     if (sac && r?.title === 'Sacrifice') details.length = 0; // the sacrifice sentence shows the line
     const note = doomedNote();
     if (note) details.push(note);
-    if (iHadMate && iStillMate > iHadMate && bestSan) {
+    // The best move itself is never "beaten by itself" (its two searches may see the mate a move
+    // apart), and a listed move is judged by its own line, from the same search as the best one.
+    const listedMate = mateOf(playedInBefore?.score);
+    const myMate = listedMate !== null && listedMate > 0 ? listedMate : iStillMate;
+    if (!isBest && iHadMate && myMate > iHadMate && bestSan) {
       details.push(`${bestSan} was even quicker: mate in ${iHadMate}.`);
       arrows.push(...arrow(bestUci, 'best'));
     } else if (!isBest && bestSan && (cl.cls === 'good' || neg)) {
