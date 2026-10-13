@@ -379,7 +379,8 @@
   stroke-width: 3;
 }
 
-/* A locked best-move arrows toggle (Menu, New game): a dark lock on the gold tile. */
-.sheet-group[data-arrows-locked] .toggle[data-id='showBestMoves'] .toggle-icon {
+/* A locked best-move arrows or threat alerts toggle (Menu, New game): a dark lock on the gold tile. */
+.sheet-group[data-arrows-locked] .toggle[data-id='showBestMoves'] .toggle-icon,
+.sheet-group[data-threats-locked] .toggle[data-id='threatAlerts'] .toggle-icon {
   color: #2a1d00;
 }

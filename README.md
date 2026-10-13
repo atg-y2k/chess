@@ -17,14 +17,20 @@ optional one-time "Pro" purchase for the coaching features. See [iOS app](#ios-a
   strength slider in steps of 50, and **Match my rating**, which always picks an opponent at your
   current rating.
 - **Your own rating.** Rated games update an Elo rating. You pick a starting level, and the Menu
-  shows your rating, your peak, your wins, draws and losses, and your last games (with your accuracy).
+  shows your rating, your peak, your wins, draws and losses, a chart of your rating after every rated
+  game, and your last games (with your accuracy).
+- **Your games.** Tap one of your recent games (or a point of the rating chart) to replay it move by
+  move, review it with the coach, try your mistakes again, play on from any position, or export it.
 - **A live evaluation bar** next to the board, and a graph of the whole game under the coach.
 - **A coach** that classifies each of your moves (Best, Mistake, Blunder…) and says why: what it
   wins or loses, the tactic or recapture you missed, the threat you allowed, and what the best move
   was.
 - **Hints, Show best and Retry** to learn from your mistakes during the game.
 - **Rate opponent’s moves** (an option): see whether the computer found the best move, with the same
-  ratings and explanations you get for yours.
+  ratings and explanations you get for yours. When it goes wrong, the coach first asks whether you
+  can punish it.
+- **Threat alerts** (an option): a warning when your opponent threatens something ("Pip threatens
+  Nxf7, forking your queen and rook."), with a red arrow on the board.
 - **An explorer** to try moves before you play them: move for both sides on the board, on your own
   (during a game the engine is off, so the game stays rated), or with the engine switched on: it rates
   each move, shows the evaluation and its best move, and can answer for the other side.
@@ -32,7 +38,8 @@ optional one-time "Pro" purchase for the coaching features. See [iOS app](#ios-a
   are thinking about, in your game, the explorer, Game Review and the Openings section. It is no help
   from the computer, so your game stays rated.
 - **Game Review** after the game: accuracy for both sides, key moments, and coaching for every move
-  of both players.
+  of both players. **Try again** sets up your mistakes once more, so you can look for the better move,
+  with hints if you need them, and play on from there.
 - **Openings** for beginners: 3,815 named lines (Italian Game, Sicilian Defense…) to search, browse
   and step through on a board, a "Start here" list for White and for Black, the move tree, guides that
   explain why the key moves are played, drills that test you move by move, and games against the
@@ -89,8 +96,8 @@ The first time you open the app, and whenever you tap **New**, the **New game** 
   opponent is shown by the name it has in the game ("Robot 800"); the Custom card comes first, so
   the sheet opens on it and the weakest bots, not on the strongest.
 - **Pick a color:** White, Random or Black.
-- **Choose options:** Coach, Evaluation bar, Best-move arrows, Rate opponent’s moves, Takebacks and
-  Sound.
+- **Choose options:** Coach, Evaluation bar, Best-move arrows, Threat alerts, Rate opponent’s moves,
+  Takebacks and Sound.
 
 Then tap **Play**. Move by dragging a piece or by tapping it and then its destination square.
 **Draw**, on your strip under the board, lets you draw arrows and circles instead (see
@@ -131,7 +138,7 @@ and explains it. For example, "14. Qg4 is a blunder" with "This hangs your queen
   move that was not quite as good gets "Slightly better: c6".)
 - **Retry** (after a mistake, miss or blunder, when takebacks are on) takes your move back so you
   can look for a better one. While Retry is on offer, the coach does not give away the answer. The
-  "Try again" prompt is still there if iOS closes the app in the meantime.
+  "Retry" prompt is still there if iOS closes the app in the meantime.
 - **Hint** shows the best move with an arrow and a short reason, and how it compares with the other
   good moves, for example "c4 keeps a small edge. g3 and Bf4 are about as good." You can still
   step back through the moves while a hint is open; the hint comes back when you return to the game,
@@ -149,8 +156,8 @@ didn't recapture the bishop on c6."
 moves: you see whether it found the best move. Its last move gets its icon on the board and in the
 move list (the same icons as yours), its big moments a dot on the graph, and the coach panel gives
 the verdict and the explanation in the third person, for example "Pip’s 12… Nf6 is a mistake" with
-"This leaves Black's knight on f6 undefended." **Show best** shows what it should have played, with
-arrows on the position before its move. With the coach on too, the panel shows both moves, yours
+"This leaves Black's knight on f6 undefended." and what it should have played ("Pip should have played
+Bc5, …"). **Show best** shows that move, with arrows on the position before its move. With the coach on too, the panel shows both moves, yours
 always on top: one open, the other as a row ("You ★ 12. Nf3 Best"); tap the row to open it. Your move
 stays open while it has something to fix (an inaccuracy or worse, with Retry and Show best at hand);
 after a good move the computer's latest move is open. On a short phone (or in landscape) both fit in
@@ -158,6 +165,33 @@ one row ("You ★ Best | Pip ? Mistake"); tap a half to read it. With the coach 
 only the computer's moves. The option is in the New game sheet and the Menu. It shows you when the
 computer goes wrong, so it makes the game unrated, and it stays on for your next games until you
 switch it off (see [Rated and unrated games](#your-rating-what-elo-means)).
+
+**Can you punish it?** When the computer's latest move is a mistake, a miss or a blunder, the coach
+does not explain it at once: its move is the open one until your move (also when your own move before
+it had something to fix: that one is the row above, a tap away), with the verdict and the question "Pip blundered — can
+you punish it?". On a short phone the row says "Pip ?? Punish it?". Nothing on the screen names the
+answer meanwhile (no explanation, Show best, best-move arrow, or threat alert pointing at it; your own
+move's Show best waits too when its better move is the same one), also while the coach is still
+checking the computer's move. Make your move, or tap **Show me** ("Punish it with Nxh4, which wins the
+queen.", with a green arrow; what Pip should have played is then a separate **Pip's best** button).
+After your move the computer's feedback is back, and yours begins with "You punished it!" ("Punished!"
+on a short phone's row) when your move was the best or about as good, or else names the punishment:
+"The punishment was Nxh4, which wins the queen." (While you can Retry your move, it says only "You
+missed the punishment.", so Retry is still a fair try; Show best tells you.) A hint shows the answer
+too. After Undo the question comes back for you to try again.
+
+**Threat alerts** (an option, in the New game sheet and the Menu): on your turn, when your opponent
+threatens something real, a warning sits at the top of the coach panel ("Pip threatens Nxf7, forking
+your queen and rook.", "Pip threatens Qxf7#, checkmate.") and a red arrow shows the threat on the
+board. The engine checks it: it lets your opponent move twice in a row and warns only when that wins
+it a mate, or about a pawn and a half of material or more, so a lone pawn or a piece that only gets
+away never sets it off. It names only the threat, never your defense, and it is gone as soon as you
+move. There is none while you are in check (the check is the threat), in the explorer or in Game
+Review. It shows as soon as the engine has checked the position (a fraction of a second on a phone),
+also while the computer's move is still being rated, unless it could point at a punishment still to
+be found. On a short phone the coach's row leads with the warning (also when both moves are rated:
+their verdicts are a tap away). Being warned is help, so threat alerts make the game unrated, and they
+stay on for your next games until you switch them off.
 
 **Repetitions.** A move that repeats the position for the third time ends the game in a draw, and so
 does a move that lets the opponent do it (its only reply, or a draw it would take because it is worse
@@ -174,7 +208,7 @@ and shows no move icon for it. Game Review lists it among the key moments.
 
 The coach needs a moment to check each move, a few seconds at most: in the rare, very sharp
 position where a deeper look would take the engine minutes, it settles for a slightly shallower
-one. If the check fails (rarely), it says "Couldn't check …" with a **Try again** button.
+one. If the check fails (rarely), it says "Couldn't check …" with a **Check again** button.
 
 When it is your move right after your opponent took one of your pieces and you can take back
 without losing material, the coach's tip says so, for example "Rocco just took your bishop on c1.
@@ -382,6 +416,74 @@ that gave something away (inaccuracies too when there are few). Tap a moment or 
 moves with ‹ › to read the coach's comment on each move, with **Show best** for the better move.
 **Report** returns to the summary.
 
+**Try again.** Your own inaccuracies, mistakes, misses and blunders among the key moments have a **Try
+again** button (so does the coach's comment when you step to one of them, also after the game outside
+the review); the report then lists the key moments first, and the game-over sheet offers **Try your
+mistake again** too. Until you try it (or tap **Show best**), the comment on such a move says what went
+wrong but not the better move, and draws no arrow. Try again sets up the position before that move,
+with you to move, and asks "Find a better move than Qxb2"; a green frame around the board and a **Try
+again** tag on the opponent's strip show that this is not the game (tap the tag, or **Back** in the
+bar, to go back). **Flip** turns only this board. Make a move on the board: the engine checks it as it
+checks your moves in a game.
+
+- A move that is the best, about as good as the best (see [The coach](#the-coach)), or at least Good
+  finds it: the coach says so ("You found it: 3. Bc4", "You found the best move!") with its verdict
+  and explanation.
+- Any other move is taken back: "Not quite — try again", what was wrong with it (never the answer),
+  and an arrow showing the move you tried. Playing the move from the game again says just that.
+- **Hint** names the piece to move ("Hint: move a knight."), then its square, with a circle on it.
+  **Show answer** shows the engine's best move with arrows (and the move you played), and why.
+
+Then **Next mistake** (in the bar: **Next one**) goes to your next one in the game, **Play on from here** (the
+bar has it too, as **Play on**) starts a new game
+against the same opponent from that position, you to move (unrated: the coach's first line says where
+it comes from, and the game-over sheet calls it "Practice from move 12"; a Rematch plays the position
+again; your New game choices and the earlier game, in your history, stay as they were), and **Back to
+review** returns to the review as you left it. Nothing in the game or your rating changes while you
+try. In the App Store app, Try again is part of Pro, with the key moments.
+
+## Your games
+
+**The rating chart** (Menu → Your stats) draws your rating after each rated game, oldest on the left,
+from the rating you started at. Your peak and your current rating are marked; your first 10 rated
+games (and the first 10 after you set a level) are shaded, because a new rating moves fast; a level you
+set shows as a thin step. Tap or drag along the line to see a game: its date, opponent, result and what
+it did to your rating. **View game** (or a second tap on the same point) opens it. **Show as a table**
+lists the same games with their numbers. Before your first rated game the chart says it starts then.
+
+**The game viewer** opens a game from your **Recent games** (tap its row) or from the chart. It fills the
+screen over your game; **Back** (‹) returns to the Menu. The header says the result and the opponent,
+the date, how it ended, your accuracy, and what the game did to your rating (or **Unrated**).
+
+- Step through the moves with **‹ ›**, a swipe across the board, the move list or the graph. **Flip**
+  turns the board, and **Draw** works as in a game (the drawings go when you close the viewer).
+- The move ratings, the evaluation bar and the graph come from the coach's checks during the game. The
+  history keeps them with every game, in a few characters per move (a 60-move game takes about 3 KB
+  with its moves; 200 of them well under a megabyte, and the oldest games' analyses go first if the
+  phone runs short of space). An older game, from before this was kept, shows "Not analyzed":
+  **Review** then has the engine check it first ("Analyzing game… 40%"), and keeps the result.
+- **Review** shows the game's report (accuracy, the moves by kind and the key moments, as in Game
+  Review) and the best-move arrows; tap a moment, or step to a move, for the coach's comment on it.
+  The history keeps only the gist of each comment, so for a game from an earlier session the coach
+  looks at the move again when you step to it (a moment's wait) and then says all it said in the game.
+  **Try again** on one of your key mistakes sets it up on the game screen (see [Game Review](#game-review));
+  its **Back to review** returns to the viewer as you left it. As in Game Review, the comment on such a
+  move keeps the better move (and its arrow) for **Show best** or the try.
+- **Play here** starts a new game against the same opponent from the position on the board, you with
+  your color from that game (the opponent moves first when it is its turn). It is unrated, like Play
+  on from here, and the earlier game stays in your history as it was. While a game you have moved in
+  is going on, it is off, and the comment says to finish that game first.
+- **While a rated game is on** (you opened the viewer from the Menu during it), the viewer gives no
+  help from the engine for it: the replay, the move ratings, the evaluations kept with the game and the
+  export are there, but the better moves, their arrows, a new analysis and Try again wait until your
+  game is over (the comment says so). An earlier game can pass through the positions of your game.
+- **Export** (the share button) shares or copies the game's PGN, with the evaluations and the move marks.
+
+The viewer never changes the game you are playing or your rating: your opponent goes on thinking under
+it, and if your game ends meanwhile, its result shows when you close the viewer. In the App Store app,
+replaying, the move ratings, accuracy and export are free; the coach's comments, the key moments and
+Try again are part of Pro, as in Game Review.
+
 ## Your rating (what Elo means)
 
 **Elo** is a number that measures playing strength. The gap between two ratings predicts the
@@ -409,18 +511,20 @@ gains more than beating a weaker one.
 
 **Rated and unrated games.** A game counts for your rating unless you use help:
 
-- A **takeback** (Undo), a **hint**, **Retry**, **best-move arrows**, the **engine in the explorer**
-  or **Rate opponent’s moves** make the game unrated. The coach, the evaluation bar, the explorer
+- A **takeback** (Undo), a **hint**, **Retry**, **best-move arrows**, the **engine in the explorer**,
+  **Rate opponent’s moves** or **threat alerts** make the game unrated. The coach, the evaluation bar, the explorer
   with its engine off and drawing on the board are fine in rated games.
 - In a rated game, the first hint, takeback or Retry asks you to confirm, and so does switching on
-  the explorer's engine or Rate opponent’s moves in the Menu. While a takeback or Retry is waiting for
-  your answer, your opponent holds its reply; if you cancel, it plays on (it also plays on while you
-  explore or answer about the explorer's engine or Rate opponent’s moves). Switching best-move
-  arrows on (in the Menu, or when starting the game) makes it unrated at once, and a game started
-  with best-move arrows or Rate opponent’s moves on is unrated from the start. Both are settings: they
-  stay on for your next games (a Rematch too) until you switch them off.
+  the explorer's engine, Rate opponent’s moves or threat alerts in the Menu. While a takeback or Retry
+  is waiting for your answer, your opponent holds its reply; if you cancel, it plays on (it also plays
+  on while you explore or answer about the explorer's engine, Rate opponent’s moves or threat alerts).
+  Switching best-move arrows on (in the Menu, or when starting the game) makes it unrated at once, and
+  a game started with best-move arrows, Rate opponent’s moves or threat alerts on is unrated from the
+  start. They are settings: they stay on for your next games (a Rematch too) until you switch them off.
 - A game that plays an opening (see [Playing an opening](#playing-an-opening)) is unrated from the
   start: the computer's first moves are scripted.
+- A game started from a position of an earlier game (Try again's **Play on from here**, the game
+  viewer's **Play here**) is unrated from the start: you chose where it begins.
 - An **Unrated** tag on your player strip shows when a game no longer counts.
 - **Resigning** counts as a loss, rated unless the game was already unrated; the Menu's confirmation
   says what it does to your rating ("your rating goes from 904 to 834 (−70)"). Resigning before you
@@ -499,12 +603,12 @@ match chess.com exactly. The Brilliant and Great thresholds depend on your ratin
   app does not show them then either); after the game it has them all.
 - **Openings:** the Openings section (see [Openings](#openings)).
 - **Chess Coach Pro** (App Store app only): Unlock, or "Unlocked ✓", and **Restore Purchases**.
-- **While playing:** Coach, Evaluation bar, Best-move arrows (makes the game unrated), Rate opponent’s
-  moves (asks first in a rated game, then makes it unrated; either answer brings you back to the
-  Menu) and Sound.
+- **While playing:** Coach, Evaluation bar, Best-move arrows (makes the game unrated), Threat alerts
+  and Rate opponent’s moves (each asks first in a rated game, then makes it unrated; either answer
+  brings you back to the Menu) and Sound.
 - **Appearance:** Dark, Light or Automatic (follows iOS).
-- **Your stats:** rating, peak, games, wins/draws/losses and **Set my level**; then your
-  **Recent games** (the last 10).
+- **Your stats:** rating, peak, games, wins/draws/losses, **Set my level** and the **rating chart**
+  (see [Your games](#your-games)); then your **Recent games** (the last 10): tap one to open it.
 - **Engine:** "Stockfish 19" with "2 workers", or "1 worker (compatibility mode, until …)";
   **Available offline** once the app and the engine are saved on the phone; and **Run engine
   self-test**. See below.
@@ -572,7 +676,7 @@ Requires Node 24 (chessground declares `engines.node >= 24`).
 ```sh
 npm ci                 # install
 npm run dev            # dev server with hot reload (http://localhost:5173)
-npm test               # unit tests (Vitest: about 1,190 tests in 62 files; the calibration test is skipped)
+npm test               # unit tests (Vitest: about 1,280 tests in 72 files; the calibration test is skipped)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
 npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting
@@ -609,14 +713,16 @@ the device runs low on space). iPhone only, portrait, iOS 16.4 or later.
 (non-consumable), shared through Family Sharing, and bought and checked on the device with StoreKit 2
 (no server, no account; the check works offline).
 
-- **Free:** every opponent at any level, your rating, the evaluation bar and graph, the move ratings
-  and badges (also of the opponent's moves, with Rate opponent’s moves), accuracy, takebacks and
-  Retry, the explorer with its engine off (trying moves for both sides), drawing on the board, PGN
-  export, and in the Openings section searching, browsing, stepping through any line, the move tree
+- **Free:** every opponent at any level, your rating (and its chart), the evaluation bar and graph,
+  the move ratings and badges (also of the opponent's moves, with Rate opponent’s moves), accuracy,
+  takebacks and Retry, the explorer with its engine off (trying moves for both sides), drawing on the
+  board, replaying your earlier games (the game viewer, Play here) and PGN export, and in the Openings section searching, browsing, stepping through any line, the move tree
   and playing openings.
-- **Pro:** the coach's explanations (the "why", also of the opponent's moves), Hint, Show best, the
-  engine in the explorer (its evaluation, arrows, move ratings and Reply; its switch shows a lock),
-  best-move arrows, Game Review's key moments and per-move comments, and the Openings section's guides
+- **Pro:** the coach's explanations (the "why", also of the opponent's moves), Hint, Show best (and
+  "Show me" for the punishment of the opponent's mistake; "can you punish it?" and "You punished it!"
+  are free), the engine in the explorer (its evaluation, arrows, move ratings and Reply; its switch
+  shows a lock), best-move arrows, threat alerts, Game Review's key moments and per-move comments (and
+  Try again on your mistakes), also in the game viewer, and the Openings section's guides
   (why the key moves are played, plans, traps) and drills with saved progress.
 
 A purchase waiting for a parent's approval (Ask to Buy) shows as "Waiting for approval" in the Menu

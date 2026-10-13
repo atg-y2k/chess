@@ -5,7 +5,8 @@
  * the paywall with the store's price, a purchase that unlocks everything, cancelled / failed /
  * pending (Ask to Buy) purchases, Restore Purchases (also offline and cancelled), a refund, the
  * locked Game Review, the explorer (free, its engine locked), Draw mode (free), the opponent's move ratings (verdicts
- * free, explanations locked), the always-reachable privacy policy, Escape over stacked sheets, and the Openings section
+ * free, explanations locked), threat alerts and "Show me" (locked) and an earlier game in the viewer (replay free,
+ * comments and key moments locked), the always-reachable privacy policy, Escape over stacked sheets, and the Openings section
  * (browsing, the moves of any line, the move tree and playing free; guide text and drills locked).
  */
 import { expect, test, type Locator, type Page } from '@playwright/test';
@@ -20,13 +21,14 @@ interface MockStoreSettings {
 }
 interface Hook {
   controller: {
-    newGame(settings: object, opts?: { startFen?: string }): void;
+    newGame(settings: object, opts?: object): void;
     entitlements: { pro: { value: boolean } };
     store: {
       settings: { value: object };
       phase: { value: string };
       humanToMove: { value: boolean };
       isLive: { value: boolean };
+      plies: { value: { san: string }[] };
     };
   };
 }
@@ -358,14 +360,17 @@ test.describe('Chess Coach Pro (paywall build)', () => {
     await expect(locked).toBeVisible();
     await expect(locked).toContainText(/\d+ key moments? found/);
     await expect(review.locator('.review-moment')).toHaveCount(0);
+    // Try again on your mistakes is part of the key moments: none while they are locked.
+    await expect(page.locator('[data-id="try-again"]')).toHaveCount(0);
 
     // A move in review: the verdict, the teaser, no best-move arrow.
     await page.locator('.toolbar-btn[data-id="prev"]').tap();
     await expect(coach(page).locator('.coach-title')).toContainText(/\d+(\.|…) /);
     await expect(coach(page).locator('.coach-line').first()).toHaveText(TEASER);
     await expect(page.locator('.cg-shapes line')).toHaveCount(0);
+    await expect(coach(page).locator('[data-action="tryAgain"]')).toHaveCount(0);
 
-    // The unlock card opens the paywall; buying shows the key moments.
+    // The unlock card opens the paywall; buying shows the key moments (and Try again on your blunder).
     await page.locator('.toolbar-btn[data-id="summary"]').tap();
     await locked.getByRole('button', { name: 'Unlock' }).tap();
     await expect(paywall(page).locator('[data-id="paywall-lead"]')).toHaveText('See the moments that decided the game.');
@@ -373,6 +378,103 @@ test.describe('Chess Coach Pro (paywall build)', () => {
     await expect(paywall(page)).toBeHidden({ timeout: 5_000 });
     await expect(review.locator('.review-moment').first()).toBeVisible();
     await expect(locked).toHaveCount(0);
+    await expect(review.locator('[data-id="try-again"]').first()).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test('threat alerts, "Show me" and the game viewer’s comments are Pro; the question and the replay are free', async ({ page }) => {
+    test.setTimeout(150_000);
+    const errors = await open(page);
+    // The New game sheet: Threat alerts shows the lock, opens the paywall and stays off (the note
+    // does not count it).
+    const sheet = page.getByRole('dialog', { name: 'New game' });
+    const sw = sheet.locator('.toggle[data-id="threatAlerts"]');
+    await sw.scrollIntoViewIfNeeded();
+    await expect(sw).toHaveAttribute('aria-checked', 'false');
+    await expect(sw.locator('.toggle-desc')).toHaveText('Part of Chess Coach Pro');
+    await sw.tap();
+    await expect(paywall(page).locator('[data-id="paywall-lead"]')).toHaveText('Threat alerts are part of Pro.');
+    await paywall(page).getByRole('button', { name: 'Close' }).tap();
+    await expect(paywall(page)).toBeHidden();
+    await expect(sw).toHaveAttribute('aria-checked', 'false');
+    await expect(sheet.locator('[data-id="unrated-note"]')).not.toHaveAttribute('data-warn', '');
+
+    // With the opponent's moves rated, its blunder (a line it follows: 1.e4 e5 2.Nf3 Qh4??) asks
+    // for the punishment for free; "Show me" (the move) is Pro.
+    await page.evaluate(() => {
+      const c = (window as unknown as Win).__chessCoach.controller;
+      const s = { ...c.store.settings.value, playerColor: 'w', botId: 'pip', botElo: 100, adaptive: false, coach: true, sound: false };
+      c.newGame(
+        { ...s, rateOpponent: true, threatAlerts: true },
+        { opening: { lineId: 'test:queen-blunder', mode: 'steer', moves: ['e2e4', 'e7e5', 'g1f3', 'd8h4'], name: 'Queen blunder' } },
+      );
+    });
+    await expect(sheet).toBeHidden({ timeout: 30_000 });
+    for (const [from, to] of [
+      ['e2', 'e4'],
+      ['g1', 'f3'],
+    ]) {
+      await waitForMyTurn(page);
+      const n = await page.evaluate(() => (window as unknown as Win).__chessCoach.controller.store.plies.value.length);
+      await tapSquare(page, from);
+      await tapSquare(page, to);
+      await page.waitForFunction((k) => (window as unknown as Win).__chessCoach.controller.store.plies.value.length >= k + 2, n, {
+        timeout: 30_000,
+      });
+    }
+    expect(await page.evaluate(() => (window as unknown as Win).__chessCoach.controller.store.plies.value.map((p) => p.san))).toEqual([
+      'e4',
+      'e5',
+      'Nf3',
+      'Qh4',
+    ]);
+    await expect(coach(page).locator('.coach-body')).toContainText('Pip blundered — can you punish it?', { timeout: 30_000 });
+    const showMe = coach(page).locator('[data-action="showPunishment"]');
+    await expect(showMe).toHaveAttribute('data-locked', '');
+    await showMe.tap();
+    await expect(paywall(page).locator('[data-id="paywall-lead"]')).toHaveText('Show best is part of Pro.');
+    await paywall(page).getByRole('button', { name: 'Close' }).tap();
+    await expect(paywall(page)).toBeHidden();
+    await expect(coach(page)).not.toContainText('Nxh4');
+    // The locked setting was dropped: no threat alert (and no lock to get round).
+    await expect(coach(page).locator('.coach-alert')).toHaveCount(0);
+
+    // The Menu: the same lock on Threat alerts.
+    const menu = await openMenu(page);
+    const msw = menu.locator('.toggle[data-id="threatAlerts"]');
+    await expect(msw).toHaveAttribute('aria-checked', 'false');
+    await expect(msw.locator('.toggle-desc')).toHaveText('Part of Chess Coach Pro');
+    await msw.tap();
+    await expect(paywall(page).locator('[data-id="paywall-lead"]')).toHaveText('Threat alerts are part of Pro.');
+    await paywall(page).getByRole('button', { name: 'Close' }).tap();
+    await expect(paywall(page)).toBeHidden();
+    await expect(msw).toHaveAttribute('aria-checked', 'false');
+
+    // Resign, then the game from Recent games: the replay and the verdicts are free; the comment
+    // shows the teaser with Unlock, and the review's key moments (and Try again) are locked.
+    await menu.locator('.menu-tile[data-id="resign"]').tap();
+    await menu.locator('[data-id="resign-confirm"]').tap();
+    const over = page.getByRole('dialog', { name: 'You lost You resigned' });
+    await expect(over).toBeVisible();
+    await expect(over.locator('[data-id="gos-try-again"]')).toHaveCount(0);
+    await over.getByRole('button', { name: 'Close' }).first().tap();
+    const menu2 = await openMenu(page);
+    const row = menu2.locator('[data-id="recent-game"]').first();
+    await row.scrollIntoViewIfNeeded();
+    await row.tap();
+    const viewer = page.locator('[data-id="game-viewer"]');
+    await expect(viewer).toBeVisible();
+    await expect(viewer.locator('.coach-title')).toHaveText(/^Pip’s 2… Qh4 is a blunder/);
+    await expect(viewer.locator('.coach-line').first()).toHaveText(TEASER);
+    await expect(viewer.locator('.mlist-move')).toHaveCount(4);
+    await viewer.locator('.coach [data-action="unlock"]').tap();
+    await expect(paywall(page).locator('[data-id="paywall-lead"]')).toHaveText('See the moments that decided the game.');
+    await paywall(page).getByRole('button', { name: 'Close' }).tap();
+    await expect(paywall(page)).toBeHidden();
+    await viewer.locator('.toolbar-btn[data-id="viewerReview"]').tap();
+    await expect(viewer.locator('[data-id="review-locked"]')).toBeVisible();
+    await expect(viewer.locator('[data-id="try-again"]')).toHaveCount(0);
+    await expect(viewer.locator('.cg-shapes line')).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 

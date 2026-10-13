@@ -639,7 +639,7 @@ describe('annotations and coach', () => {
     expect(store.plies.value).toHaveLength(4);
     expect(store.game.value?.assisted).toBe(true);
     expect(store.bottomPlayer.value.unrated).toBe(true);
-    expect(store.coach.value.title).toBe('Try again');
+    expect(store.coach.value.title).toBe('Retry');
     expect(store.coach.value.lines.some((l) => mentionsMove(l, best))).toBe(false);
     expect(store.humanToMove.value).toBe(true);
     bot.release();
@@ -926,6 +926,8 @@ describe('review and PGN', () => {
       label: '3.',
       color: 'w',
       text: blunder.explanation!.headline,
+      // Your blunder: Game Review offers to try it again (game/practice.ts).
+      tryAgain: true,
     });
     const record = loadProfile(storage).history[0];
     expect(record.accuracy).toBe(Math.round(review.accuracy.w! * 10) / 10);
@@ -934,6 +936,11 @@ describe('review and PGN', () => {
     expect(store.coach.value.kind).toBe('review');
     expect(store.coach.value.title).toContain('3. Qxf7+');
     expect(store.board.value.badge?.square).toBe('f7');
+    // A blunder that can be tried again: its better move (and arrow) waits for Show best (or the try).
+    expect(store.board.value.arrows ?? []).toEqual([]);
+    controller.runAction('showBest');
+    controller.goTo(4);
+    controller.goTo(5);
     expect(store.board.value.arrows?.[0]?.brush).toBe('best');
     expect(store.moveList.value.iconSet).toBe('all');
     controller.exitReview();
@@ -1426,7 +1433,7 @@ describe('restore', () => {
       first.controller.runAction('retry');
       expect(first.store.plies.value).toHaveLength(4);
       const tryAgain = first.store.coach.value;
-      expect(tryAgain.title).toBe('Try again');
+      expect(tryAgain.title).toBe('Retry');
       expect(tryAgain.lines[0]).toBe('Find a better move than Qxf7+.');
       if (withHint) {
         await first.controller.hint();
@@ -1445,7 +1452,7 @@ describe('restore', () => {
         await vi.waitFor(() => expect(s.coach.value.busy).toBe(false));
         second.controller.dismissHint();
       }
-      expect(s.coach.value.title).toBe('Try again');
+      expect(s.coach.value.title).toBe('Retry');
       expect(s.coach.value.lines).toEqual(tryAgain.lines);
       expect(s.coach.value.actions).toEqual([]);
       // The next move replaces it (and it is no longer saved).

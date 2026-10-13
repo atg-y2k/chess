@@ -6,11 +6,12 @@
  * methods below. Every async continuation (bot move, annotation, hint, review) is guarded by the
  * game id plus an epoch/ply token, so undo, new game or resign can never apply stale results.
  */
-import { batch } from '@preact/signals';
+import { batch, computed, type ReadonlySignal } from '@preact/signals';
 import { Chess, type Move } from 'chess.js';
 import { classifyMove, nearBestRecheck, type ClassifyMoveInput } from '../analysis/classify';
 import { cutAtRepetition, explainBestMove, explainMove, type PrevMove } from '../analysis/explain';
 import { ALTERNATIVES_SUFFIX, alternativesSentence, equalAlternatives } from '../analysis/nearEqual';
+import { probeThreat, type ThreatAlert } from '../analysis/threat';
 import type { Classification, Explanation } from '../analysis/types';
 import { resultScore, scoreToWin } from '../analysis/winprob';
 import { BotPlayer } from '../bot/BotPlayer';
@@ -28,6 +29,7 @@ import {
   pvToSan,
   repetitionReplies,
   seenPositions,
+  sideToMove,
   toWhitePov,
   uciToSan,
   withPosition,
@@ -53,7 +55,16 @@ import {
   updateGameRecord,
 } from '../rating/rating';
 import type { GameRecord } from '../rating/types';
-import { answerFreeLines, mentionsMove, nearBestShowLines, repetitionExplanation } from './coach';
+import {
+  PUNISH_CLASSES,
+  answerFreeLines,
+  mentionsMove,
+  moveLabel,
+  namesMove,
+  nearBestShowLines,
+  punishmentOf,
+  repetitionExplanation,
+} from './coach';
 import { NO_DRAWINGS, clearOn, drawOn, positionKey, type DrawColor, type UserShape } from './drawings';
 import { getEntitlements, type Entitlements, type ProFeature } from './entitlements';
 import {
@@ -85,8 +96,28 @@ import {
   type SavedGame,
   type SavedResult,
 } from './persistence';
+import { archivePgn, archivedGame, encodeAnalysis, mergeAnalysis, recordBot, sameAnalysis, type ArchivedGame } from './archive';
 import { lineProgress, studyOpeningLine, type OpeningTarget } from './opening';
 import { buildPgn, type PgnPlayer } from './pgn';
+import {
+  answerMove,
+  attemptFailed,
+  canTryAgain,
+  judgeAttempt,
+  moreHint,
+  nextMoment,
+  playAttempt,
+  practicePly,
+  revealAnswer,
+  startPractice,
+  tryKey,
+  withAnswer,
+  type Practice,
+  type PracticeAnswer,
+  type PracticeAttempt,
+  type PracticeGame,
+  type PracticeRating,
+} from './practice';
 import { emptyCounts, summarizeGame } from './review';
 import { playSound, setSoundEnabled, soundForSan, type SoundKind } from './sound';
 import {
@@ -95,6 +126,7 @@ import {
   createState,
   createStore,
   personaForSettings,
+  practiceGameLabel,
   uciArrow,
   whiteScore,
   type CoachActionId,
@@ -102,12 +134,27 @@ import {
   type CoachSubject,
   type ExplorerActionId,
   type GameInfo,
+  type GamePractice,
   type PendingAssist,
   type ReadonlyStore,
   type SheetName,
   type Store,
 } from './store';
-import type { Color, GameOutcome, GameSettings, Ply, PromotionPiece } from './types';
+import type { Color, GameOutcome, GameSettings, Ply, PromotionPiece, Punishment } from './types';
+import {
+  briefPlyShown,
+  openViewer,
+  viewerAnalyzed,
+  viewerFen,
+  viewerGoTo as viewerAt,
+  viewerPracticeGame,
+  viewerSummary,
+  viewerView,
+  withAnalyzedPly,
+  type GameViewer,
+  type ViewerActionId,
+  type ViewerView,
+} from './viewer';
 
 /** Depth of the per-ply annotations (and hints, Show best and the review), within ANNOTATE_NODES. */
 export const ANNOTATE_DEPTH = 14;
@@ -439,6 +486,33 @@ export class GameController {
   private unwatchPaywall: () => void;
   /** Bumped by every game start, so an opening game still waiting for its data never replaces a newer game. */
   private startTicket = 0;
+  /**
+   * Threat alerts: the probes' results for this game's positions (by `fenKey`; null = no threat), the
+   * probes in flight (by `fenKey`, withdrawn when the position is no longer the live one on the
+   * player's turn) and their tasks (`idle()` waits for them).
+   */
+  private readonly threats = new Map<string, ThreatAlert | null>();
+  private readonly threatProbes = new Map<string, { ctl: AbortController; task: Promise<void> }>();
+  /**
+   * Try again (see `tryAgain`): bumped for every try, so late analyses of another one are dropped;
+   * the abort withdraws the try's analysis requests when it ends; the tasks (the answer's analysis,
+   * an attempt's check) are what `idle()` waits for.
+   */
+  private practiceSession = 0;
+  private practiceAbort: AbortController | null = null;
+  private readonly practiceTasks = new Set<Promise<void>>();
+  /**
+   * The game viewer (see `openGame`): bumped for every game opened, so late analyses of another one
+   * are dropped; the abort withdraws its analysis requests when it closes; the analysis task.
+   */
+  private viewerSession = 0;
+  private viewerAbort: AbortController | null = null;
+  private viewerTask: Promise<void> | null = null;
+  /** The comment being written again for the move shown (`kickViewerExplain`): its abort and task. */
+  private viewerExplainAbort: AbortController | null = null;
+  private viewerExplainTask: Promise<void> | null = null;
+  /** The game viewer's view model (game/viewer.ts `viewerView`; null while it is closed). */
+  readonly viewerView: ReadonlySignal<ViewerView | null>;
 
   constructor(deps: ControllerDeps = {}) {
     this.storage = deps.storage;
@@ -461,6 +535,17 @@ export class GameController {
       }),
     );
     this.store = this.s;
+    this.viewerView = computed(() => {
+      const v = this.s.viewer.value;
+      if (!v) return null;
+      return viewerView(v, {
+        locked: this.s.locked.value,
+        drawColor: this.s.drawColor.value,
+        ratedGame: this.ratedGameInProgress(),
+        gameInProgress: this.gameToAbandon(),
+        revealed: this.s.revealedTries.value,
+      });
+    });
     this.unwatchLocks = this.entitlements.locked.subscribe((locked) => this.onLocksChanged(locked));
     this.unwatchOpenings = openingsOpen.subscribe((open) => {
       if (open) this.exitDraw();
@@ -477,7 +562,7 @@ export class GameController {
    */
   private onOpeningsClosed(): void {
     const s = this.s;
-    if (!this.deferredGameOver || s.explorer.value) return;
+    if (!this.deferredGameOver || s.explorer.value || s.practice.value || s.viewer.value) return;
     this.deferredGameOver = false;
     if (s.outcome.value && s.phase.value === 'over') s.sheet.value = 'gameOver';
   }
@@ -495,20 +580,29 @@ export class GameController {
       s.settings.value = next;
       saveSettings(next, this.storage);
     }
+    // Threat alerts too (a later purchase does not switch them on in the middle of a rated game).
+    if (locked.has('threatAlerts') && s.settings.value.threatAlerts) {
+      const next = { ...s.settings.value, threatAlerts: false };
+      s.settings.value = next;
+      saveSettings(next, this.storage);
+    }
     const m = s.coachMode.value;
     if (m.kind === 'hint' && locked.has('hint')) this.dismissHint();
     else if (m.kind === 'showBest' && locked.has('showBest')) this.backFromShowBest();
-    // A question about help that is now locked (the explorer's engine, a hint) has no answer left:
-    // it goes, and a bot reply it held goes ahead.
+    // A question about help that is now locked (the explorer's engine, a hint, threat alerts) has no
+    // answer left: it goes, and a bot reply it held goes ahead.
     const asked = s.pendingAssist.value?.kind;
     if (
       (asked === 'exploreEngine' && (locked.has('explorerEngine') || locked.has('explorer'))) ||
-      (asked === 'hint' && locked.has('hint'))
+      (asked === 'hint' && locked.has('hint')) ||
+      (asked === 'threatAlerts' && locked.has('threatAlerts'))
     ) {
       this.closeSheet();
     }
     if (locked.has('explorer')) this.exitExplorer();
     else if (locked.has('explorerEngine')) this.setExplorerEngine(false);
+    // Try again is part of Game Review's details: a refund ends it.
+    if (locked.has('reviewDetails')) this.exitPractice();
     this.updateWatch();
   }
 
@@ -638,6 +732,9 @@ export class GameController {
   private teardown(): void {
     this.abortBot();
     this.dropExplorer();
+    this.dropPractice();
+    this.dropViewer();
+    this.resetThreats();
     this.epoch++;
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -663,6 +760,8 @@ export class GameController {
     this.save();
     this.abortBot();
     this.dropExplorer();
+    this.dropPractice();
+    this.dropViewer();
     this.exitDraw();
     this.epoch++;
     batch(() => {
@@ -720,15 +819,25 @@ export class GameController {
     if (saved.opening && !target) console.warn('[game] the saved opening line is unknown; the game goes on without it', saved.opening.lineId);
     if (target) game.opening = target;
     if (saved.preplayed) game.preplayed = Math.min(saved.preplayed, plies.length);
+    if (saved.practice) game.practice = { from: saved.practice.from, ...(saved.practice.after ? { after: true } : {}) };
     const startEval = (saved as SavedGame & { startEval?: unknown }).startEval;
     const over = saved.over ?? null;
+    // Another game on the board (finished, or recorded as abandoned) keeps the verdicts it has so far.
+    if (s.game.value && s.game.value.id !== game.id) this.recordAnalysis({ partial: true });
     this.chess = chess;
     this.epoch++;
     this.clearFailed();
     this.dropExplorer();
+    this.dropPractice();
+    this.dropViewer();
     this.exitDraw();
-    // Another game's drawings go (the same game again, after an engine failure, keeps them).
-    if (s.game.value?.id !== game.id) s.drawings.value = NO_DRAWINGS;
+    // Another game's drawings go (the same game again, after an engine failure, keeps them), and so
+    // do its threat alerts and a punishment shown.
+    if (s.game.value?.id !== game.id) {
+      s.drawings.value = NO_DRAWINGS;
+      s.punishReveal.value = null;
+    }
+    this.resetThreats();
     this.bot = this.makeBot(game.id);
     this.botReady = this.bot.newGame(game.botElo).catch((e: unknown) => console.warn('[game] bot newGame failed', e));
     this.analysis?.watch(null);
@@ -793,6 +902,7 @@ export class GameController {
   newGame(settings: GameSettings, opts: NewGameOptions = {}): Promise<void> {
     const next = { ...settings };
     if (next.showBestMoves && !this.entitlements.isAllowed('bestMoveArrows')) next.showBestMoves = false;
+    if (next.threatAlerts && !this.entitlements.isAllowed('threatAlerts')) next.threatAlerts = false;
     // Opening practice picks its own side and opponent (the Openings section's Play sheet): the
     // player's New game choices (colour, opponent, Match my rating) stay the defaults.
     const prev = this.s.settings.value;
@@ -845,6 +955,7 @@ export class GameController {
       },
       g.startFen,
       g.opening,
+      g.practice,
     );
   }
 
@@ -885,7 +996,11 @@ export class GameController {
     this.applyLevel(level);
   }
 
-  private startGame(settings: GameSettings, startFen = START_FEN, opening?: OpeningTarget): void {
+  /**
+   * `practice`: "Play on from here" (see `practicePlayOn`), a game from a position of an earlier game,
+   * unrated from the start.
+   */
+  private startGame(settings: GameSettings, startFen = START_FEN, opening?: OpeningTarget, practice?: GamePractice): void {
     if (!this.analysis || !this.engines) return;
     this.startTicket++;
     if (opening) startFen = START_FEN; // catalog lines start from the initial position
@@ -905,14 +1020,19 @@ export class GameController {
     const level = s.pendingLevel.peek();
     const bot = personaForSettings(settings, level === null ? s.profile.value : withStartingRating(s.profile.value, level));
     this.abandonCurrent();
+    // The game leaving the board keeps the verdicts its moves have so far (the rest are not checked now).
+    this.recordAnalysis({ partial: true });
     this.applyPendingLevel();
     this.abortBot();
     this.dropExplorer();
+    this.dropPractice();
+    this.dropViewer();
     this.exitDraw();
     this.analysis.cancelAll();
     // Forget the live target: a new game on the position already watched (a new game or rematch
     // before the first move) must emit its analysis again, or the eval bar and arrows stay blank.
     this.analysis.watch(null);
+    this.resetThreats();
     this.epoch++;
     this.clearFailed();
     const playerColor: Color =
@@ -925,12 +1045,18 @@ export class GameController {
       bot,
       botElo: bot.elo,
       startedAt: new Date(this.now()).toISOString(),
-      // Best-move arrows and the opponent's move ratings are live help, and in opening practice the
-      // computer's first moves are scripted: unrated from the start.
+      // Best-move arrows, the opponent's move ratings and threat alerts are live help, in opening
+      // practice the computer's first moves are scripted, and Play on from here starts from a
+      // position the player chose: unrated from the start.
       assisted:
-        (settings.showBestMoves && this.entitlements.isAllowed('bestMoveArrows')) || settings.rateOpponent || !!opening,
+        (settings.showBestMoves && this.entitlements.isAllowed('bestMoveArrows')) ||
+        settings.rateOpponent ||
+        (settings.threatAlerts && this.entitlements.isAllowed('threatAlerts')) ||
+        !!opening ||
+        !!practice,
       settings: { ...settings },
       ...(opening ? { opening } : {}),
+      ...(practice ? { practice: { from: practice.from, ...(practice.after ? { after: true } : {}) } } : {}),
     };
     // Opening practice 'skip': the line's moves are on the board from the start, as book moves.
     const plies: Ply[] = [];
@@ -965,6 +1091,7 @@ export class GameController {
       s.game.value = game;
       s.plies.value = plies;
       s.drawings.value = NO_DRAWINGS;
+      s.punishReveal.value = null;
       s.startEval.value = null;
       s.viewIndex.value = null;
       s.flipped.value = false;
@@ -1019,7 +1146,14 @@ export class GameController {
    */
   playerMove(from: string, to: string, promotion?: PromotionPiece): boolean {
     const s = this.s;
-    if (!s.game.value || !s.humanToMove.value || !s.isLive.value || s.coachMode.value.kind === 'showBest' || s.explorer.value) {
+    if (
+      !s.game.value ||
+      !s.humanToMove.value ||
+      !s.isLive.value ||
+      s.coachMode.value.kind === 'showBest' ||
+      s.explorer.value ||
+      s.practice.value
+    ) {
       return false;
     }
     let mv: Move;
@@ -1192,10 +1326,11 @@ export class GameController {
     const record = this.recordResult(g, outcome, (opts.rated ?? true) && !g.assisted);
     // "Set my level" during the game: the game counted at its own rating, the level starts now.
     this.applyPendingLevel();
-    // Ended by the bot's move while the player explores (the explorer says so) or while the
-    // Openings section covers the game: the game-over sheet waits until it closes, and Draw mode
-    // stays on there (the explorer carries on undisturbed; leaving it ends Draw mode).
-    const deferred = !!s.explorer.value || openingsOpen.peek();
+    // Ended by the bot's move while the player explores (the explorer says so), tries an earlier
+    // game's move again, or while the Openings section or the game viewer covers the game: the
+    // game-over sheet waits until it closes, and Draw mode stays on there (the explorer carries on
+    // undisturbed; leaving it ends Draw mode).
+    const deferred = !!s.explorer.value || openingsOpen.peek() || !!s.practice.value || !!s.viewer.value;
     if (deferred) this.deferredGameOver = true;
     else this.exitDraw();
     batch(() => {
@@ -1217,31 +1352,78 @@ export class GameController {
     this.save();
     this.sound.play('gameEnd');
     this.updateWatch();
-    this.recordAccuracy();
+    this.recordAnalysis();
   }
 
   /**
-   * Saves the player's accuracy in the finished game's record (Recent games) once every move is
-   * checked, also without a Game Review (the review saves it too).
+   * Once every move of the finished game is checked (or could not be), saves what the history keeps
+   * of it in its record: the player's accuracy (Recent games), also without a Game Review, and the
+   * coach's analysis in its compact form (game/archive.ts), for the game viewer's replay, review and
+   * Try again later. Saved again when it changes (the review retries the moves that failed; the
+   * accuracy follows once every move has its verdict).
+   *
+   * `partial`: the game is about to leave the board (a new game, a rematch, Play on) before every
+   * move was checked: what is known is kept ('-' for the rest, which the viewer's Review fills in),
+   * also for a game just abandoned, without its accuracy. A known verdict in the record is never
+   * replaced by an unknown one (`mergeAnalysis`).
    */
-  private recordAccuracy(): void {
+  private recordAnalysis(opts: { partial?: boolean } = {}): void {
     const s = this.s;
     const g = s.game.value;
-    if (!g || !s.outcome.value) return;
+    if (!g || (!s.outcome.value && !opts.partial)) return;
     const record = s.profile.value.history.find((r) => r.id === g.id);
-    if (!record || record.accuracy !== undefined) return;
+    if (!record) return;
     const pre = preplayedOf(g);
     const failed = s.failedAnnotations.value;
     const own = s.plies.value.slice(pre);
-    if (!own.some((p) => p.color === g.playerColor)) return;
-    if (!own.every((p) => isSettled(p, pre) || failed.has(annotationKey(g.id, p)))) return;
-    const acc = this.summary(g).accuracy[g.playerColor];
-    if (acc === null) return;
-    const profile = updateGameRecord(s.profile.value, g.id, { accuracy: Math.round(acc * 10) / 10 });
+    const settled = own.every((p) => isSettled(p, pre) || failed.has(annotationKey(g.id, p)));
+    if (!settled && !opts.partial) return;
+    const patch: Partial<Pick<GameRecord, 'accuracy' | 'analysis'>> = {};
+    if (settled && own.some((p) => p.color === g.playerColor)) {
+      // Once every move has its verdict the accuracy is final (also when an earlier save had to do
+      // without the moves that failed); until then a first figure is kept, never replaced.
+      const complete = own.every((p) => isSettled(p, pre));
+      const acc = this.summary(g).accuracy[g.playerColor];
+      const rounded = acc !== null ? Math.round(acc * 10) / 10 : null;
+      if (rounded !== null && (record.accuracy === undefined || (complete && record.accuracy !== rounded))) patch.accuracy = rounded;
+    }
+    const known = opts.partial ? s.plies.value.some((p) => p.classification) : s.plies.value.length > 0;
+    if (known) {
+      const encoded = encodeAnalysis(s.plies.value, s.startEval.value, { playerColor: g.playerColor, preplayed: pre });
+      const analysis = mergeAnalysis(record.analysis, encoded);
+      if (!sameAnalysis(record.analysis, analysis)) patch.analysis = analysis;
+    }
+    if (!Object.keys(patch).length) return;
+    const profile = updateGameRecord(s.profile.value, g.id, patch);
     if (profile !== s.profile.value) {
       s.profile.value = profile;
       saveProfile(profile, this.storage);
     }
+  }
+
+  /**
+   * The game viewer shows the game on the board (it ended, and its record was opened): the moves'
+   * verdicts that landed since it opened join the viewer's copy, so it never shows (or saves) less
+   * than the board knows.
+   */
+  private syncBoardViewer(): void {
+    const s = this.s;
+    const v = s.viewer.value;
+    const g = s.game.value;
+    if (!v?.game || !g || v.id !== g.id || !s.outcome.value) return;
+    const board = s.plies.value;
+    const mine = v.game.plies;
+    if (board.length !== mine.length) return;
+    let changed = false;
+    const plies = mine.map((p, i) => {
+      const b = board[i];
+      if (b.uci !== p.uci || (p.classification && p.evalWhite) || (!b.classification && !b.evalWhite)) return p;
+      changed = true;
+      return { ...p, ...b };
+    });
+    const startEval = v.game.startEval ?? s.startEval.value;
+    if (!changed && startEval === v.game.startEval) return;
+    this.setViewer({ ...v, game: { ...v.game, plies, startEval } });
   }
 
   /** Adds the game's result to the profile (rating + history, once per game id) and saves it. */
@@ -1258,6 +1440,8 @@ export class GameController {
       rated,
       reason: outcome.reason,
       pgn: this.pgnText(outcome, false),
+      botId: g.bot.id,
+      ...(g.preplayed ? { preplayed: g.preplayed } : {}),
     });
     if (profile !== s.profile.value) {
       saveProfile(profile, this.storage);
@@ -1418,6 +1602,8 @@ export class GameController {
       });
       explanation = { ...e, arrows: e.arrows?.length ? e.arrows : uciArrow(line.pv[0], 'best') };
       this.markAssisted();
+      // The hint names the best move: the punishment of the opponent's mistake, if one was asked for.
+      this.revealPunishment();
     } else {
       explanation = { headline: 'No hint is available for this position.', details: [] };
     }
@@ -1427,7 +1613,7 @@ export class GameController {
 
   private canHint(): boolean {
     const s = this.s;
-    return !!s.game.value && s.humanToMove.value && s.isLive.value && s.coachMode.value.kind !== 'showBest';
+    return !!s.game.value && s.humanToMove.value && s.isLive.value && s.coachMode.value.kind !== 'showBest' && !s.practice.value;
   }
 
   /**
@@ -1441,17 +1627,17 @@ export class GameController {
 
   /** Toolbar Undo (asks first in a rated game, see `requestAssist`). */
   requestUndo(): void {
-    if (this.undoTarget() !== null) this.requestAssist({ kind: 'undo' });
+    if (this.undoTarget() !== null && !this.s.practice.value) this.requestAssist({ kind: 'undo' });
   }
 
   /**
-   * A hint, takeback, Retry, the engine in the explorer or rating the opponent's moves makes a
-   * rated game unrated, so the first one in a rated game opens the 'assist' sheet to confirm
+   * A hint, takeback, Retry, the engine in the explorer, rating the opponent's moves or threat
+   * alerts make a rated game unrated, so the first one in a rated game opens the 'assist' sheet to confirm
    * (`confirmAssist()` runs it, `closeSheet()` cancels). In an unrated game it runs at once. While
    * a takeback (Undo, Retry) waits for the answer, the bot's reply is put on hold, as an unrated
    * takeback cancels it at once: otherwise a reply that ends the game would drop the takeback and
-   * record the rated loss the player was taking back. (The explorer's engine and the opponent's
-   * ratings can be asked for on the bot's turn: the bot goes on thinking meanwhile.) The question
+   * record the rated loss the player was taking back. (The explorer's engine, the opponent's
+   * ratings and threat alerts can be asked for on the bot's turn: the bot goes on thinking meanwhile.) The question
    * is dropped when the game ends, a new game starts or, for the explorer's engine, the explorer
    * closes.
    */
@@ -1494,6 +1680,11 @@ export class GameController {
     } else if (a.kind === 'rateOpponent') {
       this.markAssisted(); // first, so setSettings does not ask again
       this.setSettings({ rateOpponent: true });
+    } else if (a.kind === 'threatAlerts') {
+      // Locked meanwhile (a refund): the paywall, and the game stays rated.
+      if (!this.entitlements.requirePro('threatAlerts')) return;
+      this.markAssisted();
+      this.setSettings({ threatAlerts: true });
     } else if (a.index !== undefined) this.retryMove(a.index);
   }
 
@@ -1528,7 +1719,11 @@ export class GameController {
         const index =
           s.coach.value.index ??
           (s.phase.value === 'playing' && s.isLive.value && m.kind === 'feedback' ? m.index : s.current.value - 1);
-        if (index >= 0) this.showBest(index);
+        if (index >= 0) {
+          this.showBest(index);
+          // After the game: a weak move that can be tried again now shows its answer (Game Review).
+          if (s.phase.value !== 'playing' && s.game.value) this.revealTry(s.game.value.id, index);
+        }
         return;
       }
       case 'retry': {
@@ -1536,6 +1731,10 @@ export class GameController {
         if (index >= 0 && this.canRetry(index)) this.requestAssist({ kind: 'retry', index });
         return;
       }
+      case 'showPunishment':
+        // "Show me": the punishment of the opponent's mistake (the best move here), which is Pro's Show best.
+        if (this.entitlements.requirePro('showBest')) this.revealPunishment();
+        return;
       case 'retryAnalysis':
         this.clearFailed();
         if (s.phase.value === 'review') void this.startReview();
@@ -1559,6 +1758,27 @@ export class GameController {
         return;
       case 'retryBoot':
         void this.retry();
+        return;
+      case 'tryAgain': {
+        // Game Review's coach on one of your weak moves: try it again.
+        const index = s.coach.value.index;
+        if (index !== undefined) this.tryAgain(index);
+        return;
+      }
+      case 'practiceHint':
+        this.practiceHint();
+        return;
+      case 'practiceAnswer':
+        this.practiceShowAnswer();
+        return;
+      case 'practiceNext':
+        this.practiceNext();
+        return;
+      case 'practicePlayOn':
+        this.practicePlayOn();
+        return;
+      case 'practiceExit':
+        this.exitPractice();
         return;
       case 'opening': {
         // Opening practice's banner: the line in the Openings section (the game stays as it is), at
@@ -1763,8 +1983,9 @@ export class GameController {
   /**
    * Changes settings (persisted). Applies sound on/off; switching best-move arrows on during a
    * game marks it assisted (while they are locked, Pro, it opens the paywall instead). Switching
-   * the opponent's move ratings on in a rated game in progress asks first (the 'assist' sheet,
-   * see `requestAssist`); confirming switches them on and makes the game unrated.
+   * the opponent's move ratings or threat alerts on in a rated game in progress asks first (the
+   * 'assist' sheet, see `requestAssist`); confirming switches them on and makes the game unrated.
+   * While threat alerts are locked (Pro), switching them on opens the paywall instead.
    */
   setSettings(partial: Partial<GameSettings>): void {
     const s = this.s;
@@ -1780,6 +2001,16 @@ export class GameController {
       if (!Object.keys(rest).length) return;
       partial = rest;
     }
+    if (partial.threatAlerts && !prev.threatAlerts) {
+      // Pro (the paywall instead), and help: in a rated game in progress it asks first.
+      const locked = !this.entitlements.requirePro('threatAlerts');
+      if (locked || this.ratedGameInProgress()) {
+        const { threatAlerts: _asked, ...rest } = partial;
+        if (!locked) this.requestAssist({ kind: 'threatAlerts' });
+        if (!Object.keys(rest).length) return;
+        partial = rest;
+      }
+    }
     const next: GameSettings = { ...prev, ...partial };
     s.settings.value = next;
     saveSettings(next, this.storage);
@@ -1787,6 +2018,7 @@ export class GameController {
     if (next.coach !== prev.coach || next.rateOpponent !== prev.rateOpponent) s.coachCollapsed.value = null;
     if (next.showBestMoves && !prev.showBestMoves) this.markAssisted();
     if (next.rateOpponent && !prev.rateOpponent) this.markAssisted();
+    if (next.threatAlerts && !prev.threatAlerts) this.markAssisted();
     this.updateWatch();
   }
 
@@ -1818,8 +2050,13 @@ export class GameController {
     this.s.coachCollapsed.value = !this.s.coach.value.collapsed;
   }
 
-  /** Flips the board (the player strips swap too). */
+  /** Flips the board (the player strips swap too). During Try again, only the try's board turns. */
   flip(): void {
+    const p = this.s.practice.value;
+    if (p) {
+      this.s.practice.value = { ...p, flipped: !p.flipped };
+      return;
+    }
     this.s.flipped.value = !this.s.flipped.value;
   }
 
@@ -1844,6 +2081,376 @@ export class GameController {
       s.sheet.value = back;
     });
     this.requestBotMove();
+  }
+
+  // -----------------------------------------------------------------------------------------------
+  // Threat alerts and the punishment of the opponent's mistakes
+
+  /**
+   * "Show me" (the coach's 'showPunishment', or a hint shown meanwhile): reveals the punishment of
+   * the opponent's latest move while it is still to be found (rated opponent moves: store
+   * `punishView`). It stays revealed for that move, also after a takeback back to it.
+   */
+  private revealPunishment(): void {
+    const s = this.s;
+    const g = s.game.value;
+    const last = s.plies.value.at(-1);
+    if (!g || !last || last.color === g.playerColor) return;
+    s.punishReveal.value = annotationKey(g.id, last);
+  }
+
+  /** Threat alerts are on for the game: the setting, allowed (Pro), and the game unrated (as it always is with them). */
+  private threatAlertsOn(): boolean {
+    const s = this.s;
+    return s.settings.value.threatAlerts && this.entitlements.isAllowed('threatAlerts') && !!s.game.value?.assisted;
+  }
+
+  /**
+   * Threat alerts: probes the live position on the player's turn (analysis/threat.ts, two searches
+   * within THREAT_NODES each, queued before the annotation of the opponent's move), once per position
+   * of the game (the results are kept by position, so a takeback or Retry back to it asks for nothing
+   * new). A probe for a position that is no longer the live one on the player's turn is withdrawn,
+   * and its late result never shows (`store.threat` is checked against the live position too).
+   */
+  private kickThreat(): void {
+    const s = this.s;
+    const svc = this.analysis;
+    const g = s.game.value;
+    const fen = s.liveFen.value;
+    const key = fenKey(fen);
+    const wanted =
+      !!svc && !!g && this.threatAlertsOn() && s.phase.value === 'playing' && !s.outcome.value && sideToMove(fen) === g.playerColor;
+    // Probes for any other position stop holding the engine.
+    for (const [k, p] of this.threatProbes) {
+      if (!wanted || k !== key) {
+        p.ctl.abort();
+        this.threatProbes.delete(k);
+      }
+    }
+    if (!wanted || !svc || !g) return;
+    if (this.threats.has(key)) {
+      const known = this.threats.get(key) ?? null;
+      if (s.threat.peek() !== known) s.threat.value = known;
+      return;
+    }
+    if (this.threatProbes.has(key)) return;
+    const ctl = new AbortController();
+    const task = probeThreat(fen, (f, o) => svc.ensure(f, o), { name: g.bot.name, signal: ctl.signal })
+      .then((alert) => {
+        // Not known (withdrawn, or a search cut short): asked again when the position comes back.
+        if (alert === undefined || ctl.signal.aborted || this.analysis !== svc || s.game.value?.id !== g.id) return;
+        this.threats.set(key, alert);
+        if (fenKey(s.liveFen.value) === key) s.threat.value = alert;
+      })
+      .catch((e: unknown) => console.warn('[game] threat probe failed', e))
+      .finally(() => {
+        if (this.threatProbes.get(key)?.task === task) this.threatProbes.delete(key);
+      });
+    this.threatProbes.set(key, { ctl, task });
+  }
+
+  /** Forgets the threat alerts (a new game, a restore, new engines) and withdraws the probes in flight. */
+  private resetThreats(): void {
+    for (const p of this.threatProbes.values()) p.ctl.abort();
+    this.threatProbes.clear();
+    this.threats.clear();
+    if (this.s.threat.peek()) this.s.threat.value = null;
+  }
+
+  // -----------------------------------------------------------------------------------------------
+  // Try again (Game Review's key moments; see game/practice.ts)
+
+  /**
+   * The game on the board as a game to try moves of again, once it is over (its review, or its
+   * final position); null before.
+   */
+  practiceGame(): PracticeGame | null {
+    const s = this.s;
+    const g = s.game.value;
+    const p = s.phase.value;
+    if (!g || !s.outcome.value || (p !== 'over' && p !== 'review')) return null;
+    return {
+      id: g.id,
+      startFen: g.startFen,
+      playerColor: g.playerColor,
+      bot: g.bot,
+      botElo: g.botElo,
+      plies: s.plies.value,
+      startEval: s.startEval.value,
+      ...(g.preplayed ? { preplayed: g.preplayed } : {}),
+      source: 'current',
+    };
+  }
+
+  /**
+   * "Try again" on one of the player's key moments (an inaccuracy, mistake, miss or blunder: see
+   * practice.ts `practiceMoments`): the board shows the position before that move with the player
+   * to move, and the player looks for a better one (`practiceMove`), with hints (`practiceHint`) and
+   * the answer (`practiceShowAnswer`) at hand; then the next one (`practiceNext`), a new game from
+   * there (`practicePlayOn`) or back (`exitPractice`). `game` is the game on the board by default
+   * (once it is over); an earlier game from the history can be given instead (`source: 'archive'`).
+   * The game and the rating never change. Part of Game Review's details (Pro): the paywall while it
+   * is locked. Returns whether it started.
+   */
+  tryAgain(index: number, game?: PracticeGame): boolean {
+    const s = this.s;
+    const source = game ?? this.practiceGame();
+    if (!source || !this.analysis || s.explorer.value || !canTryAgain(source, index)) return false;
+    // An earlier game's move while a rated game is on: the engine's help waits until it is over.
+    if (source.source === 'archive' && this.ratedGameInProgress()) return false;
+    if (!this.entitlements.requirePro('reviewDetails')) return false;
+    this.exitDraw();
+    this.startTry(source, index);
+    return true;
+  }
+
+  /**
+   * Sets up a try at ply `index` of `game` and asks the engine for the answer (the hints' and Show
+   * answer's move). Its board starts turned as the board it came from (the review's, the viewer's),
+   * or as `flipped` says (Next mistake keeps the try's own).
+   */
+  private startTry(game: PracticeGame, index: number, flipped?: boolean): void {
+    const s = this.s;
+    this.practiceAbort?.abort();
+    this.practiceAbort = new AbortController();
+    const session = ++this.practiceSession;
+    const v = s.viewer.value;
+    const turned = flipped ?? (game.source === 'archive' ? v?.id === game.id && v.flipped : s.flipped.value);
+    s.practice.value = startPractice(game, index, session, turned);
+    this.updateWatch();
+    this.trackPractice(this.findAnswer(session));
+  }
+
+  /**
+   * A move on the board while trying again (Board `onMove`): the move made in the game is "not
+   * quite" at once; any other is checked with the engine (`checkAttempt`): a better one ends the
+   * try, any other is taken back. Returns false (the "illegal" sound) when no move is awaited or it
+   * is illegal.
+   */
+  practiceMove(from: string, to: string, promotion?: PromotionPiece): boolean {
+    const s = this.s;
+    const p = s.practice.value;
+    if (!p) return false;
+    const next = playAttempt(p, from, to, promotion);
+    if (!next) {
+      this.sound.play('illegal');
+      return false;
+    }
+    s.practice.value = next;
+    const a = next.attempt;
+    if (next.status === 'checking' && a) {
+      this.sound.play(soundForSan(a.san));
+      this.trackPractice(this.checkAttempt(next.session, a));
+    } else {
+      this.sound.play('illegal'); // the move made in the game: back it goes
+    }
+    return true;
+  }
+
+  /** One more hint while a move is awaited: the piece to move, then its square. */
+  practiceHint(): void {
+    const s = this.s;
+    const p = s.practice.value;
+    if (!p) return;
+    this.exitDraw();
+    s.practice.value = moreHint(p);
+  }
+
+  /** "Show answer": the engine's best move, with its explanation and the move made in the game. */
+  practiceShowAnswer(): void {
+    const s = this.s;
+    const p = s.practice.value;
+    if (!p) return;
+    this.exitDraw();
+    s.practice.value = revealAnswer(p);
+    this.revealTry(p.game.id, p.index);
+  }
+
+  /**
+   * The better move of a weak move that can be tried again has been shown (Show best, a try found or
+   * answered): from now on its comment names it, with its arrow (Game Review, the game viewer).
+   */
+  private revealTry(gameId: string, index: number): void {
+    const s = this.s;
+    const key = tryKey(gameId, index);
+    if (s.revealedTries.value.has(key)) return;
+    s.revealedTries.value = new Set([...s.revealedTries.value, key]);
+  }
+
+  /** "Next mistake": the next of the game's moves to try again (game order). Returns whether there was one. */
+  practiceNext(): boolean {
+    const p = this.s.practice.value;
+    // The game on the board as it is now (its annotations may have landed since the try began).
+    const game = p?.game.source === 'current' ? (this.practiceGame() ?? p.game) : p?.game;
+    const next = p && game ? nextMoment(game, p.index) : null;
+    if (!p || !game || next === null) return false;
+    this.exitDraw();
+    this.startTry(game, next, p.flipped);
+    return true;
+  }
+
+  /**
+   * "Play on from here": a new game against the same opponent from the position before the move
+   * tried again, the player's side to move, with the player's current options. It is unrated from
+   * the start (and so is its rematch); the New game choices stay as they were, and the earlier game
+   * stays in the history as it was. Never while a game the player has moved in is in progress (it
+   * would count as a loss by abandonment). Returns whether the game started.
+   */
+  practicePlayOn(): boolean {
+    const s = this.s;
+    const p = s.practice.value;
+    if (!p || !this.analysis || !this.engines || this.gameToAbandon()) return false;
+    const ply = practicePly(p);
+    const settings: GameSettings = {
+      ...s.settings.value,
+      playerColor: p.game.playerColor,
+      botId: p.game.bot.id,
+      botElo: p.game.botElo,
+      adaptive: false,
+    };
+    this.startGame(settings, ply.fenBefore, undefined, { from: moveLabel(ply) });
+    return true;
+  }
+
+  /** A game is in progress that the player has moved in (starting another would abandon it). */
+  private gameToAbandon(): boolean {
+    const s = this.s;
+    const g = s.game.value;
+    return !!g && s.phase.value === 'playing' && !s.outcome.value && this.humanMoved(g);
+  }
+
+  /**
+   * Ends the try ("Back to review", Escape, the toolbar's Back): the screen shows what it showed
+   * before (the review as it was, or the game). A game that ended meanwhile (an earlier game's move
+   * tried while one was in progress) shows its game-over sheet now.
+   */
+  exitPractice(): void {
+    const s = this.s;
+    if (!s.practice.value) return;
+    this.exitDraw();
+    this.dropPractice();
+    // Back to the game viewer (an earlier game's try): a game-over waits for the viewer to close.
+    if (this.deferredGameOver && !s.explorer.value && !openingsOpen.peek() && !s.viewer.value) {
+      this.deferredGameOver = false;
+      if (s.outcome.value && s.phase.value === 'over') s.sheet.value = 'gameOver';
+    }
+    this.updateWatch();
+  }
+
+  /** Forgets the try and withdraws its searches (a new game, a restore, the review ending, an engine failure). */
+  private dropPractice(): void {
+    this.practiceSession++;
+    this.practiceAbort?.abort();
+    this.practiceAbort = null;
+    if (this.s.practice.value) this.s.practice.value = null;
+  }
+
+  private trackPractice(task: Promise<void>): void {
+    const t: Promise<void> = task
+      .catch((e: unknown) => console.error('[game] try again failed', e))
+      .finally(() => this.practiceTasks.delete(t));
+    this.practiceTasks.add(t);
+  }
+
+  /**
+   * The engine's best move in the position before the move tried again (depth 14, MultiPV 3, within
+   * ANNOTATE_NODES; the cache answers a position the review analyzed), with what the coach says
+   * about it. Without engine lines (a search that failed), the saved classification's best move.
+   */
+  private async findAnswer(session: number): Promise<void> {
+    const s = this.s;
+    const svc = this.analysis;
+    const p0 = s.practice.value;
+    if (!svc || !p0 || p0.session !== session) return;
+    const ply = practicePly(p0);
+    let r: AnalysisResult | undefined;
+    try {
+      r = await svc.ensure(ply.fenBefore, { ...ANNOTATE, signal: this.practiceAbort?.signal });
+    } catch (e) {
+      console.warn('[game] try again: analysis failed', e);
+    }
+    const p = s.practice.value;
+    if (!p || p.session !== session || this.analysis !== svc) return;
+    const usable = r && !(r.aborted === true && !r.terminal && r.depth < ANNOTATE_DEPTH) ? r : undefined;
+    s.practice.value = withAnswer(p, this.practiceAnswer(p, usable));
+  }
+
+  /** See `findAnswer`. */
+  private practiceAnswer(p: Practice, r: AnalysisResult | undefined): PracticeAnswer | null {
+    const ply = practicePly(p);
+    const uci = answerMove(ply, r?.lines);
+    const san = uci ? uciToSan(ply.fenBefore, uci) : null;
+    if (!uci || !san) return null;
+    const line = r?.lines.find((l) => l.pv[0] === uci);
+    const lines: string[] = [];
+    if (r && line) {
+      const game = p.game;
+      // The game's positions up to this one: engine lines stop at a third repetition.
+      const seen = seenPositions(game.startFen, game.plies, p.index);
+      const prev = p.index > 0 ? game.plies[p.index - 1] : undefined;
+      const e = explainBestMove(ply.fenBefore, line, {
+        prevMove: prev ? prevMoveOf(prev) : undefined,
+        perspective: 'you',
+        lines: r.lines,
+        seen,
+      });
+      const sans = pvToSan(ply.fenBefore, cutAtRepetition(ply.fenBefore, line, seen).pv, 8);
+      const bestLine = sans.length > 1 ? `Best line: ${formatLine(ply.fenBefore, sans)}` : null;
+      lines.push(e.headline, ...(bestLine ? e.details.filter((d) => !LINE_DETAIL.test(d)) : e.details).slice(0, 2));
+      if (bestLine) lines.push(bestLine);
+    } else if (ply.explanation) {
+      // No engine line: what the game's explanation says about the better move ("Best was X, which …").
+      const e = ply.explanation;
+      lines.push(...[e.headline, ...e.details].filter((l) => namesMove(l, san)));
+    }
+    return { uci, san, lines };
+  }
+
+  /**
+   * Checks an attempt like a move of the game (`rateLineMove`: the annotations' searches, the second
+   * opinion, the classification and the explanation for the player), then ends the try when it is
+   * a better move or takes it back (practice.ts `judgeAttempt`). A check that fails takes it back
+   * too, to be tried again. Dropped when the try has moved on meanwhile.
+   */
+  private async checkAttempt(session: number, a: PracticeAttempt): Promise<void> {
+    const s = this.s;
+    const svc = this.analysis;
+    const p0 = s.practice.value;
+    if (!svc || !p0 || p0.session !== session) return;
+    const alive = (): boolean => {
+      const p = s.practice.value;
+      return this.analysis === svc && !!p && p.session === session && p.status === 'checking' && p.attempt?.uci === a.uci;
+    };
+    const { game, index } = p0;
+    const prev = index > 0 ? game.plies[index - 1] : undefined;
+    const r = await this.rateLineMove(svc, {
+      move: a,
+      signal: this.practiceAbort?.signal,
+      alive,
+      context: () => ({
+        startFen: game.startFen,
+        line: [...game.plies.slice(0, index), a],
+        prev,
+        prevWinLoss: prev?.classification?.winLoss,
+        prevBook: index === 0 || prev?.isBook === true,
+        human: true,
+        neutral: false,
+        playerRating: s.profile.value.rating,
+        botName: game.bot.name,
+      }),
+    });
+    if (r === 'stale' || !alive()) return;
+    const p = s.practice.value!;
+    if (r === 'failed') {
+      s.practice.value = attemptFailed(p);
+      return;
+    }
+    const { isBook: _book, ...rating } = r;
+    const next = judgeAttempt(p, rating satisfies PracticeRating);
+    s.practice.value = next;
+    if (next.status === 'solved') this.revealTry(next.game.id, next.index);
+    // A better move: a chime. Any other goes back, with the buzz of a move that does not stand.
+    this.sound.play(next.status === 'solved' ? 'notify' : 'illegal');
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -1922,7 +2529,8 @@ export class GameController {
    */
   goTo(index: number | null): void {
     const s = this.s;
-    if (!s.game.value || s.explorer.value) return; // the explorer keeps the game's view as it was
+    // The explorer and Try again keep the game's view as it was.
+    if (!s.game.value || s.explorer.value || s.practice.value) return;
 
     const n = s.plies.value.length;
     const v = index === null || index >= n ? null : Math.max(0, Math.floor(index));
@@ -1956,7 +2564,7 @@ export class GameController {
 
   /** The "Back to game" chip. */
   backToLive(): void {
-    if (this.s.explorer.value) return;
+    if (this.s.explorer.value || this.s.practice.value) return;
     if (this.s.coachMode.value.kind === 'showBest') this.backFromShowBest();
     this.goTo(null);
   }
@@ -1968,7 +2576,7 @@ export class GameController {
   private canExplore(): boolean {
     const s = this.s;
     const p = s.phase.value;
-    return !!s.game.value && !s.explorer.value && (p === 'playing' || p === 'over' || p === 'review');
+    return !!s.game.value && !s.explorer.value && !s.practice.value && (p === 'playing' || p === 'over' || p === 'review');
   }
 
   /**
@@ -2089,7 +2697,7 @@ export class GameController {
     const v = this.explorerView;
     const ended = !!s.outcome.value && s.outcome.value !== v?.outcome;
     // Under the Openings section, the game-over sheet waits for it too (see `onOpeningsClosed`).
-    const covered = openingsOpen.peek();
+    const covered = openingsOpen.peek() || !!s.viewer.value;
     const gameOver = this.deferredGameOver && !!s.outcome.value && !covered;
     const stillDeferred = this.deferredGameOver && covered;
     this.exitDraw();
@@ -2320,11 +2928,9 @@ export class GameController {
   }
 
   /**
-   * Rates explored move `index` like a game ply (see `annotate`): the positions before and after
-   * it at depth 14 / MultiPV 3 within ANNOTATE_NODES (the analysis cache answers positions seen
-   * before), then `classifyMove` with the previous move (an explored one, or the game's move that
-   * led to the starting position) and `explainMove` from the human's point of view for the
-   * human's color, else neutral.
+   * Rates explored move `index` like a game ply (see `rateLineMove`), with the previous move (an
+   * explored one, or the game's move that led to the starting position), from the human's point of
+   * view for the human's color, else neutral.
    */
   private async rateExplored(session: number, x: Explorer, index: number): Promise<void> {
     const s = this.s;
@@ -2332,7 +2938,6 @@ export class GameController {
     const gameId = s.game.value?.id;
     const m = x.moves[index];
     const path = movePath(x, index);
-    const signal = this.explorerAbort?.signal;
     const alive = (): boolean => {
       const now = s.explorer.value;
       return (
@@ -2343,46 +2948,98 @@ export class GameController {
         movePath(now, index) === path
       );
     };
-    const fail = (): void => {
-      const now = s.explorer.value;
-      if (now && alive()) s.explorer.value = setRating(now, index, path, { failed: true });
-    };
+    const r = await this.rateLineMove(svc, {
+      move: m,
+      signal: this.explorerAbort?.signal,
+      alive,
+      context: () => {
+        const g = s.game.value!;
+        const now = s.explorer.value!;
+        const plies = s.plies.value;
+        const prevExplored = index > 0 ? now.moves[index - 1] : undefined;
+        const prevPly = index === 0 && now.baseIndex > 0 ? plies[now.baseIndex - 1] : undefined;
+        const human = m.color === g.playerColor;
+        return {
+          startFen: g.startFen,
+          line: [...plies.slice(0, now.baseIndex), ...now.moves.slice(0, index + 1)],
+          prev: prevExplored ?? prevPly,
+          prevWinLoss: prevExplored ? prevExplored.rating?.classification.winLoss : prevPly?.classification?.winLoss,
+          prevBook: prevExplored ? prevExplored.rating?.isBook === true : now.baseIndex === 0 || prevPly?.isBook === true,
+          human,
+          // The player makes both sides' moves here: the computer's side is said by its color.
+          neutral: true,
+          playerRating: human ? s.profile.value.rating : g.botElo,
+          botName: g.bot.name,
+        };
+      },
+    });
+    if (r === 'stale') return;
+    const now = s.explorer.value;
+    if (!now || !alive()) return;
+    // The second opinion took a search: other ratings may have landed meanwhile.
+    s.explorer.value = setRating(now, index, path, r === 'failed' ? { failed: true } : { rating: r });
+  }
+
+  /**
+   * The verdict on one move of a line from a game's position, as the annotations give a game's move
+   * (see `annotate`): the positions before and after it at depth 14 / MultiPV 3 within
+   * ANNOTATE_NODES (the analysis cache answers positions seen before), the second opinion when the
+   * near-equal rule needs one, then `classifyMove` with the previous move (its winLoss, for a miss)
+   * and `explainMove` from the player's point of view for `human`, else neutral. A third repetition,
+   * and a move that lets the other side repeat, are a draw (counting the line's positions from
+   * `startFen`). 'failed' when a search failed or was cut short, 'stale' when `alive()` turned false
+   * meanwhile. `context` is read once the searches are done (an earlier rating may have landed
+   * meanwhile). The explorer's ratings and Try again's attempts use it.
+   */
+  private async rateLineMove(
+    svc: AnalysisService,
+    o: {
+      move: Pick<Ply, 'uci' | 'san' | 'color' | 'fenBefore' | 'fenAfter'>;
+      signal?: AbortSignal;
+      alive: () => boolean;
+      context: () => {
+        startFen: string;
+        /** The moves from `startFen`, the rated one last. */
+        line: readonly Pick<Ply, 'fenAfter'>[];
+        prev?: Pick<Ply, 'uci' | 'captured' | 'fenBefore'>;
+        prevWinLoss?: number;
+        /** The line was in the opening book up to the previous move. */
+        prevBook: boolean;
+        human: boolean;
+        /** A draw by repetition said by color, never as the computer's (the explorer). */
+        neutral: boolean;
+        playerRating: number;
+        botName: string;
+      };
+    },
+  ): Promise<(PracticeRating & { isBook: boolean }) | 'failed' | 'stale'> {
+    const m = o.move;
+    const signal = o.signal;
     let before: AnalysisResult;
     let after: AnalysisResult;
     try {
       before = await svc.ensure(m.fenBefore, { ...ANNOTATE, signal });
-      if (!alive()) return;
+      if (!o.alive()) return 'stale';
       after = await svc.ensure(m.fenAfter, { ...ANNOTATE, signal });
     } catch (e) {
-      console.warn('[game] explorer: analysis failed', e);
-      fail();
-      return;
+      console.warn('[game] analysis failed', e);
+      return o.alive() ? 'failed' : 'stale';
     }
-    if (!alive()) return;
+    if (!o.alive()) return 'stale';
     const shallow = (r: AnalysisResult) => r.aborted === true && !r.terminal && r.depth < ANNOTATE_DEPTH;
     const afterScore = resultScore(after);
-    if (shallow(before) || shallow(after) || !before.lines.length || !afterScore) {
-      fail();
-      return;
-    }
+    if (shallow(before) || shallow(after) || !before.lines.length || !afterScore) return 'failed';
     await this.openingsReady;
-    if (!alive()) return;
+    if (!o.alive()) return 'stale';
 
-    const g = s.game.value!;
-    const now = s.explorer.value!;
-    const plies = s.plies.value;
-    const prevExplored = index > 0 ? now.moves[index - 1] : undefined;
-    const prevPly = index === 0 && now.baseIndex > 0 ? plies[now.baseIndex - 1] : undefined;
-    const prev = prevExplored ?? prevPly;
-    const prevBook = prevExplored ? prevExplored.rating?.isBook === true : now.baseIndex === 0 || prevPly?.isBook === true;
-    const isBook = prevBook && isBookMove(m.fenBefore, m.uci, m.fenAfter);
-    const human = m.color === g.playerColor;
-    const prevMove = prev ? prevMoveOf(prev) : undefined;
+    const c = o.context();
+    const isBook = c.prevBook && isBookMove(m.fenBefore, m.uci, m.fenAfter);
+    const prevMove = c.prev ? prevMoveOf(c.prev) : undefined;
     // A third repetition (counting the game's positions up to the starting one) is a draw, and so
     // is a move that lets the other side repeat (see `annotate`).
-    const line = [...plies.slice(0, now.baseIndex), ...now.moves.slice(0, index + 1)];
-    const seen = seenPositions(g.startFen, line, line.length - 1);
-    const repetition = isThirdRepetition(g.startFen, line, line.length - 1);
+    const last = c.line.length - 1;
+    const seen = seenPositions(c.startFen, c.line, last);
+    const repetition = isThirdRepetition(c.startFen, c.line, last);
     const allows = !repetition && letsOpponentRepeat(m.fenAfter, withPosition(seen, m.fenAfter), after);
     const drawn = repetition || allows;
     const input: ClassifyMoveInput = {
@@ -2390,18 +3047,22 @@ export class GameController {
       moveUci: m.uci,
       before,
       after: drawn ? { ...after, terminal: 'stalemate' } : after,
-      opponentPrevWinLoss: prevExplored ? prevExplored.rating?.classification.winLoss : prevPly?.classification?.winLoss,
+      opponentPrevWinLoss: c.prevWinLoss,
       isBook,
-      playerRating: human ? s.profile.value.rating : g.botElo,
+      playerRating: c.playerRating,
       prevMove: prevMove ? { to: prevMove.to } : undefined,
-      prevFenBefore: prev?.fenBefore,
+      prevFenBefore: c.prev?.fenBefore,
     };
     const bestAfter = await this.secondOpinion(svc, input, signal);
-    if (!alive()) return;
+    if (!o.alive()) return 'stale';
     const classification = classifyMove({ ...input, ...(bestAfter ? { bestAfter } : {}) });
-    // The player makes both sides' moves here: the computer's side is said by its color.
     const explanation = drawn
-      ? repetitionExplanation(m.san, classification, { human, botName: g.bot.name, neutral: true, mover: m.color, allows })
+      ? repetitionExplanation(m.san, classification, {
+          human: c.human,
+          botName: c.botName,
+          ...(c.neutral ? { neutral: true, mover: m.color } : {}),
+          allows,
+        })
       : explainMove({
           fenBefore: m.fenBefore,
           moveUci: m.uci,
@@ -2409,19 +3070,16 @@ export class GameController {
           before,
           after,
           prevMove,
-          perspective: human ? 'you' : 'neutral',
+          perspective: c.human ? 'you' : 'neutral',
           seen,
         });
-    // The second opinion took a search: other ratings may have landed meanwhile.
-    s.explorer.value = setRating(s.explorer.value!, index, path, {
-      rating: {
-        classification,
-        explanation,
-        evalWhite: drawn ? { kind: 'cp', value: 0 } : toWhitePov(afterScore, m.fenAfter),
-        evalDepth: after.depth,
-        isBook,
-      },
-    });
+    return {
+      classification,
+      explanation,
+      evalWhite: drawn ? { kind: 'cp', value: 0 } : toWhitePov(afterScore, m.fenAfter),
+      evalDepth: after.depth,
+      isBook,
+    };
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -2439,6 +3097,7 @@ export class GameController {
     if (!g || (s.phase.value !== 'over' && s.phase.value !== 'review')) return Promise.resolve();
     if (s.phase.value === 'review' && this.reviewTask) return this.reviewTask;
     this.exitDraw();
+    this.dropPractice();
     batch(() => {
       s.phase.value = 'review';
       s.sheet.value = null;
@@ -2462,6 +3121,7 @@ export class GameController {
     const s = this.s;
     if (s.phase.value !== 'review') return;
     this.exitDraw();
+    this.dropPractice();
     batch(() => {
       s.phase.value = 'over';
       s.coachMode.value = { kind: 'idle' };
@@ -2505,6 +3165,7 @@ export class GameController {
         saveProfile(profile, this.storage);
       }
     }
+    this.recordAnalysis(); // the moves that failed before and were checked now
   }
 
   /**
@@ -2553,7 +3214,7 @@ export class GameController {
       const res = await this.annotate(g.id, ply);
       if (res === 'failed') {
         this.markFailed(annotationKey(g.id, ply));
-        this.recordAccuracy();
+        this.recordAnalysis();
       }
     }
   }
@@ -2650,6 +3311,12 @@ export class GameController {
           // Engine lines stop where the game would end by repetition.
           seen,
         });
+    // The opponent's mistake, miss or blunder: its punishment, the best reply (asked for while its
+    // moves are rated, see store `punishView`).
+    const punishment: Punishment | null =
+      !human && !drawn && PUNISH_CLASSES.has(classification.cls)
+        ? punishmentOf(ply.fenAfter, after.lines, { prevMove: prevMoveOf(ply), seen: withPosition(seen, ply.fenAfter) })
+        : null;
     // The second opinion took a search: moves may have been played meanwhile.
     const latest = s.plies.value;
     const next = latest.slice();
@@ -2660,7 +3327,9 @@ export class GameController {
       classification,
       explanation,
       isBook,
+      ...(punishment ? { punishment } : {}),
     };
+    if (!punishment) delete next[index].punishment;
     // The first move after the ones the game started with (opening practice): the position before
     // it gets its eval (the graph's point, and the review's accuracy starts there).
     if (index > 0 && index === preplayedOf(g) && !latest[index - 1].evalWhite) {
@@ -2676,7 +3345,8 @@ export class GameController {
     });
     this.save();
     this.updateReviewProgress();
-    this.recordAccuracy();
+    this.syncBoardViewer();
+    this.recordAnalysis();
     return 'done';
   }
 
@@ -2724,11 +3394,21 @@ export class GameController {
   // -----------------------------------------------------------------------------------------------
   // Live analysis
 
-  /** Points live analysis at the displayed position when anything needs it. */
+  /**
+   * Points live analysis at the displayed position when anything needs it, and probes the live
+   * position for a threat on the player's turn (threat alerts, see `kickThreat`).
+   */
   private updateWatch(): void {
     const svc = this.analysis;
     if (!svc) return;
+    this.kickThreat();
     const s = this.s;
+    if (s.practice.value) {
+      // Trying a move again: nothing live (the try's own searches check the moves, and the eval bar
+      // shows what they and the game's annotations know, never a hint at the answer).
+      svc.watch(null);
+      return;
+    }
     const x = s.explorer.value;
     if (x && this.explorerEngineOn()) {
       // Exploring with the engine: the eval bar, the arrows and "Best here" follow the explorer's
@@ -2784,8 +3464,8 @@ export class GameController {
    * 'over', same result, rating and history), unless a sheet is open over it, such as the
    * game-over sheet the player may be reading: then only while the app is in the background
    * (`hidden`). Never while playing or reviewing, which a reload would interrupt, nor while the
-   * paywall is open or a purchase is on its way, nor while exploring or while the Openings section
-   * is open (neither is saved). When it stays no, the new service worker is active anyway and the next launch runs the new
+   * paywall is open or a purchase is on its way, nor while exploring, trying a move again or while
+   * the Openings section is open (none of them is saved). When it stays no, the new service worker is active anyway and the next launch runs the new
    * version.
    */
   canReloadNow(opts: { hidden?: boolean } = {}): boolean {
@@ -2793,7 +3473,7 @@ export class GameController {
     const p = s.phase.value;
     const pro = this.entitlements;
     if (pro.paywall.value.open || pro.status.value === 'buying' || pro.status.value === 'restoring') return false;
-    if (s.explorer.value) return false;
+    if (s.explorer.value || s.practice.value || s.viewer.value) return false;
     // The Openings section's pages (a drill in progress, the line on the board) are not saved. A
     // section that shows only "Loading…" or "Couldn't load" (its chunk is gone after an update)
     // holds nothing: the reload onto the new build is what fixes it.
@@ -2832,8 +3512,9 @@ export class GameController {
     const bot: PgnPlayer = { name: g.bot.name, elo: g.botElo };
     const opening = [...s.plies.value].reverse().find((p) => p.opening)?.opening ?? null;
     const practice = g.opening?.line.name;
+    const event = practice ? `Opening practice: ${practice}` : g.practice ? practiceGameLabel(g.practice) : null;
     return buildPgn({
-      ...(practice ? { event: `Opening practice: ${practice}` } : {}),
+      ...(event ? { event } : {}),
       startFen: g.startFen,
       plies: s.plies.value,
       white: g.playerColor === 'w' ? human : bot,
@@ -2864,6 +3545,7 @@ export class GameController {
       if (p.classification) a.classification = p.classification;
       if (p.explanation) a.explanation = p.explanation;
       if (p.isBook !== undefined) a.isBook = p.isBook;
+      if (p.punishment) a.punishment = p.punishment;
       if (Object.keys(a).length) annotations[p.index] = a;
     }
     const saved: SavedGame & { startEval?: Score } = {
@@ -2888,6 +3570,7 @@ export class GameController {
       if (custom) saved.opening = { ...saved.opening, moves: [...line.uci], name: line.name, family: line.family };
     }
     if (g.preplayed) saved.preplayed = g.preplayed;
+    if (g.practice) saved.practice = { from: g.practice.from, ...(g.practice.after ? { after: true } : {}) };
     if (s.startEval.value) saved.startEval = s.startEval.value;
     // The "Try again" prompt after a Retry (also under a hint asked for meanwhile): the retried
     // move is gone from `moves`, so a restore could not rebuild it.
@@ -2904,12 +3587,486 @@ export class GameController {
   }
 
   // -----------------------------------------------------------------------------------------------
+  // Game viewer (earlier games from the history; see game/viewer.ts)
+
+  /**
+   * Opens a game of the history (its record id) in the game viewer, at its final position: the
+   * Menu's Recent games and the rating chart (`from: 'menu'`: closing it goes back to the Menu,
+   * which stays open under it). The moves come from the record's PGN and the analysis from the
+   * record (the game on the board, once over, from its own plies, with every explanation). It never
+   * changes the game on the board or the rating; the bot goes on playing under it, and a game that
+   * ends meanwhile shows its game-over sheet once the viewer closes. A try at one of the game on the
+   * board's moves ends; the explorer closes. Returns whether a game opened.
+   */
+  openGame(id: string, opts: { from?: 'menu' } = {}): boolean {
+    const s = this.s;
+    const record = s.profile.value.history.find((r) => r.id === id);
+    if (!record) return false;
+    this.exitDraw();
+    this.exitExplorer();
+    if (s.practice.value) this.dropPractice();
+    this.dropViewer();
+    const g = s.game.value;
+    const onBoard = !!g && g.id === id && !!s.outcome.value;
+    const game: ArchivedGame | null = onBoard
+      ? { startFen: g.startFen, plies: s.plies.value.map((p) => ({ ...p })), startEval: s.startEval.value, headers: archivedGame(record)?.headers ?? {} }
+      : archivedGame(record);
+    s.viewer.value = openViewer({
+      record,
+      game,
+      bot: onBoard ? g.bot : recordBot(record),
+      session: ++this.viewerSession,
+      from: opts.from ?? null,
+      ...(onBoard && g.preplayed ? { preplayed: g.preplayed } : {}),
+      full: onBoard,
+    });
+    this.viewerAbort = new AbortController();
+    this.kickViewerExplain();
+    return true;
+  }
+
+  /**
+   * Closes the game viewer (its Back, Escape): the analysis it was running stops (what it found is
+   * kept in the record), and the screen it was opened from shows again: the Menu, unless a game
+   * ended meanwhile (its game-over sheet then).
+   */
+  closeGame(): void {
+    const s = this.s;
+    const v = s.viewer.value;
+    if (!v) return;
+    this.dropViewer();
+    if (this.deferredGameOver && !s.explorer.value && !s.practice.value && !openingsOpen.peek()) {
+      this.deferredGameOver = false;
+      if (s.outcome.value && s.phase.value === 'over') {
+        s.sheet.value = 'gameOver';
+        return;
+      }
+    }
+    if (v.from === 'menu' && s.sheet.value === null) s.sheet.value = 'menu';
+  }
+
+  /** Forgets the viewer and withdraws its analysis (saving what it found). */
+  private dropViewer(): void {
+    const s = this.s;
+    this.viewerSession++;
+    this.viewerAbort?.abort();
+    this.viewerAbort = null;
+    this.viewerExplainAbort?.abort();
+    this.viewerExplainAbort = null;
+    if (!s.viewer.value) return;
+    this.saveViewerAnalysis();
+    s.viewer.value = null;
+  }
+
+  private setViewer(next: GameViewer): void {
+    if (next !== this.s.viewer.value) this.s.viewer.value = next;
+  }
+
+  /** Shows the position after `n` plies of the viewer's game (the move list, the graph). */
+  viewerGoTo(n: number): void {
+    const v = this.s.viewer.value;
+    if (!v) return;
+    const next = viewerAt(v, n);
+    if (next === v) return;
+    // Stepping to a move puts the report away for the comment on it (as in Game Review).
+    this.setViewer({ ...next, report: false });
+    this.kickViewerExplain();
+  }
+
+  /** One ply back or forward (‹ ›, a swipe, the arrow keys). */
+  viewerStep(delta: number): void {
+    const v = this.s.viewer.value;
+    if (v) this.viewerGoTo(v.cursor + delta);
+  }
+
+  viewerFlip(): void {
+    const v = this.s.viewer.value;
+    if (v) this.setViewer({ ...v, flipped: !v.flipped });
+  }
+
+  /**
+   * The viewer's Review: Game Review of the game. The report shows (accuracy, counts, key moments)
+   * and the moves get their arrows and every icon; a game whose record has no verdict on some moves
+   * is analyzed first, with its progress (`review.progress`), and the result is kept in the record.
+   * Pressed again: the report, or the comment on the move, in turn.
+   */
+  viewerReview(): void {
+    const v = this.s.viewer.value;
+    if (!v?.game || !v.game.plies.length) return;
+    this.viewerExitDraw();
+    if (v.review) {
+      this.setViewer({ ...v, report: !v.report });
+      return;
+    }
+    const done = viewerAnalyzed(v);
+    // No new analysis while a rated game is on (no engine help during it): it waits until it is over.
+    if (!done && this.ratedGameInProgress()) return;
+    this.setViewer({ ...v, report: true, review: { progress: done ? null : 0, failed: 0 } });
+    if (!done) this.kickViewerAnalysis();
+  }
+
+  /** Shows the report (true) or the comment on the move (false). */
+  viewerShowReport(on: boolean): void {
+    const v = this.s.viewer.value;
+    if (v && v.review && v.report !== on) this.setViewer({ ...v, report: on });
+  }
+
+  /** The viewer panel's actions (`viewerView.coach.actions`). */
+  runViewerAction(id: ViewerActionId): void {
+    const v = this.s.viewer.value;
+    if (!v) return;
+    switch (id) {
+      case 'review':
+        if (!v.review || !v.report) this.viewerReview();
+        return;
+      case 'tryAgain':
+        if (v.cursor > 0) this.viewerTryAgain(v.cursor - 1);
+        return;
+      case 'showBest':
+        // A move that can be tried again: its better move, from now on (and its arrow).
+        if (v.cursor > 0 && !this.ratedGameInProgress() && this.entitlements.requirePro('reviewDetails')) {
+          this.revealTry(v.id, v.cursor - 1);
+        }
+        return;
+      case 'unlock':
+        this.entitlements.openPaywall('reviewDetails');
+        return;
+      case 'retryAnalysis':
+        if (this.ratedGameInProgress()) return;
+        if (v.review && v.review.progress === null) {
+          this.setViewer({ ...v, review: { progress: 0, failed: 0 } });
+          this.kickViewerAnalysis();
+        }
+        return;
+    }
+  }
+
+  /**
+   * Try again on one of the viewer's key moments (your inaccuracies and worse; Pro, as Game Review's
+   * details): the try shows on the game screen (the viewer steps aside, and the Menu under it closes)
+   * and its Back returns to the viewer as it was. Returns whether it started.
+   */
+  viewerTryAgain(index: number): boolean {
+    const s = this.s;
+    const v = s.viewer.value;
+    const game = v ? viewerPracticeGame(v) : null;
+    if (!v || !game || this.ratedGameInProgress()) return false;
+    this.viewerExitDraw();
+    const sheet = s.sheet.peek();
+    const ok = this.tryAgain(index, game);
+    if (ok && sheet === 'menu') s.sheet.value = null;
+    return ok;
+  }
+
+  /**
+   * "Play from here": a new game against the same opponent from the position on the viewer's board,
+   * the player's side as in the game (the opponent moves first when it is its turn), with the current
+   * options and without touching the New game defaults. Unrated from the start ("Play on from
+   * here"'s `GamePractice`; a rematch keeps it), and the earlier game stays in the history as it was.
+   * 'inProgress' while a game the player has moved in is going on (it would count as an abandoned
+   * loss); 'none' when nothing can be played there (the moves were not kept, or the game is over on
+   * the board).
+   */
+  viewerPlayFromHere(): 'started' | 'inProgress' | 'none' {
+    const s = this.s;
+    const v = s.viewer.value;
+    const g = v?.game;
+    if (!v || !g || !this.analysis || !this.engines) return 'none';
+    if (this.gameToAbandon()) return 'inProgress';
+    const fen = viewerFen(v);
+    try {
+      if (new Chess(fen).isGameOver()) return 'none';
+    } catch {
+      return 'none';
+    }
+    const next = g.plies[v.cursor];
+    const before = v.cursor > 0 ? g.plies[v.cursor - 1] : null;
+    // A game without moves (resigned before the first one): nothing to play on from.
+    if (!next && !before) return 'none';
+    const practice: GamePractice = next ? { from: moveLabel(next) } : { from: moveLabel(before!), after: true };
+    const settings: GameSettings = {
+      ...s.settings.value,
+      playerColor: v.record.playerColor,
+      botId: v.bot.id,
+      botElo: v.record.botElo,
+      adaptive: false,
+    };
+    this.startGame(settings, fen, undefined, practice);
+    return s.viewer.value ? 'none' : 'started';
+  }
+
+  /** The viewer's game as PGN: annotated when it has been analyzed ('' when its moves were not kept). */
+  viewerExportPgn(): string {
+    const v = this.s.viewer.value;
+    if (!v) return '';
+    return v.game ? archivePgn(v.record, v.game) : '';
+  }
+
+  /** The viewer's Draw toggle (its board's Draw mode; the drawings are forgotten when it closes). */
+  viewerToggleDraw(): void {
+    const v = this.s.viewer.value;
+    if (!v?.game) return;
+    if (v.draw.on) this.viewerExitDraw();
+    else this.setViewer({ ...v, draw: { on: true, tip: !loadDrawTipSeen(this.storage) } });
+  }
+
+  /** Leaves the viewer's Draw mode (Done, Escape, Review, Try again). */
+  viewerExitDraw(): void {
+    const v = this.s.viewer.value;
+    if (v && (v.draw.on || v.draw.tip)) this.setViewer({ ...v, draw: { on: false, tip: false } });
+  }
+
+  /** A drawing on the viewer's board (see `drawShape`). */
+  viewerDrawShape(shape: UserShape, fen?: string): void {
+    const v = this.s.viewer.value;
+    if (!v?.draw.on) return;
+    const board = viewerFen(v);
+    if (fen !== undefined && positionKey(fen) !== positionKey(board)) return;
+    if (v.draw.tip) saveDrawTipSeen(this.storage);
+    this.setViewer({ ...v, drawings: drawOn(v.drawings, board, shape), draw: { on: true, tip: false } });
+  }
+
+  /** The viewer's Draw bar's Clear (the position on its board). */
+  viewerClearDrawings(): void {
+    const v = this.s.viewer.value;
+    if (v) this.setViewer({ ...v, drawings: clearOn(v.drawings, viewerFen(v)) });
+  }
+
+  /**
+   * The move shown in the viewer has only the comment the history keeps of it (`GameViewer.brief`:
+   * its verdict, and a key moment's headline): the coach looks at it again, as the annotations rate
+   * a move (`rateLineMove`), for the whole comment, kept with the viewer while it is open (and the
+   * verdict in the record when it closes). One move at a time: stepping on withdraws the searches for
+   * the previous one. Not while Game Review's details are locked, while a rated game is on (no engine
+   * help during it), or while the viewer's Review analyzes the game.
+   */
+  private kickViewerExplain(): void {
+    const s = this.s;
+    const v = s.viewer.value;
+    const svc = this.analysis;
+    const ply = v ? briefPlyShown(v) : null;
+    if (v && ply && v.explaining === ply.index && this.viewerExplainAbort) return; // on it already
+    this.viewerExplainAbort?.abort();
+    this.viewerExplainAbort = null;
+    if (v && v.explaining !== null) this.setViewer({ ...v, explaining: null });
+    if (!v?.game || !ply || !svc || this.viewerTask || s.locked.value.has('reviewDetails') || this.ratedGameInProgress()) return;
+    const ctl = new AbortController();
+    this.viewerExplainAbort = ctl;
+    const { session, record } = v;
+    const index = ply.index;
+    const game = v.game;
+    this.setViewer({ ...s.viewer.value!, explaining: index });
+    const alive = (): boolean =>
+      !ctl.signal.aborted && this.analysis === svc && s.viewer.value?.session === session && s.viewer.value.explaining === index;
+    const human = ply.color === record.playerColor;
+    const prev = index > 0 ? game.plies[index - 1] : undefined;
+    const task: Promise<void> = this.rateLineMove(svc, {
+      move: ply,
+      signal: ctl.signal,
+      alive,
+      context: () => ({
+        startFen: game.startFen,
+        line: game.plies.slice(0, index + 1),
+        prev,
+        prevWinLoss: prev?.classification?.winLoss,
+        prevBook: index === 0 || prev?.isBook === true,
+        human,
+        neutral: false,
+        playerRating: human ? record.ratingBefore : record.botElo,
+        botName: v.bot.name,
+      }),
+    })
+      .then((r) => {
+        if (!alive()) return;
+        const now = s.viewer.value!;
+        // Not checked (the engine): the brief comment stays, and is asked for again when the move is shown again.
+        if (r === 'stale' || r === 'failed') {
+          this.setViewer({ ...now, explaining: null });
+          return;
+        }
+        this.setViewer(
+          withAnalyzedPly(now, index, {
+            classification: r.classification,
+            explanation: r.explanation,
+            evalWhite: r.evalWhite,
+            evalDepth: r.evalDepth,
+            isBook: r.isBook,
+          }),
+        );
+      })
+      .catch((e: unknown) => console.warn('[game] game viewer: the comment could not be written', e))
+      .finally(() => {
+        if (this.viewerExplainTask === task) this.viewerExplainTask = null;
+        if (this.viewerExplainAbort === ctl) this.viewerExplainAbort = null;
+      });
+    this.viewerExplainTask = task;
+  }
+
+  private kickViewerAnalysis(): void {
+    if (this.viewerTask || !this.analysis) return;
+    const session = this.viewerSession;
+    const task: Promise<void> = this.runViewerAnalysis(session)
+      .catch((e: unknown) => {
+        console.error('[game] game viewer: analysis failed', e);
+        const v = this.s.viewer.value;
+        if (v?.session === session && v.review) this.setViewer({ ...v, review: { ...v.review, progress: null } });
+      })
+      .finally(() => {
+        if (this.viewerTask === task) this.viewerTask = null;
+      });
+    this.viewerTask = task;
+  }
+
+  /**
+   * Analyzes the viewer's game where its record has no verdict (an older record, or moves whose
+   * analysis failed): each move as the annotations rate a game's move (`rateLineMove`: the
+   * annotations' searches, the second opinion, the classification against the previous move, the
+   * explanation for the player or neutral for the opponent), in game order, one search at a time, so
+   * a game in progress keeps its annotations' turn in the queue. Moves that fail are tried once more.
+   * What it finds is saved in the record as it goes (every 10 moves) and at the end.
+   */
+  private async runViewerAnalysis(session: number): Promise<void> {
+    const s = this.s;
+    const svc = this.analysis;
+    const signal = this.viewerAbort?.signal;
+    const alive = () => this.analysis === svc && s.viewer.value?.session === session && !signal?.aborted;
+    const current = (): GameViewer => s.viewer.value!;
+    if (!svc || !alive() || !current().game) return;
+    const progress = () => {
+      const v = current();
+      const g = v.game!;
+      const pre = v.preplayed;
+      const done = g.plies.filter((p, i) => i < pre || (p.classification && p.evalWhite)).length + (g.startEval ? 1 : 0);
+      if (v.review) this.setViewer({ ...v, review: { ...v.review, progress: Math.min(0.99, done / (g.plies.length + 1)) } });
+    };
+    const update = (change: (g: ArchivedGame) => ArchivedGame) => {
+      const v = current();
+      this.setViewer({ ...v, game: change(v.game!) });
+    };
+    const before = current().game!;
+    if (!before.startEval) {
+      try {
+        const r = await svc.ensure(before.startFen, { ...ANNOTATE, signal });
+        if (!alive()) return;
+        const sc = whiteScore(r);
+        if (sc && !(r.aborted && !r.terminal && r.depth < ANNOTATE_DEPTH)) update((g) => ({ ...g, startEval: sc }));
+      } catch (e) {
+        console.warn('[game] game viewer: start position analysis failed', e);
+        if (!alive()) return;
+      }
+    }
+    progress();
+    let failed = 0;
+    let unsaved = 0;
+    for (let pass = 0; pass < 2; pass++) {
+      failed = 0;
+      const n = current().game!.plies.length;
+      for (let i = current().preplayed; i < n; i++) {
+        const v = current();
+        const ply = v.game!.plies[i];
+        if (ply.classification && ply.evalWhite) continue;
+        const pre = v.preplayed;
+        // The first move after the ones the game started with: the position before it gets its eval.
+        if (i === pre && pre > 0 && !v.game!.plies[pre - 1].evalWhite) {
+          try {
+            const r = await svc.ensure(ply.fenBefore, { ...ANNOTATE, signal });
+            if (!alive()) return;
+            const sc = whiteScore(r);
+            if (sc) update((g) => ({ ...g, plies: g.plies.map((p, k) => (k === pre - 1 ? { ...p, evalWhite: sc, evalDepth: r.depth } : p)) }));
+          } catch {
+            if (!alive()) return;
+          }
+        }
+        const record = v.record;
+        const human = ply.color === record.playerColor;
+        const r = await this.rateLineMove(svc, {
+          move: ply,
+          signal,
+          alive,
+          context: () => {
+            const ps = current().game!.plies;
+            const prev = i > 0 ? ps[i - 1] : undefined;
+            return {
+              startFen: current().game!.startFen,
+              line: ps.slice(0, i + 1),
+              prev,
+              prevWinLoss: prev?.classification?.winLoss,
+              prevBook: i === 0 || prev?.isBook === true,
+              human,
+              neutral: false,
+              playerRating: human ? record.ratingBefore : record.botElo,
+              botName: current().bot.name,
+            };
+          },
+        });
+        if (r === 'stale' || !alive()) return;
+        if (r === 'failed') {
+          failed++;
+          continue;
+        }
+        this.setViewer(
+          withAnalyzedPly(current(), i, {
+            classification: r.classification,
+            explanation: r.explanation,
+            evalWhite: r.evalWhite,
+            evalDepth: r.evalDepth,
+            isBook: r.isBook,
+          }),
+        );
+        progress();
+        if (++unsaved >= 10) {
+          unsaved = 0;
+          this.saveViewerAnalysis();
+        }
+      }
+      if (!failed) break;
+    }
+    if (!alive()) return;
+    this.saveViewerAnalysis();
+    const v = current();
+    if (v.review) this.setViewer({ ...v, review: { progress: null, failed } });
+  }
+
+  /**
+   * Keeps what the viewer knows of its game in the record (game/archive.ts `encodeAnalysis`, merged
+   * with what the record has), and the player's accuracy once every move is checked (Recent games);
+   * never the rating.
+   */
+  private saveViewerAnalysis(): void {
+    const s = this.s;
+    const v = s.viewer.value;
+    const g = v?.game;
+    if (!v || !g || !g.plies.some((p) => p.classification)) return;
+    const record = s.profile.value.history.find((r) => r.id === v.id);
+    if (!record) return;
+    const patch: Partial<Pick<GameRecord, 'accuracy' | 'analysis'>> = {};
+    // Merged: a copy that knows less than the record (the game on the board, checked meanwhile)
+    // never erases a verdict.
+    const encoded = encodeAnalysis(g.plies, g.startEval, { playerColor: record.playerColor, preplayed: v.preplayed });
+    const analysis = mergeAnalysis(record.analysis, encoded);
+    if (!sameAnalysis(record.analysis, analysis)) patch.analysis = analysis;
+    if (viewerAnalyzed(v)) {
+      // Every move checked: the accuracy the report shows is the record's too (Recent games, the header).
+      const acc = viewerSummary(v)?.accuracy[record.playerColor];
+      const rounded = acc != null ? Math.round(acc * 10) / 10 : null;
+      if (rounded !== null && record.accuracy !== rounded) patch.accuracy = rounded;
+    }
+    if (!Object.keys(patch).length) return;
+    const profile = updateGameRecord(s.profile.value, v.id, patch);
+    if (profile === s.profile.value) return;
+    s.profile.value = profile;
+    saveProfile(profile, this.storage);
+    const saved = profile.history.find((r) => r.id === v.id);
+    if (saved) this.setViewer({ ...v, record: saved });
+  }
+
+  // -----------------------------------------------------------------------------------------------
   // Test / e2e support
 
   /**
-   * Resolves once no boot, bot move, background annotation, review, Show best analysis or explorer
-   * analysis (ratings, Engine reply) is pending. For tests and e2e scripts (do not await it while a
-   * bot move is blocked on purpose).
+   * Resolves once no boot, bot move, background annotation, review, Show best analysis, explorer
+   * analysis (ratings, Engine reply), threat probe or Try again analysis is pending. For tests and e2e scripts (do not
+   * await it while a bot move is blocked on purpose).
    */
   async idle(): Promise<void> {
     const pending = () =>
@@ -2921,6 +4078,10 @@ export class GameController {
         this.showBestTask,
         this.explorerRating,
         this.explorerReplyTask?.task ?? null,
+        ...[...this.threatProbes.values()].map((p) => p.task),
+        ...this.practiceTasks,
+        this.viewerTask,
+        this.viewerExplainTask,
       ].filter((p) => p !== null);
     for (let i = 0; i < 100_000; i++) {
       const p = pending();

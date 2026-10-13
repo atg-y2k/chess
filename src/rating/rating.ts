@@ -14,7 +14,7 @@
  * storage call is wrapped so private mode, quota errors or corrupt data never throw.
  */
 import type { Color, GameResult } from '../game/types';
-import type { GameRecord, PlayerProfile } from './types';
+import type { CompactAnalysis, GameRecord, PlayerProfile } from './types';
 
 export const MIN_RATING = 100;
 export const MAX_RATING = 3200;
@@ -166,6 +166,8 @@ export function defaultProfile(): PlayerProfile {
  * - `history` is newest first and capped at HISTORY_LIMIT.
  * - A record whose id is already in the history is not applied twice: the profile is returned
  *   unchanged together with the stored record.
+ * - A rated game says whether it was played while the rating was still new (`provisional`,
+ *   `isProvisional`; the rating chart shades those games).
  *
  * Pure: the input profile is not mutated.
  */
@@ -181,6 +183,9 @@ export function applyGameResult(
   const delta = kFactor(effectiveGames(profile)) * (record.playerScore - expected);
   const ratingAfter = record.rated ? clampRating(ratingBefore + delta) : ratingBefore;
   const full: GameRecord = { ...record, ratingBefore, ratingAfter };
+  // Said either way for a rated game (an absent flag marks an older record, whose chart infers it).
+  if (record.rated) full.provisional = isProvisional(profile);
+  else delete full.provisional;
 
   return {
     record: full,
@@ -204,7 +209,7 @@ export function applyGameResult(
 export function updateGameRecord(
   profile: PlayerProfile,
   id: string,
-  patch: Partial<Pick<GameRecord, 'accuracy' | 'pgn' | 'reason'>>,
+  patch: Partial<Pick<GameRecord, 'accuracy' | 'pgn' | 'reason' | 'analysis'>>,
 ): PlayerProfile {
   const index = profile.history.findIndex((r) => r.id === id);
   if (index < 0) return profile;
@@ -248,19 +253,42 @@ export function loadProfile(storage: KeyValueStorage | null = defaultStorage()):
   }
 }
 
+/** The games whose analysis (`GameRecord.analysis`) a slimmed save keeps: the most recent ones. */
+export const SLIM_ANALYSIS_GAMES = [50, 20] as const;
+/** The games whose PGN a slimmed save keeps (and, as the last resort, the only games kept). */
+export const SLIM_PGN_GAMES = 20;
+
 /**
- * Saves the profile. If the storage quota is exceeded it retries with a slimmer history (PGNs of
- * older games dropped, then only the 20 most recent games). Returns whether anything was stored.
+ * The histories a save tries, fullest first, when the storage quota is exceeded: the analyses of
+ * the oldest games go first (the 50, then the 20 most recent games keep theirs), then every analysis
+ * but the 20 most recent games' PGNs, then only the 20 most recent games, and at last those without
+ * their analyses. The moves (PGN) outlive the analysis: a game without it can be analyzed again.
+ */
+export function slimmedHistories(history: readonly GameRecord[]): (() => GameRecord[])[] {
+  const full = history.slice(0, HISTORY_LIMIT);
+  const withoutAnalysis = (r: GameRecord): GameRecord => {
+    if (!r.analysis) return r;
+    const { analysis: _dropped, ...rest } = r;
+    return rest;
+  };
+  const analysisFor = (keep: number) => (r: GameRecord, i: number) => (i < keep ? r : withoutAnalysis(r));
+  return [
+    () => full,
+    ...SLIM_ANALYSIS_GAMES.map((keep) => () => full.map(analysisFor(keep))),
+    () => full.map(analysisFor(SLIM_PGN_GAMES)).map((r, i) => (i < SLIM_PGN_GAMES ? r : { ...r, pgn: '' })),
+    () => full.slice(0, SLIM_PGN_GAMES),
+    () => full.slice(0, SLIM_PGN_GAMES).map(withoutAnalysis),
+  ];
+}
+
+/**
+ * Saves the profile. If the storage quota is exceeded it retries with a slimmer history (see
+ * `slimmedHistories`: older games' analyses first, then older games' PGNs, then only the 20 most
+ * recent games). Returns whether anything was stored.
  */
 export function saveProfile(p: PlayerProfile, storage: KeyValueStorage | null = defaultStorage()): boolean {
   if (!storage) return false;
-  const full = p.history.slice(0, HISTORY_LIMIT);
-  const attempts: (() => GameRecord[])[] = [
-    () => full,
-    () => full.map((r, i) => (i < 20 ? r : { ...r, pgn: '' })),
-    () => full.slice(0, 20),
-  ];
-  for (const history of attempts) {
+  for (const history of slimmedHistories(p.history)) {
     try {
       storage.setItem(PROFILE_KEY, JSON.stringify({ version: PROFILE_VERSION, profile: { ...p, history: history() } }));
       return true;
@@ -328,7 +356,34 @@ function sanitizeRecord(raw: unknown): GameRecord | null {
     pgn: typeof raw.pgn === 'string' ? raw.pgn : '',
   };
   if (isFiniteNumber(raw.accuracy) && raw.accuracy >= 0 && raw.accuracy <= 100) record.accuracy = raw.accuracy;
+  if (typeof raw.botId === 'string' && /^[a-z0-9-]{1,40}$/.test(raw.botId)) record.botId = raw.botId;
+  if (Number.isInteger(raw.preplayed) && (raw.preplayed as number) > 0 && (raw.preplayed as number) <= 600) record.preplayed = raw.preplayed as number;
+  if (typeof raw.provisional === 'boolean' && record.rated) record.provisional = raw.provisional;
+  const analysis = sanitizeAnalysis(raw.analysis);
+  if (analysis) record.analysis = analysis;
   return record;
+}
+
+/** The longest analysis string kept (a game of about 600 plies). */
+const MAX_ANALYSIS_CHARS = 12_000;
+/** The longest headline kept. */
+const MAX_HEADLINE_CHARS = 300;
+
+/**
+ * A stored analysis (`GameRecord.analysis`), or null when it is missing or malformed (an older record,
+ * or damaged data: the game viewer analyzes the game again). Its tokens are checked when decoded.
+ */
+export function sanitizeAnalysis(v: unknown): CompactAnalysis | null {
+  if (!isObject(v) || v.v !== 1 || typeof v.p !== 'string' || v.p.length > MAX_ANALYSIS_CHARS) return null;
+  const out: CompactAnalysis = { v: 1, s: typeof v.s === 'string' && v.s.length <= 12 ? v.s : '', p: v.p };
+  if (isObject(v.h)) {
+    const h: Record<string, string> = {};
+    for (const [k, text] of Object.entries(v.h)) {
+      if (/^\d{1,4}$/.test(k) && typeof text === 'string' && text.length > 0 && text.length <= MAX_HEADLINE_CHARS) h[k] = text;
+    }
+    if (Object.keys(h).length) out.h = h;
+  }
+  return out;
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {

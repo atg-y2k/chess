@@ -571,3 +571,53 @@
 :root[data-theme='light'] .coach-half[data-cls] {
   --coach-tone-text: color-mix(in srgb, var(--coach-tone) 72%, var(--text));
 }
+
+/* ---------------------------------------------------------------- threat alerts (`alert`) */
+
+/*
+ * The opponent's threat, at the top of the bubble: a compact warning that never scrolls away with
+ * the text below it (red like the board's threat arrow).
+ */
+.coach-alert {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 5px;
+  padding: 4px 9px 5px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.coach-alert-sign {
+  flex: none;
+  color: var(--danger);
+  font-size: 14px;
+  line-height: 1.3;
+}
+.coach-alert-text {
+  min-width: 0;
+}
+/* Collapsed rows: the avatar becomes the warning sign; one row leads with the warning. */
+.coach-avatar--alert {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: color-mix(in srgb, var(--danger) 18%, var(--surface-2));
+  color: var(--danger);
+}
+.coach-summary--alert {
+  color: var(--text);
+  font-weight: 600;
+  /* The warning in full where it fits: two lines in the one-row panel. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  line-height: 1.2;
+}

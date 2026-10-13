@@ -487,10 +487,35 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  width: 100%;
   min-height: 58px;
   padding: 8px 14px;
 }
-.menu-game + .menu-game::before {
+/* A row opens its game (the game viewer). */
+.menu-game--open {
+  appearance: none;
+  margin: 0;
+  padding-right: 8px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.menu-game--open:active {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.menu-game--open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.menu-game-chevron {
+  flex: none;
+  margin-left: -6px;
+  color: var(--text-faint);
+}
+.menu-game-item + .menu-game-item > .menu-game::before {
   content: '';
   position: absolute;
   top: 0;

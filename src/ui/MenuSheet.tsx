@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
 import type { ProFeature } from '../game/entitlements';
 import type { GameSettings } from '../game/types';
+import { formatGameDate, recordOutcome } from '../rating/history';
 import { PROVISIONAL_GAMES, formatRatingDelta } from '../rating/rating';
 import type { GameRecord, PlayerProfile } from '../rating/types';
 import type { ThemePref } from '../theme';
@@ -22,10 +23,12 @@ import {
   IconPlus,
   IconShare,
   IconSound,
+  IconThreat,
 } from './icons';
 import { LevelPicker, levelFor, type StartingLevel } from './LevelPicker';
-import { RATE_OPPONENT_MENU_DESCRIPTION } from './NewGameSheet';
+import { ASSIST_MENU_DESCRIPTION, RATE_OPPONENT_MENU_DESCRIPTION, THREAT_ALERTS_MENU_DESCRIPTION } from './NewGameSheet';
 import { IconLock } from './PaywallSheet';
+import { RatingChart } from './RatingChart';
 import { Sheet } from './Sheet';
 import { Toggle } from './Toggle';
 import './MenuSheet.css';
@@ -80,6 +83,11 @@ export interface MenuSheetProps {
   onUnlock?: (feature?: ProFeature) => void;
   /** Restore Purchases. */
   onRestore?: () => void;
+  /**
+   * Opens a game of the history (its record id) in the game viewer: the Recent games rows and the
+   * rating chart's games (omitted: neither opens anything).
+   */
+  onOpenGame?: (id: string) => void;
 }
 
 /** The Menu's Pro section. */
@@ -93,6 +101,8 @@ export interface ProMenuInfo {
   restoring?: boolean;
   /** Best-move arrows are locked: their toggle shows a lock and opens the paywall instead. */
   arrowsLocked?: boolean;
+  /** Threat alerts are locked: the same for their toggle. */
+  threatsLocked?: boolean;
 }
 
 /** The Pro row's second line. */
@@ -147,29 +157,7 @@ export function resignNote(r: ResignInfo | null | undefined): string {
 
 export { formatRatingDelta };
 
-/** Win / draw / loss from the player's point of view. */
-export function recordOutcome(r: Pick<GameRecord, 'playerScore'>): 'win' | 'draw' | 'loss' {
-  return r.playerScore === 1 ? 'win' : r.playerScore === 0.5 ? 'draw' : 'loss';
-}
-
-/**
- * Compact date for the games list: "Today", "Yesterday", a weekday within the last week,
- * otherwise "Sep 28" (plus the year when it is not the current one). Invalid input gives ''.
- */
-export function formatGameDate(iso: string, now: Date = new Date(), locale?: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const days = Math.round((startOf(now) - startOf(d)) / 86_400_000);
-  if (days === 0) return 'Today';
-  if (days === 1) return 'Yesterday';
-  if (days > 1 && days < 7) return d.toLocaleDateString(locale, { weekday: 'long' });
-  return d.toLocaleDateString(locale, {
-    month: 'short',
-    day: 'numeric',
-    year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric',
-  });
-}
+export { formatGameDate, recordOutcome };
 
 /**
  * In-game menu: quick actions (flip, export PGN, new game, resign with an inline confirmation),
@@ -203,6 +191,7 @@ export function MenuSheet({
   pro,
   onUnlock,
   onRestore,
+  onOpenGame,
 }: MenuSheetProps) {
   const [confirming, setConfirming] = useState(false);
   const confirmId = useId();
@@ -215,6 +204,7 @@ export function MenuSheet({
 
   const recent = profile.history.slice(0, RECENT_GAMES);
   const arrowsLocked = !!pro?.arrowsLocked;
+  const threatsLocked = !!pro?.threatsLocked;
 
   return (
     <Sheet open={open} onClose={onClose} title="Menu" class="menu">
@@ -309,7 +299,11 @@ export function MenuSheet({
 
       <section class="sheet-section">
         <h3 class="sheet-label">While playing</h3>
-        <div class="sheet-group" data-arrows-locked={arrowsLocked ? '' : undefined}>
+        <div
+          class="sheet-group"
+          data-arrows-locked={arrowsLocked ? '' : undefined}
+          data-threats-locked={threatsLocked ? '' : undefined}
+        >
           <Toggle
             id="coach"
             label="Coach"
@@ -331,11 +325,20 @@ export function MenuSheet({
           <Toggle
             id="showBestMoves"
             label="Best-move arrows"
-            description={arrowsLocked ? `Part of ${pro?.name ?? 'Pro'}` : 'Makes the game unrated'}
+            description={arrowsLocked ? `Part of ${pro?.name ?? 'Pro'}` : ASSIST_MENU_DESCRIPTION}
             checked={settings.showBestMoves && !arrowsLocked}
             onChange={arrowsLocked ? () => onUnlock?.('bestMoveArrows') : (v) => onChange({ showBestMoves: v })}
             icon={arrowsLocked ? <IconLock /> : <IconEye />}
             iconColor={arrowsLocked ? 'var(--warning)' : 'var(--cls-brilliant)'}
+          />
+          <Toggle
+            id="threatAlerts"
+            label="Threat alerts"
+            description={threatsLocked ? `Part of ${pro?.name ?? 'Pro'}` : THREAT_ALERTS_MENU_DESCRIPTION}
+            checked={settings.threatAlerts && !threatsLocked}
+            onChange={threatsLocked ? () => onUnlock?.('threatAlerts') : (v) => onChange({ threatAlerts: v })}
+            icon={threatsLocked ? <IconLock /> : <IconThreat />}
+            iconColor={threatsLocked ? 'var(--warning)' : 'var(--danger)'}
           />
           <Toggle
             id="rateOpponent"
@@ -376,6 +379,7 @@ export function MenuSheet({
           levelAfterGame={levelAfterGame}
           pendingLevel={pendingLevel}
           provisional={provisional}
+          onOpenGame={onOpenGame}
         />
       </section>
 
@@ -384,7 +388,12 @@ export function MenuSheet({
         {recent.length ? (
           <ul class="sheet-group menu-games">
             {recent.map((r) => (
-              <GameRow key={r.id} record={r} bot={bots?.find((b) => b.name === r.botName)} />
+              <GameRow
+                key={r.id}
+                record={r}
+                bot={bots?.find((b) => (r.botId && r.botId !== 'custom' ? b.id === r.botId : b.name === r.botName))}
+                onOpen={onOpenGame}
+              />
             ))}
           </ul>
         ) : (
@@ -548,9 +557,10 @@ interface ProfileCardProps {
   levelAfterGame?: boolean;
   pendingLevel?: number | null;
   provisional?: boolean;
+  onOpenGame?: (id: string) => void;
 }
 
-function ProfileCard({ profile, open, levels, onSetLevel, levelAfterGame, pendingLevel, provisional }: ProfileCardProps) {
+function ProfileCard({ profile, open, levels, onSetLevel, levelAfterGame, pendingLevel, provisional, onOpenGame }: ProfileCardProps) {
   const total = profile.wins + profile.draws + profile.losses;
   const last = profile.history.find((r) => r.rated);
   const lastDelta = last ? last.ratingAfter - last.ratingBefore : null;
@@ -620,6 +630,7 @@ function ProfileCard({ profile, open, levels, onSetLevel, levelAfterGame, pendin
           afterGame={!!levelAfterGame}
         />
       ) : null}
+      <RatingChart profile={profile} onOpenGame={onOpenGame} />
     </div>
   );
 }
@@ -697,7 +708,7 @@ function SetLevel({
 const RESULT_LETTER = { win: 'W', draw: 'D', loss: 'L' } as const;
 const RESULT_WORD = { win: 'Won', draw: 'Draw', loss: 'Lost' } as const;
 
-function GameRow({ record: r, bot }: { record: GameRecord; bot?: BotPersona }) {
+function GameRow({ record: r, bot, onOpen }: { record: GameRecord; bot?: BotPersona; onOpen?: (id: string) => void }) {
   const outcome = recordOutcome(r);
   const delta = r.ratingAfter - r.ratingBefore;
   const date = formatGameDate(r.date);
@@ -705,8 +716,8 @@ function GameRow({ record: r, bot }: { record: GameRecord; bot?: BotPersona }) {
   const label =
     `${RESULT_WORD[outcome]} against ${r.botName} (${r.botElo}) as ${colour}, ${r.reason}, ${date}. ` +
     (r.rated ? `Rating ${formatRatingDelta(delta)} to ${r.ratingAfter}.` : 'Unrated.');
-  return (
-    <li class="menu-game" aria-label={label}>
+  const content = (
+    <>
       <span class="menu-result" data-k={outcome} aria-hidden="true">
         {RESULT_LETTER[outcome]}
       </span>
@@ -739,6 +750,24 @@ function GameRow({ record: r, bot }: { record: GameRecord; bot?: BotPersona }) {
           <span class="menu-game-unrated">Unrated</span>
         )}
       </div>
+    </>
+  );
+  // A row opens the game in the game viewer (replay, review, export).
+  if (!onOpen) {
+    return (
+      <li class="menu-game-item">
+        <div class="menu-game" aria-label={label} role="group">
+          {content}
+        </div>
+      </li>
+    );
+  }
+  return (
+    <li class="menu-game-item">
+      <button type="button" class="menu-game menu-game--open" data-id="recent-game" data-game={r.id} aria-label={`${label} Open the game.`} onClick={() => onOpen(r.id)}>
+        {content}
+        <IconChevronRight size={16} class="menu-game-chevron" />
+      </button>
     </li>
   );
 }

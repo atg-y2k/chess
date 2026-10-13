@@ -1,7 +1,7 @@
 import { MOVE_CLASS_ORDER, type MoveClass } from '../analysis/types';
 import type { Color } from '../game/types';
 import { CLASS_META, ClassIcon } from './ClassIcon';
-import { IconChevronRight, IconClose } from './icons';
+import { IconChevronRight, IconClose, IconReset } from './icons';
 import { IconLock } from './PaywallSheet';
 import './ReviewPanel.css';
 
@@ -20,6 +20,8 @@ export interface KeyMoment {
    * moment is shown with a neutral marker and label instead of the class.
    */
   concedes?: 'material' | 'mate';
+  /** One of the player's weak moves that can be tried again (game/practice.ts): a "Try again" button beside it. */
+  tryAgain?: boolean;
 }
 
 export interface ReviewPanelProps {
@@ -39,6 +41,11 @@ export interface ReviewPanelProps {
   /** Called with the number of plies to show (index + 1). */
   onSelectPly: (current: number) => void;
   onClose: () => void;
+  /**
+   * "Try again" beside the key moments that have `tryAgain` (game/practice.ts): called with the
+   * moment's ply index. Without it no such button shows.
+   */
+  onTryAgain?: (index: number) => void;
 }
 
 /** Rows always shown in the counts table, even when both sides have zero. */
@@ -116,12 +123,134 @@ export function ReviewPanel({
   onUnlock,
   onSelectPly,
   onClose,
+  onTryAgain,
 }: ReviewPanelProps) {
   const analysing = progress != null;
   const pct = analysing ? Math.round(Math.max(0, Math.min(1, progress)) * 100) : 100;
   const rows = visibleReviewClasses(counts);
   const locked = lockedMoments !== undefined;
   const momentCount = locked ? lockedMoments : keyMoments.length;
+
+  // Your mistakes to try again come first (the counts follow): on a phone the report opens on them.
+  const tryFirst = !locked && !!onTryAgain && keyMoments.some((m) => m.tryAgain);
+  const table = (
+    <table class="review-table">
+      <thead>
+        <tr>
+          <th scope="col" class="review-th-label" colSpan={2}>
+            Moves
+          </th>
+          <th scope="col" class="review-th-side">
+            <span class="review-chip" data-color="w">
+              White
+            </span>
+          </th>
+          <th scope="col" class="review-th-side">
+            <span class="review-chip" data-color="b">
+              Black
+            </span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((cls) => {
+          const w = counts.w[cls] ?? 0;
+          const b = counts.b[cls] ?? 0;
+          return (
+            <tr key={cls} data-cls={cls} style={{ '--row-tone': CLASS_META[cls].color }}>
+              <td class="review-icon">
+                <ClassIcon cls={cls} size={20} />
+              </td>
+              <th scope="row" class="review-label">
+                {CLASS_META[cls].label}
+              </th>
+              <td class="review-count" data-zero={w === 0 ? '' : undefined}>
+                {w}
+              </td>
+              <td class="review-count" data-zero={b === 0 ? '' : undefined}>
+                {b}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+  const moments = (
+    <div class="review-moments">
+      <h3 class="review-subtitle">
+        Key moments
+        {momentCount > 0 && <span class="review-badge">{momentCount}</span>}
+      </h3>
+      {locked ? (
+        <div class="review-locked" data-id="review-locked">
+          <span class="review-locked-icon" aria-hidden="true">
+            <IconLock size={18} />
+          </span>
+          <div class="review-locked-text">
+            <strong>{lockedTitle(lockedMoments, analysing)}</strong>
+            <span>See where the game was won and lost, with coaching on every move.</span>
+          </div>
+          {onUnlock && (
+            <button type="button" class="btn btn-primary review-locked-btn" data-id="review-unlock" onClick={onUnlock}>
+              Unlock
+            </button>
+          )}
+        </div>
+      ) : keyMoments.length === 0 ? (
+        <p class="review-empty">{analysing ? 'Looking for turning points…' : 'No big swings — a clean game.'}</p>
+      ) : (
+        <ul class="review-list">
+          {keyMoments.map((m) => {
+            const tone = { '--row-tone': m.concedes ? CONCESSION_TONE : CLASS_META[m.cls].color };
+            // One of your weak moves: "Try again" beside it (the row itself still shows the move).
+            const tryIt = !!m.tryAgain && !!onTryAgain;
+            return (
+              <li key={m.index} data-try={tryIt ? '' : undefined} style={tryIt ? tone : undefined}>
+                <button
+                  type="button"
+                  class="review-moment"
+                  data-index={m.index}
+                  data-concedes={m.concedes}
+                  style={tone}
+                  onClick={() => onSelectPly(m.index + 1)}
+                >
+                  {m.concedes ? <ConcessionIcon label={momentLabel(m)} size={24} /> : <ClassIcon cls={m.cls} size={24} />}
+                  <span class="review-moment-main">
+                    <span class="review-moment-head">
+                      {m.color && (
+                        <span class="review-moment-who" data-you={m.color === playerColor ? '' : undefined}>
+                          {m.color === playerColor ? 'You' : names[m.color]}
+                        </span>
+                      )}
+                      <span class="review-moment-no">{moveLabel(m)}</span>
+                      <span class="review-moment-san">{m.san}</span>
+                      <span class="review-moment-cls">{momentLabel(m)}</span>
+                    </span>
+                    <span class="review-moment-text">{m.text}</span>
+                  </span>
+                  {!tryIt && <IconChevronRight size={18} class="review-moment-chevron" />}
+                </button>
+                {tryIt && (
+                  <button
+                    type="button"
+                    class="review-try"
+                    data-id="try-again"
+                    data-index={m.index}
+                    aria-label={`Try again: find a better move than ${m.san}`}
+                    onClick={() => onTryAgain!(m.index)}
+                  >
+                    <IconReset size={16} />
+                    <span>Try again</span>
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
 
   return (
     <section class="review" aria-label="Game Review" data-analysing={analysing ? '' : undefined}>
@@ -157,104 +286,18 @@ export function ReviewPanel({
         </div>
       )}
 
-      <div class="review-body">
-        <table class="review-table">
-          <thead>
-            <tr>
-              <th scope="col" class="review-th-label" colSpan={2}>
-                Moves
-              </th>
-              <th scope="col" class="review-th-side">
-                <span class="review-chip" data-color="w">
-                  White
-                </span>
-              </th>
-              <th scope="col" class="review-th-side">
-                <span class="review-chip" data-color="b">
-                  Black
-                </span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((cls) => {
-              const w = counts.w[cls] ?? 0;
-              const b = counts.b[cls] ?? 0;
-              return (
-                <tr key={cls} data-cls={cls} style={{ '--row-tone': CLASS_META[cls].color }}>
-                  <td class="review-icon">
-                    <ClassIcon cls={cls} size={20} />
-                  </td>
-                  <th scope="row" class="review-label">
-                    {CLASS_META[cls].label}
-                  </th>
-                  <td class="review-count" data-zero={w === 0 ? '' : undefined}>
-                    {w}
-                  </td>
-                  <td class="review-count" data-zero={b === 0 ? '' : undefined}>
-                    {b}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-
-        <div class="review-moments">
-          <h3 class="review-subtitle">
-            Key moments
-            {momentCount > 0 && <span class="review-badge">{momentCount}</span>}
-          </h3>
-          {locked ? (
-            <div class="review-locked" data-id="review-locked">
-              <span class="review-locked-icon" aria-hidden="true">
-                <IconLock size={18} />
-              </span>
-              <div class="review-locked-text">
-                <strong>{lockedTitle(lockedMoments, analysing)}</strong>
-                <span>See where the game was won and lost, with coaching on every move.</span>
-              </div>
-              {onUnlock && (
-                <button type="button" class="btn btn-primary review-locked-btn" data-id="review-unlock" onClick={onUnlock}>
-                  Unlock
-                </button>
-              )}
-            </div>
-          ) : keyMoments.length === 0 ? (
-            <p class="review-empty">{analysing ? 'Looking for turning points…' : 'No big swings — a clean game.'}</p>
-          ) : (
-            <ul class="review-list">
-              {keyMoments.map((m) => (
-                <li key={m.index}>
-                  <button
-                    type="button"
-                    class="review-moment"
-                    data-index={m.index}
-                    data-concedes={m.concedes}
-                    style={{ '--row-tone': m.concedes ? CONCESSION_TONE : CLASS_META[m.cls].color }}
-                    onClick={() => onSelectPly(m.index + 1)}
-                  >
-                    {m.concedes ? <ConcessionIcon label={momentLabel(m)} size={24} /> : <ClassIcon cls={m.cls} size={24} />}
-                    <span class="review-moment-main">
-                      <span class="review-moment-head">
-                        {m.color && (
-                          <span class="review-moment-who" data-you={m.color === playerColor ? '' : undefined}>
-                            {m.color === playerColor ? 'You' : names[m.color]}
-                          </span>
-                        )}
-                        <span class="review-moment-no">{moveLabel(m)}</span>
-                        <span class="review-moment-san">{m.san}</span>
-                        <span class="review-moment-cls">{momentLabel(m)}</span>
-                      </span>
-                      <span class="review-moment-text">{m.text}</span>
-                    </span>
-                    <IconChevronRight size={18} class="review-moment-chevron" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+      <div class="review-body" data-moments-first={tryFirst ? '' : undefined}>
+        {tryFirst ? (
+          <>
+            {moments}
+            {table}
+          </>
+        ) : (
+          <>
+            {table}
+            {moments}
+          </>
+        )}
       </div>
     </section>
   );

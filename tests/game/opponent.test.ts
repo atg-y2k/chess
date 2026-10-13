@@ -103,22 +103,28 @@ const classes = (plies: Ply[]) => plies.map((p) => p.classification?.cls ?? null
 
 describe('rate opponent: the view models during play', () => {
   it('coach and opponent ratings on: after a fine move of yours, the reply expanded and your move as the row above; both on the board, list and graph', () => {
-    const { store } = view({ plies: annotated(6, { cls: { 4: 'good' } }) });
-    const c = store.coach.value;
-    expect(c).toMatchObject({
+    const { state, store } = view({ plies: annotated(6, { cls: { 4: 'good' } }) });
+    // The reply is a mistake: first only its verdict and the question (see tests/game/punish.test.ts)…
+    const head = {
       kind: 'coach',
       title: 'Pip’s 3… Nd4 is a mistake',
       titleMove: 'Pip’s 3… Nd4',
       cls: 'mistake',
-      lines: ['Nd4 explained.', 'More about Nd4.'],
       subject: 'opponent',
       who: 'Pip',
-      verdict: 'Mistake',
       index: 5,
       paired: true,
       collapsed: false,
-    });
-    expect(c.actions).toEqual([{ id: 'showBest', label: 'Show best', primary: true }]);
+    };
+    // (The collapsed panel's half says what is new: "Punish it?".)
+    expect(store.coach.value).toMatchObject({ ...head, verdict: 'Punish it?', lines: ['Pip made a mistake — can you punish it?'] });
+    expect(store.coach.value.actions).toEqual([{ id: 'showPunishment', label: 'Show me' }]);
+    // …then, once shown ("Show me"), its explanation, and what Pip should have played as a
+    // secondary button (the panel is about the punishment until you move).
+    state.punishReveal.value = annotationKey('g1', state.plies.value[5]);
+    const c = store.coach.value;
+    expect(c).toMatchObject({ ...head, verdict: 'Mistake', lines: ['Nd4 explained.', 'More about Nd4.'] });
+    expect(c.actions).toEqual([{ id: 'showBest', label: 'Pip’s best' }]);
     expect(c.other).toEqual({ subject: 'you', who: 'You', move: '3. Bc4', verdict: 'Good', cls: 'good', place: 'before' });
     // The reply has the badge (on the last move); yours stays on its square.
     expect(store.board.value.badge).toEqual({ square: 'd4', cls: 'mistake' });
@@ -129,23 +135,29 @@ describe('rate opponent: the view models during play', () => {
   });
 
   it('your move stays expanded after the reply while it has something to fix (with Retry); the reply is the row below', () => {
-    // 3. Bc4 is an inaccuracy: still the open one after 3… Nd4.
-    const { store } = view();
+    // 3. Bc4 is an inaccuracy: still the open one after a fine 3… Nd4.
+    const { store } = view({ plies: annotated(6, { cls: { 5: 'good' } }) });
     expect(store.coach.value).toMatchObject({ title: '3. Bc4 is an inaccuracy', subject: 'you', index: 4, paired: true });
-    expect(store.coach.value.other).toEqual({ subject: 'opponent', who: 'Pip', move: '3… Nd4', verdict: 'Mistake', cls: 'mistake', place: 'after' });
-    expect(store.board.value.badge).toEqual({ square: 'd4', cls: 'mistake' });
+    expect(store.coach.value.other).toEqual({ subject: 'opponent', who: 'Pip', move: '3… Nd4', verdict: 'Good', cls: 'good', place: 'after' });
+    expect(store.board.value.badge).toEqual({ square: 'd4', cls: 'good' });
     expect(store.board.value.extraBadges).toEqual([{ square: 'c4', cls: 'inaccuracy' }]);
     // A mistake with takebacks on: its Retry stays at hand.
-    const retry = view({ plies: annotated(6, { cls: { 4: 'mistake' } }), allowTakebacks: true }).store.coach.value;
+    const retry = view({ plies: annotated(6, { cls: { 4: 'mistake', 5: 'good' } }), allowTakebacks: true }).store.coach.value;
     expect(retry).toMatchObject({ title: '3. Bc4 is a mistake', subject: 'you' });
     expect(retry.actions.map((a) => a.id)).toEqual(['showBest', 'retry']);
     // Every class that needs no fixing hands the panel to the reply.
     for (const cls of ['brilliant', 'great', 'best', 'excellent', 'good', 'book', 'forced'] as const) {
-      expect(view({ plies: annotated(6, { cls: { 4: cls } }) }).store.coach.value.subject, cls).toBe('opponent');
+      expect(view({ plies: annotated(6, { cls: { 4: cls, 5: 'good' } }) }).store.coach.value.subject, cls).toBe('opponent');
     }
     for (const cls of ['inaccuracy', 'mistake', 'miss', 'blunder'] as const) {
-      expect(view({ plies: annotated(6, { cls: { 4: cls } }) }).store.coach.value.subject, cls).toBe('you');
+      expect(view({ plies: annotated(6, { cls: { 4: cls, 5: 'good' } }) }).store.coach.value.subject, cls).toBe('you');
     }
+    // The reply is a mistake to punish: its question is the news, expanded with Show me; your
+    // inaccuracy is the row above (a tap away), and never asks the question under its own buttons.
+    const ask = view().store.coach.value;
+    expect(ask).toMatchObject({ subject: 'opponent', index: 5, lines: ['Pip made a mistake — can you punish it?'] });
+    expect(ask.actions.map((a) => a.id)).toEqual(['showPunishment']);
+    expect(ask.other).toEqual({ subject: 'you', who: 'You', move: '3. Bc4', verdict: 'Inaccuracy', cls: 'inaccuracy', place: 'before' });
   });
 
   it('coach on, opponent ratings off: only your move, as before', () => {
@@ -212,7 +224,7 @@ describe('rate opponent: the view models during play', () => {
   });
 
   it('the player can pick the other move until the next move', () => {
-    const { state, store } = view({ plies: annotated(5) });
+    const { state, store } = view({ plies: annotated(5, { cls: { 5: 'good' } }) });
     // Your 3. Bc4 is an inaccuracy: yours expanded, the bot's 2… Nc6 as the row below.
     expect(store.coach.value).toMatchObject({ title: '3. Bc4 is an inaccuracy', subject: 'you' });
     expect(store.coach.value.other).toEqual({ subject: 'opponent', who: 'Pip', move: '2… Nc6', verdict: 'Good', cls: 'good', place: 'after' });
@@ -222,11 +234,17 @@ describe('rate opponent: the view models during play', () => {
     expect(store.coach.value).toMatchObject({ title: 'Pip’s 2… Nc6 is good', subject: 'opponent', index: 3 });
     expect(store.coach.value.other).toMatchObject({ subject: 'you', move: '3. Bc4', place: 'before' });
     // The bot's reply: the panel picks again (your inaccuracy).
-    state.plies.value = annotated(6);
+    state.plies.value = annotated(6, { cls: { 5: 'good' } });
     expect(store.coach.value).toMatchObject({ title: '3. Bc4 is an inaccuracy', subject: 'you', index: 4 });
     state.coachFocus.value = { subject: 'opponent', at: 6 };
-    expect(store.coach.value).toMatchObject({ title: 'Pip’s 3… Nd4 is a mistake', subject: 'opponent', index: 5 });
+    expect(store.coach.value).toMatchObject({ title: 'Pip’s 3… Nd4 is good', subject: 'opponent', index: 5 });
     expect(store.coach.value.other).toMatchObject({ subject: 'you', move: '3. Bc4', verdict: 'Inaccuracy' });
+    // A reply to punish opens itself; picking yours shows yours, with nothing that names the punishment.
+    state.plies.value = annotated(6);
+    expect(store.coach.value).toMatchObject({ subject: 'opponent', index: 5 });
+    state.coachFocus.value = { subject: 'you', at: 6 };
+    expect(store.coach.value).toMatchObject({ title: '3. Bc4 is an inaccuracy', subject: 'you' });
+    expect(store.coach.value.other).toMatchObject({ subject: 'opponent', verdict: 'Punish it?' });
   });
 
   it('the opponent’s move while it is checked, and when the check failed', () => {
@@ -239,14 +257,18 @@ describe('rate opponent: the view models during play', () => {
     state.coachFocus.value = null;
     state.failedAnnotations.value = new Set([annotationKey('g1', plies[5])]);
     expect(store.coach.value).toMatchObject({ title: 'Couldn’t check Pip’s Nd4', busy: false });
-    expect(store.coach.value.actions).toEqual([{ id: 'retryAnalysis', label: 'Try again', primary: true }]);
+    expect(store.coach.value.actions).toEqual([{ id: 'retryAnalysis', label: 'Check again', primary: true }]);
   });
 
   it('Pro locked: the verdict, icons and badges stay free; the explanation and Show best are locked', () => {
-    const { store } = view({
+    const { state, store } = view({
       plies: annotated(6, { cls: { 4: 'good' } }),
       locked: ['coachExplanations', 'showBest', 'hint', 'bestMoveArrows', 'reviewDetails', 'explorerEngine'],
     });
+    // The question is free; "Show me" (the punishment, Show best's move) is locked.
+    expect(store.coach.value).toMatchObject({ title: 'Pip’s 3… Nd4 is a mistake', lines: ['Pip made a mistake — can you punish it?'] });
+    expect(store.coach.value.actions).toEqual([{ id: 'showPunishment', label: 'Show me', locked: true }]);
+    state.punishReveal.value = annotationKey('g1', state.plies.value[5]);
     const c = store.coach.value;
     expect(c).toMatchObject({ title: 'Pip’s 3… Nd4 is a mistake', cls: 'mistake', lines: [lockedTeaser(annotated()[5])] });
     expect(c.actions).toEqual([
@@ -323,6 +345,12 @@ const settings = (over: Partial<GameSettings> = {}): GameSettings => ({
   botElo: 100,
   ...over,
 });
+
+/** Waits (a few macrotasks at a time) until `ok()`; for a bot reply held on purpose, where `idle()` would wait for ever. */
+async function until(ok: () => boolean): Promise<void> {
+  for (let i = 0; i < 500 && !ok(); i++) await new Promise((r) => setTimeout(r, 0));
+  expect(ok()).toBe(true);
+}
 
 const move = (c: GameController, uci: string) =>
   c.playerMove(uci.slice(0, 2), uci.slice(2, 4), uci[4] as PromotionPiece | undefined);
@@ -442,7 +470,10 @@ describe('rate opponent: rated games and the controller', () => {
     controller.newGame(settings({ rateOpponent: true }));
     await play(controller, ['e2e4', 'g1f3']);
     const ply = store.plies.value[3];
-    expect(store.coach.value.actions.map((a) => a.id)).toContain('showBest');
+    // 2… Qh4 is to be punished first: "Show me" reveals it, and with it what Pip should have played.
+    expect(store.coach.value.actions.map((a) => a.id)).toEqual(['showPunishment']);
+    controller.runAction('showPunishment');
+    expect(store.coach.value.actions).toContainEqual({ id: 'showBest', label: 'Pip’s best' });
     controller.runAction('showBest');
     await controller.idle();
     const m = store.coachMode.value;
@@ -501,10 +532,24 @@ describe('rate opponent: rated games and the controller', () => {
     ents.push(entitlements);
     purchases.unlocked.resolve(false);
     purchases.product.resolve({ id: 'pro', title: 'Pro', description: '', displayPrice: '$9.99' });
-    const { controller, store } = await setup({ bot: new ScriptedBot(['e7e5', 'd8h4']), storage, entitlements });
+    const bot = new ScriptedBot(['e7e5', 'd8h4']);
+    const { controller, store } = await setup({ bot, storage, entitlements });
     controller.newGame(settings({ rateOpponent: true }));
     expect(store.settings.value.rateOpponent).toBe(true);
     await play(controller, ['e2e4', 'g1f3']);
+    // 2… Qh4 is to be punished: the question is free, "Show me" is Show best's move (Pro).
+    expect(store.coach.value.lines).toEqual(['Pip blundered — can you punish it?']);
+    controller.runAction('showPunishment');
+    expect(entitlements.paywall.value).toEqual({ open: true, feature: 'showBest' });
+    expect(store.punishView.value?.hidden).toBe(true);
+    entitlements.closePaywall();
+    // Your move reveals its feedback (here while the bot thinks about its reply). Yours says it
+    // punished it (free, as a label), and the opponent's row opens its own.
+    bot.manual = true;
+    expect(move(controller, 'f3h4')).toBe(true);
+    await until(() => !!store.plies.value[4]?.classification);
+    expect(store.coach.value).toMatchObject({ subject: 'you', lines: ['You punished it!', lockedTeaser(store.plies.value[4])] });
+    controller.selectCoachFeedback('opponent');
     const c = store.coach.value;
     expect(c).toMatchObject({ subject: 'opponent', titleMove: 'Pip’s 2… Qh4' });
     expect(c.cls).toBeDefined();

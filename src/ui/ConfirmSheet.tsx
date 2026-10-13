@@ -15,9 +15,10 @@ export interface ConfirmSheetProps {
 
 /**
  * Help that makes a rated game unrated (hint, takeback, Retry, the engine in the explorer, rating
- * the opponent's moves). Exploring without the engine is not help of this kind: it asks nothing.
+ * the opponent's moves, threat alerts). Exploring without the engine is not help of this kind: it
+ * asks nothing.
  */
-export type AssistPromptKind = 'hint' | 'undo' | 'retry' | 'exploreEngine' | 'rateOpponent';
+export type AssistPromptKind = 'hint' | 'undo' | 'retry' | 'exploreEngine' | 'rateOpponent' | 'threatAlerts';
 
 const UNRATED = 'makes this game unrated: win or lose, your rating stays the same.';
 
@@ -45,6 +46,13 @@ export function assistPrompt(
         title: 'Rate your opponent’s moves?',
         // The setting stays on (it is saved): say so, as the next games are unrated too.
         message: `Seeing when your opponent goes wrong is a big help, so it ${UNRATED} It stays on for your next games until you switch it off.`,
+        confirmLabel: 'Turn on',
+      };
+    case 'threatAlerts':
+      return {
+        title: 'Turn on threat alerts?',
+        // Saved like the opponent's ratings: the next games are unrated too.
+        message: `Being warned about your opponent’s threats is a big help, so it ${UNRATED} It stays on for your next games until you switch it off.`,
         confirmLabel: 'Turn on',
       };
   }

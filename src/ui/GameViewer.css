@@ -1,0 +1,234 @@
+/*
+ * The game viewer (GameViewer.tsx): full screen over the game and its sheets, under the paywall,
+ * sliding up like the Openings section. Its header, then the game screen's grid (App.css `.app`),
+ * which sizes the board and places everything for portrait, short phones and landscape.
+ */
+
+.viewer-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+  background: var(--bg);
+  animation: openings-in 0.36s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.viewer-shell:focus {
+  outline: none;
+}
+/* Back from trying one of its moves again: there at once, as it was left. */
+.viewer-shell[data-state='back'] {
+  animation: none;
+}
+.viewer-shell[data-state='closing'] {
+  pointer-events: none;
+  animation: openings-out 0.28s cubic-bezier(0.4, 0, 0.9, 0.6) forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .viewer-shell,
+  .viewer-shell[data-state='closing'] {
+    animation-duration: 0.01s;
+  }
+}
+/* As for the app: keep the status bar's band dark in the light theme of the installed app. */
+@media (display-mode: standalone) {
+  :root[data-theme='light'] .viewer-shell {
+    box-shadow: inset 0 var(--safe-top) 0 0 #1d1c1a;
+  }
+}
+
+/* ---------------------------------------------------------------- header */
+
+.viewer-head {
+  grid-area: head;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 52px;
+  padding: 2px 6px 2px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.viewer-back,
+.viewer-share {
+  appearance: none;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--link);
+  font-size: 17px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.viewer-back {
+  padding-right: 2px;
+}
+.viewer-back:active,
+.viewer-share:active {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.viewer-back:focus-visible,
+.viewer-share:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.viewer-share:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* The word "Back" where there is room (the chevron alone on a phone, and in the side column). */
+.viewer-back-label {
+  display: none;
+  margin-left: -4px;
+}
+@media (min-width: 560px) and (max-aspect-ratio: 5/4) {
+  .viewer-back-label {
+    display: inline;
+  }
+}
+
+.viewer-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.viewer-title-main {
+  margin: 0;
+  /* The opponent's name whole: two lines in a narrow header (landscape) rather than cut. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.viewer-result {
+  font-weight: 800;
+}
+.viewer-result[data-k='win'] {
+  color: var(--link);
+}
+.viewer-result[data-k='loss'] {
+  color: #e07a76;
+}
+:root[data-theme='light'] .viewer-result[data-k='loss'] {
+  color: #b3261e;
+}
+.viewer-facts {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 6px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.3;
+  color: var(--text-faint);
+}
+/* The separator ends a line rather than starting the next one when the facts wrap. */
+.viewer-fact:not(:last-child)::after {
+  content: '·';
+  margin-left: 6px;
+}
+/* The rating badge, as Recent games show it: the change in its color over the rating after the game. */
+.viewer-rating {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  min-width: 44px;
+  padding-right: 2px;
+}
+.viewer-delta {
+  font-size: 15px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.viewer-delta[data-sign='1'] {
+  color: var(--link);
+}
+.viewer-delta[data-sign='-1'] {
+  /* The danger red, lightened to 4.5:1 on the dark surfaces. */
+  color: #e07a76;
+}
+:root[data-theme='light'] .viewer-delta[data-sign='-1'] {
+  color: #b3261e;
+}
+.viewer-after {
+  font-size: 12px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.viewer-unrated {
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text-dim);
+}
+
+/* ---------------------------------------------------------------- the game screen's grid */
+
+/*
+ * The game screen's grid with a row for the header: on top in portrait (its height counts among the
+ * fixed rows that size the board), at the top of the side column in landscape. (`.app.viewer-app`:
+ * App.css, loaded later, must not win over these.)
+ */
+.app.viewer-app {
+  --viewer-head-h: 54px;
+  --app-fixed-h: calc(
+    2 * var(--app-strip-h) + var(--app-graph-h) + var(--app-moves-h) + var(--app-tools-h) + var(--app-coach-min) +
+      var(--viewer-head-h)
+  );
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto auto;
+  grid-template-areas:
+    'head'
+    'top'
+    'board'
+    'bottom'
+    'panel'
+    'graph'
+    'moves'
+    'tools';
+}
+@media (min-aspect-ratio: 5/4) {
+  .app.viewer-app {
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto auto;
+    grid-template-areas:
+      'board head'
+      'board top'
+      'board panel'
+      'board graph'
+      'board moves'
+      'board bottom'
+      'board tools';
+  }
+  .viewer-head {
+    padding-right: 0;
+  }
+}
+/* Not the game: a frame in the link color around the board (like the explorer's and Try again's). */
+.viewer-app .app-board-cell > .board-host > .board {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--link) 70%, transparent);
+}
+/* A swipe across the read-only board steps through the moves (the page does not scroll). */
+.viewer-board {
+  touch-action: pan-y;
+}
+.viewer-app[data-drawing] .viewer-board {
+  touch-action: none;
+}

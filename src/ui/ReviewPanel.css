@@ -63,9 +63,12 @@
   gap: 1px;
 }
 .review-name {
+  /* A long name ("Professor Hoot") takes two lines rather than being cut. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 13px;
   font-weight: 650;
   line-height: 1.25;
@@ -224,6 +227,11 @@
 .review-moments {
   margin-top: 12px;
 }
+/* Your mistakes to try again lead the report: the counts follow them. */
+.review-body[data-moments-first] .review-moments {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
 .review-subtitle {
   display: flex;
   align-items: center;
@@ -289,11 +297,14 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow: hidden;
 }
+/* In a narrow column (landscape) the class word wraps under the move, never under Try again. */
 .review-moment-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 5px;
+  gap: 0 5px;
   font-size: 14px;
   line-height: 1.25;
 }
@@ -343,6 +354,96 @@
 .review-moment-chevron {
   flex: none;
   color: var(--text-faint);
+}
+
+/*
+ * A key moment you can try again: the row's look moves to the list item, which holds the row (it
+ * still shows the move) and the "Try again" button beside it.
+ */
+.review-list li[data-try] {
+  display: flex;
+  align-items: center;
+  border-left: 3px solid var(--row-tone);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.review-list li[data-try] .review-moment {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-right: 4px;
+  border-left: 0;
+  background: transparent;
+}
+.review-list li[data-try] .review-moment:active {
+  background: var(--surface-3);
+}
+.review-try {
+  appearance: none;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  margin-right: 6px;
+  padding: 0 12px 0 10px;
+  border: 0;
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.review-try svg {
+  color: var(--accent);
+}
+/*
+ * A narrow panel (the side column of a landscape phone, App.css's `panel` container): each side's
+ * name goes under its accuracy (too narrow for both in a row), and Try again under the moment, which
+ * keeps its width.
+ */
+@container panel (max-width: 360px) {
+  .review-side {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .review-side .review-who {
+    flex-basis: 100%;
+  }
+  .review-list li[data-try] {
+    flex-wrap: wrap;
+  }
+  .review-list li[data-try] .review-moment {
+    flex-basis: 100%;
+  }
+  .review-list li[data-try] .review-try {
+    min-height: 40px;
+    margin: -4px 8px 8px auto;
+  }
+  .review-list li[data-try] .review-try::after {
+    /* 44px tap target. */
+    content: '';
+    position: absolute;
+    inset: -2px 0;
+  }
+  .review-try {
+    position: relative;
+  }
+}
+.review-try:active {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.review-try:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+:root[data-theme='light'] .review-try {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+}
+:root[data-theme='light'] .review-try svg {
+  color: var(--accent-strong);
 }
 
 /* Light theme: pale class colours need more contrast as text. */

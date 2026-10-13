@@ -3,14 +3,15 @@
  * ("12. Nf3", "12… Nf6") and short, phase-aware playing tips.
  */
 import { Chess, type Square } from 'chess.js';
+import { explainBestMove, type PrevMove } from '../analysis/explain';
 import { bestWasSentence, equalAlternatives, isNearBest } from '../analysis/nearEqual';
 import { see } from '../analysis/see';
 import type { Classification, Explanation, MoveClass } from '../analysis/types';
 import { formatScore } from '../analysis/winprob';
-import { PIECE_VALUES, sideToMove, toWhitePov, whitePovTo } from '../chess/utils';
-import type { Score } from '../engine/types';
+import { PIECE_VALUES, sideToMove, toWhitePov, uciToSan, whitePovTo, type SeenPositions } from '../chess/utils';
+import type { PvLine, Score } from '../engine/types';
 import { CLASS_META } from '../ui/ClassIcon';
-import type { Color, Ply } from './types';
+import type { Color, Ply, Punishment } from './types';
 
 /** Display label of a class, e.g. "Blunder" (from CLASS_META). */
 export function classLabel(cls: MoveClass): string {
@@ -171,6 +172,68 @@ function scoreKey(s: Score): number {
 
 /** Classes that offer "Retry" in coach mode. */
 export const RETRY_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['mistake', 'miss', 'blunder']);
+
+/**
+ * Classes of an opponent's move the player is asked to punish while its moves are rated
+ * (`rateOpponent`): "Pip blundered — can you punish it?" (the ones that offer Retry on yours).
+ */
+export const PUNISH_CLASSES: ReadonlySet<MoveClass> = RETRY_CLASSES;
+
+/** The player's move after the opponent's mistake was the punishment, or about as good (nearEqual.ts). */
+export const PUNISHED_LINE = 'You punished it!';
+/** ...it was not, said without naming the punishment (while Retry is offered, or Show best is locked). */
+export const PUNISH_MISSED_LINE = 'You missed the punishment.';
+/** The compact verdict of the opponent's move while its punishment is to be found (the collapsed panel's half, its row). */
+export const PUNISH_IT_VERDICT = 'Punish it?';
+/** ...and of your move that punished it. */
+export const PUNISHED_VERDICT = 'Punished!';
+
+/** "<subject>, which <reason>", or "<subject>: it <reason>" when the reason has a "which" of its own. */
+function withReason(subject: string, reason: string | null): string {
+  if (!reason) return subject;
+  return /\bwhich\b/.test(reason) ? `${subject}: it ${reason}` : `${subject}, which ${reason}`;
+}
+
+/**
+ * The prompt while the punishment of the opponent's weak move is still to be found: "Pip blundered —
+ * can you punish it?", "Pip made a mistake — …", "Pip missed its chance — …". Names no move.
+ */
+export function punishPrompt(name: string, cls: MoveClass): string {
+  const what = cls === 'blunder' ? 'blundered' : cls === 'miss' ? 'missed its chance' : 'made a mistake';
+  return `${name} ${what} — can you punish it?`;
+}
+
+/** "Show me": "Punish it with Nxe5, which wins a knight." */
+export function punishWithLine(p: Pick<Punishment, 'san' | 'reason'>): string {
+  return `${withReason(`Punish it with ${p.san}`, p.reason)}.`;
+}
+
+/** After the player's move that was not it: "The punishment was Nxe5, which wins a knight." */
+export function punishmentWasLine(san: string, reason: string | null): string {
+  return `${withReason(`The punishment was ${san}`, reason)}.`;
+}
+
+/**
+ * The punishment of a weak move (`Ply.punishment`): the engine's best move in `fen`, the position
+ * after the weak move (`lines`: its analysis, best first), with what it does from the punisher's
+ * side as `explainBestMove` says it ("wins a knight", "is checkmate"; null when its words do not
+ * start with the move). Null without a line.
+ */
+export function punishmentOf(
+  fen: string,
+  lines: readonly PvLine[],
+  opts: { prevMove?: PrevMove; seen?: SeenPositions } = {},
+): Punishment | null {
+  const line = lines[0];
+  const uci = line?.pv[0];
+  if (!line || !uci) return null;
+  const san = uciToSan(fen, uci);
+  if (!san) return null;
+  const e = explainBestMove(fen, line, { perspective: 'you', lines, ...opts });
+  const prefix = `${san} `;
+  const reason = e.headline.startsWith(prefix) && e.headline.endsWith('.') ? e.headline.slice(prefix.length, -1) : null;
+  return { uci, san, reason: reason || null };
+}
 
 /** Classes drawn as markers on the eval graph and listed as key moments. */
 export const KEY_CLASSES: ReadonlySet<MoveClass> = new Set<MoveClass>(['brilliant', 'great', 'mistake', 'miss', 'blunder']);

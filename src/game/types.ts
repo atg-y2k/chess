@@ -24,6 +24,20 @@ export interface Ply {
   isBook?: boolean;
   /** Opening name after this ply (if known). */
   opening?: { eco: string; name: string };
+  /**
+   * The punishment of an opponent's mistake, miss or blunder (`rateOpponent`'s "can you punish
+   * it?"): the engine's best move in `fenAfter` and what it does. Set by the annotations on the
+   * opponent's weak moves only.
+   */
+  punishment?: Punishment;
+}
+
+/** The best reply to a weak move (see `Ply.punishment`). */
+export interface Punishment {
+  uci: string;
+  san: string;
+  /** What it does, as a verb phrase ("wins a knight", "is checkmate"); null when nothing is said. */
+  reason: string | null;
 }
 
 export interface GameSettings {
@@ -47,6 +61,12 @@ export interface GameSettings {
    * with it is unrated.
    */
   rateOpponent: boolean;
+  /**
+   * Threat alerts: on your turn, a warning when the opponent threatens something real (engine
+   * verified, see analysis/threat.ts: a mate, or about a pawn and a half of material or more), with
+   * a threat arrow. Help, so a game played with it is unrated; part of Pro where Pro is sold.
+   */
+  threatAlerts: boolean;
   sound: boolean;
   allowTakebacks: boolean;
 }
@@ -60,6 +80,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   showEvalBar: true,
   showBestMoves: false,
   rateOpponent: false,
+  threatAlerts: false,
   sound: true,
   allowTakebacks: true,
 };

@@ -48,6 +48,11 @@ export interface CoachPanelProps {
   who?: string;
   /** With `other`: the short verdict ("Mistake"), for the collapsed row. */
   verdict?: string;
+  /**
+   * A warning above the text (threat alerts): "Pip threatens Nxf7, forking your queen and rook."
+   * Collapsed, it takes the row (also when both moves are rated: their halves are a tap away).
+   */
+  alert?: string;
 }
 
 /** The other rated move's feedback, as one compact row of the coach panel. */
@@ -135,6 +140,35 @@ function HalfButton({ half }: { half: Half }) {
 /** Emoji used for the coach's avatar. */
 export const COACH_EMOJI = '🎓';
 
+/** The warning sign of a threat alert (`alert`), as text (not the emoji), so it takes the warning color. */
+export const ALERT_SIGN = '⚠\uFE0E';
+
+/** The coach's avatar, or the warning sign when a threat alert is up (the collapsed row, which says the warning). */
+function Avatar({ alert }: { alert?: string }) {
+  return alert ? (
+    <span class="coach-avatar coach-avatar--alert" aria-hidden="true">
+      {ALERT_SIGN}
+    </span>
+  ) : (
+    <span class="coach-avatar" aria-hidden="true">
+      {COACH_EMOJI}
+    </span>
+  );
+}
+
+/** A threat alert's line in the bubble: the sign, then the warning. */
+function Alert({ text }: { text: string }) {
+  return (
+    <p class="coach-alert" role="status">
+      <span class="coach-alert-sign" aria-hidden="true">
+        {ALERT_SIGN}
+      </span>
+      <span class="visually-hidden">Warning: </span>
+      <span class="coach-alert-text">{text}</span>
+    </p>
+  );
+}
+
 /**
  * The coach's speech bubble under the board. Expanded it keeps a stable minimum height (92px)
  * so the layout does not jump between messages, and scrolls internally when the text is long
@@ -153,6 +187,7 @@ export function CoachPanel({
   other,
   who,
   verdict,
+  alert,
 }: CoachPanelProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const text = lines.join('\n');
@@ -207,17 +242,16 @@ export function CoachPanel({
     <ClassIcon cls={cls} size={collapsed ? 18 : 20} />
   ) : null;
 
-  if (collapsed && other) {
+  if (collapsed && other && !alert) {
     // Both moves rated: one row of two halves in their order ("You" first); a tap opens that one.
+    // (A threat alert takes the row instead, as below: the halves are a tap away.)
     const mine: Half = { who: who ?? '', verdict: verdict ?? title, cls, busy, current: true, onClick: onToggleCollapsed };
     const theirs: Half = { who: other.who, verdict: other.verdict, cls: other.cls, busy: other.busy, onClick: other.onSelect };
     const halves = other.place === 'before' ? [theirs, mine] : [mine, theirs];
     return (
       <section class="coach coach--collapsed coach--dual" data-cls={cls} style={tone} aria-label="Coach">
         <div class="coach-row coach-row--dual">
-          <span class="coach-avatar" aria-hidden="true">
-            {COACH_EMOJI}
-          </span>
+          <Avatar />
           {halves.map((h, i) => (
             <HalfButton key={i} half={h} />
           ))}
@@ -229,7 +263,7 @@ export function CoachPanel({
 
   if (collapsed) {
     return (
-      <section class="coach coach--collapsed" data-cls={cls} style={tone} aria-label="Coach">
+      <section class="coach coach--collapsed" data-cls={cls} data-alert={alert ? '' : undefined} style={tone} aria-label="Coach">
         <button
           type="button"
           class="coach-row"
@@ -238,12 +272,20 @@ export function CoachPanel({
           onClick={onToggleCollapsed}
           disabled={!onToggleCollapsed}
         >
-          <span class="coach-avatar" aria-hidden="true">
-            {COACH_EMOJI}
-          </span>
-          {badge}
-          <span class={titleClass}>{titleText}</span>
-          {lines[0] && <span class="coach-summary">{lines[0]}</span>}
+          <Avatar alert={alert} />
+          {/* A threat alert is the news of the moment: it takes the row (the bubble has the verdict). */}
+          {!alert && badge}
+          {alert ? (
+            <span class="coach-summary coach-summary--alert">
+              <span class="visually-hidden">Warning: </span>
+              {alert}
+            </span>
+          ) : (
+            <>
+              <span class={titleClass}>{titleText}</span>
+              {lines[0] && <span class="coach-summary">{lines[0]}</span>}
+            </>
+          )}
           {onToggleCollapsed && <IconChevronRight size={18} class="coach-chevron coach-chevron--up" />}
         </button>
       </section>
@@ -264,6 +306,7 @@ export function CoachPanel({
       <div class="coach-bubble">
         {banner && <OpeningBanner {...banner} onOpen={bannerAction?.onClick} />}
         {other?.place === 'before' && <OtherRow other={other} />}
+        {alert && <Alert text={alert} />}
         <div class="coach-head">
           {badge}
           <h2 class={titleClass}>{titleText}</h2>

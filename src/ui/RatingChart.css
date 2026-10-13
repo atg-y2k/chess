@@ -1,0 +1,284 @@
+/*
+ * The rating history chart (RatingChart.tsx) in the Menu's stats card. One series: the line in the
+ * accent (a darker green in the light theme, >= 3:1 on the card), hairline gridlines one step off the
+ * card, a neutral wash for the games played while the rating was new, and every text in text tokens.
+ */
+
+.rchart {
+  --chart-line: var(--accent);
+  --chart-ring: var(--sheet-group, var(--surface-2));
+  --chart-grid: color-mix(in srgb, var(--text) 11%, transparent);
+  --chart-band: color-mix(in srgb, var(--text) 7%, transparent);
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--sheet-sep, var(--border));
+}
+:root[data-theme='light'] .rchart {
+  --chart-line: var(--link);
+  --chart-grid: color-mix(in srgb, var(--text) 12%, transparent);
+  --chart-band: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+/* The picked game in words (a fixed height, so picking never moves the chart). */
+.rchart-readout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  margin-bottom: 2px;
+  font-size: 13px;
+  line-height: 1.25;
+  color: var(--text-dim);
+}
+.rchart-hint {
+  color: var(--text-faint);
+}
+.rchart-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.rchart-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.rchart-value {
+  font-size: 17px;
+  font-weight: 750;
+  color: var(--text);
+}
+.rchart-delta {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.rchart-delta[data-sign='1'] {
+  color: var(--link);
+}
+.rchart-delta[data-sign='-1'] {
+  /* The danger red, lightened to 4.5:1 on the dark surfaces. */
+  color: #e07a76;
+}
+/* Text on the white card: the darker red keeps 4.5:1. */
+:root[data-theme='light'] .rchart-delta[data-sign='-1'] {
+  color: #b3261e;
+}
+.rchart-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rchart-open {
+  appearance: none;
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  padding: 0 6px 0 10px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.rchart-open::after {
+  /* 44px tap target. */
+  content: '';
+  position: absolute;
+  inset: -6px -2px;
+}
+.rchart-open:active {
+  filter: brightness(0.92);
+}
+
+/* The plot: a horizontal drag scrubs along the line, a vertical one scrolls the Menu. */
+.rchart-plot {
+  position: relative;
+  touch-action: pan-y;
+  cursor: crosshair;
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.rchart-plot:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.rchart-svg {
+  display: block;
+  overflow: visible;
+}
+.rchart-svg text {
+  font-family: var(--font);
+  font-size: 11px;
+  fill: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.rchart-grid line {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.rchart-band rect {
+  fill: var(--chart-band);
+}
+.rchart-svg .rchart-band-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.rchart-line {
+  fill: none;
+  stroke: var(--chart-line);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+/* A level set between games: the rating moved without a game, so a thin, faint step. */
+.rchart-jump {
+  fill: none;
+  stroke: var(--text-faint);
+  stroke-width: 1;
+  opacity: 0.7;
+}
+.rchart-cross {
+  fill: none;
+  stroke: var(--text-faint);
+  stroke-width: 1;
+}
+.rchart-start {
+  fill: var(--chart-ring);
+  stroke: var(--chart-line);
+  stroke-width: 2;
+}
+.rchart-peak,
+.rchart-now,
+.rchart-pick {
+  fill: var(--chart-line);
+  stroke: var(--chart-ring);
+  stroke-width: 2;
+}
+.rchart-pick {
+  fill: var(--text);
+}
+.rchart-svg .rchart-label {
+  font-size: 11px;
+  font-weight: 650;
+  fill: var(--text-dim);
+}
+.rchart-svg .rchart-label--now {
+  font-weight: 750;
+  fill: var(--text);
+}
+
+/* The key for the band (one swatch, only when there is one). */
+.rchart-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.rchart-key-band {
+  flex: none;
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--chart-band);
+  box-shadow: inset 0 0 0 1px var(--chart-grid);
+}
+
+/* The table twin (collapsed). */
+.rchart-table {
+  margin-top: 6px;
+  font-size: 13px;
+}
+.rchart-table summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--link);
+  font-weight: 600;
+  cursor: pointer;
+}
+.rchart-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.rchart-table th {
+  padding: 4px 4px 4px 0;
+  font-size: 11px;
+  font-weight: 650;
+  text-align: left;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.rchart-table td {
+  padding: 5px 4px 5px 0;
+  border-top: 1px solid var(--chart-grid);
+  color: var(--text);
+  vertical-align: middle;
+}
+.rchart-table tr[data-provisional] td:first-child {
+  box-shadow: inset 3px 0 0 var(--chart-band);
+  padding-left: 6px;
+}
+.rchart-table-date,
+.rchart-table-delta {
+  display: block;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.rchart-table-open {
+  appearance: none;
+  position: relative;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.rchart-table-open::after {
+  /* 44px tap target (the row's height). */
+  content: '';
+  position: absolute;
+  inset: -6px -4px;
+}
+
+/* No rated game yet. */
+.rchart-empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--sheet-sep, var(--border));
+  font-size: 13px;
+  color: var(--text-faint);
+}
+.rchart-empty-art {
+  flex: none;
+  width: 64px;
+  height: 26px;
+}
+.rchart-empty-art path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--text) 25%, transparent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 3 4;
+}

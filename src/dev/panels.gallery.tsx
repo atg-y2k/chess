@@ -166,7 +166,15 @@ const KEY_CLASSES: MoveClass[] = ['brilliant', 'great', 'mistake', 'miss', 'blun
 function keyMomentsFor(plies: Ply[]): KeyMoment[] {
   return plies
     .filter((p) => p.classification && KEY_CLASSES.includes(p.classification.cls))
-    .map((p) => ({ index: p.index, cls: p.classification!.cls, san: p.san, text: p.explanation?.headline ?? '' }));
+    .map((p) => ({
+      index: p.index,
+      cls: p.classification!.cls,
+      san: p.san,
+      color: p.color,
+      text: p.explanation?.headline ?? '',
+      // The player's weak moves: Try again beside them.
+      ...(p.color === PLAYER_COLOR && p.classification!.cls !== 'brilliant' && p.classification!.cls !== 'great' ? { tryAgain: true } : {}),
+    }));
 }
 
 /** Coach content for the position after `current` plies. */
@@ -408,6 +416,7 @@ function GameScreen({ view, setView }: { view: 'live' | 'review'; setView: (v: V
               emit('review:close');
               setView('live');
             }}
+            onTryAgain={(i) => emit('review:tryAgain', i)}
           />
         ) : coachOn ? (
           <CoachPanel
@@ -481,6 +490,8 @@ function StatesPage() {
         <>
           <CoachPanel title="Analyzing your move…" lines={[]} busy />
           <CoachPanel title="Your move" lines={['Black threatens Qxa1+, winning your rook on a1.']} />
+          <CoachPanel title="Your move" alert="Pip threatens Nxf7, forking your queen and rook." lines={['Opening: Two Knights Defense']} />
+          <CoachPanel title="Your move" alert="Pip threatens Nxf7, forking your queen and rook." lines={[]} collapsed onToggleCollapsed={noop('states:alert')} />
           <CoachPanel
             cls="mistake"
             title="Mistake"

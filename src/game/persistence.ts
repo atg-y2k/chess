@@ -13,7 +13,7 @@ import type { Classification, Explanation, MoveClass } from '../analysis/types';
 import { parseUci, toUci } from '../chess/utils';
 import type { Score } from '../engine/types';
 import { DEFAULT_SETTINGS } from './types';
-import type { Color, GameOutcome, GameSettings, Ply } from './types';
+import type { Color, GameOutcome, GameSettings, Ply, Punishment } from './types';
 
 /** localStorage key of the current (or just finished) game (a SavedGame). */
 export const GAME_KEY = 'chesscoach.game';
@@ -27,7 +27,7 @@ export const DRAW_TIP_KEY = 'chesscoach.draw-tip';
 export type KeyValueStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 /** Analysis results stored per ply so a restored game does not need re-analysing. */
-export type PlyAnnotation = Pick<Ply, 'evalWhite' | 'evalDepth' | 'classification' | 'explanation' | 'isBook'>;
+export type PlyAnnotation = Pick<Ply, 'evalWhite' | 'evalDepth' | 'classification' | 'explanation' | 'isBook' | 'punishment'>;
 
 export interface SavedGame {
   version: 1;
@@ -75,6 +75,18 @@ export interface SavedGame {
    * (game in progress only; the game is already unrated by it).
    */
   hint?: SavedHint;
+  /**
+   * "Play on from here" (Try again): the game started from the position before the earlier game's
+   * move `from` ("12. Qxb2"). Unrated; a rematch keeps it. Absent in any other game.
+   */
+  practice?: SavedPractice;
+}
+
+/** See `SavedGame.practice`. */
+export interface SavedPractice {
+  from: string;
+  /** The game started after that move (the game viewer's Play from here on an earlier game's last position). */
+  after?: boolean;
 }
 
 /** An open hint (the coach's 'hint' mode): the position it was asked for. */
@@ -250,6 +262,10 @@ export function sanitizeSavedGame(raw: unknown): SavedGame | null {
   const hint = raw.hint;
   if (!over && isObject(hint) && typeof hint.fen === 'string' && hint.fen.length > 0 && hint.fen.length <= 100) game.hint = { fen: hint.fen };
   else delete game.hint;
+  const practice = raw.practice;
+  if (isObject(practice) && typeof practice.from === 'string' && practice.from.length > 0 && practice.from.length <= 40) {
+    game.practice = { from: practice.from, ...(practice.after === true ? { after: true } : {}) };
+  } else delete game.practice;
   return game;
 }
 
@@ -316,9 +332,20 @@ function sanitizeAnnotations(raw: unknown, plies: number): Record<number, PlyAnn
     const explanation = sanitizeExplanation(value.explanation);
     if (explanation) a.explanation = explanation;
     if (typeof value.isBook === 'boolean') a.isBook = value.isBook;
+    const punishment = sanitizePunishment(value.punishment);
+    if (punishment) a.punishment = punishment;
     if (Object.keys(a).length > 0) out[index] = a;
   }
   return out;
+}
+
+/** A saved punishment (`Ply.punishment`), or null when it is missing or malformed (older saves have none). */
+function sanitizePunishment(v: unknown): Punishment | null {
+  if (!isObject(v)) return null;
+  const { uci, san, reason } = v;
+  if (typeof uci !== 'string' || !UCI_RE.test(uci) || typeof san !== 'string' || !san || san.length > 12) return null;
+  if (reason !== null && (typeof reason !== 'string' || reason.length > 300)) return null;
+  return { uci, san, reason };
 }
 
 function isScore(v: unknown): v is Score {
