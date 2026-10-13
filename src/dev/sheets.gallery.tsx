@@ -2,6 +2,7 @@
  * Dev page for the bottom sheets: /gallery.html?g=sheets
  *   &open=new|menu|over|none   sheet shown on load (default new)
  *   &over=win|loss|draw|unrated|resign   GameOverSheet variant (default win)
+ *   &play=note    GameOverSheet with the game in numbers and the accuracy note (99.1% with 9 inaccuracies)
  *   &bot=<id>|custom &elo=N &adaptive=1   initial NewGameSheet settings (default bot=fennec)
  *   &empty=1      profile without games (MenuSheet empty state; NewGameSheet "Your level" picker)
  *   &engine=dual|single|forced   MenuSheet Engine row (single = remembered compatibility mode with a date)
@@ -14,6 +15,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
 import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings } from '../game/types';
+import { alreadyWonSheetNote } from '../game/review';
 import { STARTING_LEVELS } from '../rating/rating';
 import type { GameRecord, PlayerProfile } from '../rating/types';
 import { GameOverSheet, type GameOverSheetProps } from '../ui/GameOverSheet';
@@ -290,6 +292,13 @@ const OVER: Record<
 
 /* ------------------------------------------------------------------ page */
 
+
+/** "99% accuracy with 9 inaccuracies": 7 of them slower mates in a won game (`&play=note`). */
+const NOTE_PLAY: NonNullable<GameOverSheetProps['play']> = {
+  accuracy: { you: 99.1, bot: 41.7 },
+  counts: { blunder: 0, mistake: 0, miss: 0, inaccuracy: 9 },
+  note: alreadyWonSheetNote({ counts: { inaccuracy: 9 }, alreadyWon: { inaccuracy: 7 } }) ?? undefined,
+};
 function log(name: string, detail?: unknown) {
   (window.__sheetEvents ??= []).push({ name, detail });
   // eslint-disable-next-line no-console
@@ -486,6 +495,7 @@ export default function SheetsGallery() {
         botColor={overBot.color}
         botElo={overBot.elo}
         ratingChange={overData.ratingChange}
+        {...(q.get('play') === 'note' ? { play: NOTE_PLAY } : {})}
         onReview={() => {
           emit('over:review');
           setOpen('none');

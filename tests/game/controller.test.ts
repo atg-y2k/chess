@@ -23,6 +23,7 @@ import { RETRY_CLASSES, mentionsMove } from '../../src/game/coach';
 import { buildPgn, pgnEval } from '../../src/game/pgn';
 import { summarizeGame } from '../../src/game/review';
 import type { EngineSet } from '../../src/engine/createEngines';
+import type { AnalysisResult } from '../../src/engine/types';
 import { EngineLoadError } from '../../src/engine/errors';
 import {
   ANNOTATE_DEPTH,
@@ -94,6 +95,20 @@ async function playAll(c: GameController, ucis: string[]): Promise<void> {
 }
 
 const annotated = (p: Ply) => !!(p.classification && p.explanation && p.evalWhite);
+
+/**
+ * The next annotation search (an `ensure()` without a signal: not the searches the controller asks
+ * for ahead of it with one, `prefetchVerdict`) answers `fake` instead, once.
+ */
+function annotationFailsOnce(fake: (fen: string) => Promise<AnalysisResult>) {
+  const real = AnalysisService.prototype.ensure;
+  let used = false;
+  return vi.spyOn(AnalysisService.prototype, 'ensure').mockImplementation(function (this: AnalysisService, fen, opts) {
+    if (used || opts.signal) return real.call(this, fen, opts);
+    used = true;
+    return fake(fen);
+  });
+}
 
 beforeEach(() => {
   vi.mocked(classifyMove).mockClear();
@@ -1526,9 +1541,9 @@ describe('engine failure', () => {
     await controller.boot();
     controller.newGame(settings());
     const empty = { depth: 0, lines: [], bestMove: null, done: false, aborted: true };
-    const ensure = vi
-      .spyOn(AnalysisService.prototype, 'ensure')
-      .mockImplementationOnce(async (fen: string) => ({ fen, ...empty }));
+    // The annotation's first search fails (the searches asked for ahead of it, `prefetchVerdict`,
+    // carry a signal and go through).
+    const ensure = annotationFailsOnce(async (fen: string) => ({ fen, ...empty }));
     await playAll(controller, ['e2e4']);
     expect(store.plies.value[0].classification).toBeUndefined();
     expect(store.coach.value.busy).toBe(false);
@@ -1546,8 +1561,7 @@ describe('engine failure', () => {
     await controller.boot();
     controller.newGame(settings());
     // Pre-empted at depth 6 with lines: a partial result, not an annotation.
-    const ensure = vi.spyOn(AnalysisService.prototype, 'ensure');
-    ensure.mockImplementationOnce(async (fen: string) => ({
+    const ensure = annotationFailsOnce(async (fen: string) => ({
       fen,
       depth: 6,
       lines: [{ multipv: 1, depth: 6, score: { kind: 'cp', value: 30 }, pv: ['e7e5'] }],

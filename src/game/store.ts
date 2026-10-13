@@ -62,6 +62,8 @@ import {
   recaptureTip,
   showBestTitle,
   verdictTitle,
+  wonAnywayLine,
+  wonAnywaySummary,
 } from './coach';
 import { DRAW_COLORS, NO_DRAWINGS, NO_SHAPES, shapesAt, type DrawColor, type Drawings } from './drawings';
 import type { ProFeature } from './entitlements';
@@ -86,7 +88,7 @@ import {
   type Practice,
   type PracticeGame,
 } from './practice';
-import { summarizeGame, type ReviewSummary } from './review';
+import { alreadyWonSheetNote, reviewAccuracyNotes, summarizeGame, weakInWonGame, type ReviewSummary } from './review';
 import type { GameViewer } from './viewer';
 import { DEFAULT_SETTINGS, type Color, type GameOutcome, type GameSettings, type Ply, type Punishment } from './types';
 
@@ -698,6 +700,12 @@ export interface Store extends AppState {
    * game is in progress, and while Game Review's details are locked (Pro).
    */
   tryAgainMoments: ReadonlySignal<ReadonlySet<number>>;
+  /**
+   * The game-over sheet's "Try your N mistakes again", in game order: `tryAgainMoments` without the
+   * weak moves made when you were already winning (review.ts `weakInWonGame`), which the note above
+   * it says cost nothing (Game Review still offers them). Empty: no button.
+   */
+  sheetTries: ReadonlySignal<readonly number[]>;
 }
 
 /** See `Store.punishView`. */
@@ -1212,6 +1220,13 @@ export function createStore(state: AppState): Store {
     };
     const m = practiceMoments(pg);
     return m.length ? new Set(m) : NO_MOMENTS;
+  });
+  const sheetTries = computed<readonly number[]>(() => {
+    const m = tryAgainMoments.value;
+    if (!m.size) return [];
+    const ps = plies.value;
+    const before = (i: number) => (i > 0 ? ps[i - 1]?.evalWhite : state.startEval.value);
+    return [...m].sort((a, b) => a - b).filter((i) => !!ps[i] && !weakInWonGame(ps[i], before(i)));
   });
   /** The better move of the game's ply `index` has been shown (Show best, or a try that ended). */
   const answerShown = (index: number): boolean => {
@@ -1836,12 +1851,23 @@ export function createStore(state: AppState): Store {
     // One of your weak moves among the key moments: try it again. Until its better move has been
     // shown (Show best, or a try that ended), nothing here names it.
     const tryable = tryAgainMoments.value.has(ply.index);
-    const lines = tryable && !answerShown(ply.index)
-      ? answerFreeLines(ply.explanation, cl)
-      : explanationLines(ply.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null, { cl, playedUci: ply.uci, voice });
+    const hideAnswer = tryable && !answerShown(ply.index);
+    const won = wonLine(ply, !hideAnswer);
+    const lines = hideAnswer
+      ? [...answerFreeLines(ply.explanation, cl), ...(won ? [won] : [])]
+      : explanationLines(ply.explanation, !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null, { cl, playedUci: ply.uci, voice }, won);
     const actions: CoachActionView[] = showBest ? [showBestAction()] : [];
     if (tryable) actions.unshift({ id: 'tryAgain', label: 'Try again', primary: true });
-    return { kind: 'review', ...verdictTitle(ply), titleMove: moveLabel(ply), lines, busy: false, actions, index: ply.index };
+    return {
+      kind: 'review',
+      ...verdictTitle(ply),
+      titleMove: moveLabel(ply),
+      lines,
+      ...(won ? wonSummary(ply) : {}),
+      busy: false,
+      actions,
+      index: ply.index,
+    };
   }
 
   /**
@@ -1975,17 +2001,20 @@ export function createStore(state: AppState): Store {
     };
     if (mine && theirs) {
       // Both: one expanded (the one the player picked, until the next move), the other as a row.
-      // Your move stays expanded while it has something to fix (an inaccuracy or worse, something
-      // given away, Retry, a failed check); otherwise the opponent's latest move is (while yours is
-      // checked too, so the panel does not swap back and forth on every move).
+      // The panel follows the game forward: your move while it is the latest one (checked, then its
+      // verdict, which the bot's reply waits for), then the opponent's reply once it is played.
+      // Your move stays expanded after that while it has something to fix (an inaccuracy or worse,
+      // something given away, Retry, a failed check, whether it punished a mistake), so the panel
+      // never swaps back to it.
       // A "can you punish it?" on the opponent's latest move is the news of the moment: that move is
       // expanded, with its question and Show me (its row would only say the verdict), and then with
       // the punishment shown, until your move, unless the player picked theirs.
       const cf = state.coachFocus.value;
       const p = punishView.value;
       const asking = !!p && p.ply.index === theirs.index;
+      const latest = mine.index > theirs.index;
       const focus: CoachSubject =
-        cf && cf.at === plies.value.length ? cf.subject : asking || !needsAttention(mine) ? 'opponent' : 'you';
+        cf && cf.at === plies.value.length ? cf.subject : asking || (!latest && !needsAttention(mine)) ? 'opponent' : 'you';
       if (focus === 'you') return withNotes({ ...ownFeedback(mine), other: feedbackRow(theirs, 'opponent') });
       return withNotes({ ...opponentFeedback(theirs), other: feedbackRow(mine, 'you') });
     }
@@ -2019,16 +2048,19 @@ export function createStore(state: AppState): Store {
       // The opponent's mistake whose punishment is still to be found: only the question.
       const p = punishView.value;
       const ask = !human && p?.hidden && p.ply.index === ply.index;
+      // A weak class the won game made all but free: why (the faster mate hidden with the answer).
+      const won = human ? wonLine(ply, !hide) : null;
       return {
         kind: 'coach',
         ...head,
         lines: ask
           ? [punishPrompt(g.bot.name, cl.cls)]
           : hide
-            ? answerFreeLines(ply.explanation, cl)
+            ? [...answerFreeLines(ply.explanation, cl), ...(won ? [won] : [])]
             : human
-              ? explanationLines(ply.explanation)
+              ? explanationLines(ply.explanation, null, undefined, won)
               : opponentLines(ply),
+        ...(ask ? {} : wonSummary(ply)),
         busy: false,
         actions: back,
       };
@@ -2100,6 +2132,12 @@ export function createStore(state: AppState): Store {
       const kept = lines.filter((l) => !namesSecret(l));
       lines = kept.length ? kept : answerFreeLines(ply.explanation, cl).filter((l) => !namesSecret(l));
     }
+    // A weak class the won game makes all but free: why (the faster mate named only when nothing
+    // keeps it hidden, and not again after the punishment it was).
+    const won = wonLine(ply, !retry && !bestIsSecret && !punish);
+    if (won) lines = [...lines, won];
+    // The collapsed row: why the class costs nothing, unless it leads with the punishment.
+    const summary = won && !punish ? wonSummary(ply) : {};
     const reply = plies.value[ply.index + 1];
     const rc = reply?.classification?.cls;
     // Pointing out the bot's mistake is a live hint, so only in games that are unrated anyway (and
@@ -2112,7 +2150,7 @@ export function createStore(state: AppState): Store {
     if (showBest) actions.push(showBestAction(!g.assisted));
     if (retry) actions.push({ id: 'retry', label: 'Retry', primary: g.assisted });
     if (!actions.some((a) => a.primary) && actions.length) actions[0] = { ...actions[0], primary: true };
-    return { ...head, lines, busy: false, actions };
+    return { ...head, lines, ...summary, busy: false, actions };
   }
 
   /**
@@ -2182,7 +2220,9 @@ export function createStore(state: AppState): Store {
     // The punishment shown and still to be played: the panel is about it. What the opponent should
     // have played is a secondary "Pip’s best", never a primary "Show best" right under "Punish it with …".
     const pipsBest = p ? { ...showBestAction(), label: `${name}’s best` } : showBestAction(true);
-    return { ...head, lines: extra(opponentLines(ply)), busy: false, actions: showBest ? [pipsBest] : [] };
+    // The collapsed row: why the class costs nothing (unless the punishment leads).
+    const summary = answer ? {} : wonSummary(ply);
+    return { ...head, lines: extra(opponentLines(ply)), ...summary, busy: false, actions: showBest ? [pipsBest] : [] };
   }
 
   /**
@@ -2193,7 +2233,9 @@ export function createStore(state: AppState): Store {
     // Whose better move it was: "Pip should have played Nc6, …", never a bare "Best was Nc6" that
     // reads as advice for you (under "Punish it with Nxh4" above all).
     const name = game.value?.bot.name ?? 'Your opponent';
-    const lines = explanationLines(ply.explanation).map((l) => (l.startsWith('Best was ') ? `${name} should have played ${l.slice(9)}` : l));
+    const lines = explanationLines(ply.explanation, null, undefined, wonLine(ply, true)).map((l) =>
+      l.startsWith('Best was ') ? `${name} should have played ${l.slice(9)}` : l,
+    );
     const reply = plies.value[ply.index + 1];
     const cl = reply?.classification;
     if (!reply || !cl || !canRetry(reply)) return lines;
@@ -2325,6 +2367,28 @@ export function createStore(state: AppState): Store {
   function analysisFailed(ply: Ply): boolean {
     const g = game.value;
     return !!g && state.failedAnnotations.value.has(annotationKey(g.id, ply));
+  }
+
+  /**
+   * The line on a weak class the won game makes all but free (coach.ts `wonAnywayLine`): "A faster
+   * mate was available (Qh7#), but you were winning anyway.", in the third person for the opponent's
+   * move ("Pip had a faster mate …"). The better move only with `reveal`. Null for any other move.
+   */
+  function wonLine(ply: Ply, reveal: boolean): string | null {
+    const g = game.value;
+    const won = ply.classification?.wonAnyway;
+    if (!won || !ply.classification || !g) return null;
+    return wonAnywayLine(ply.classification, won, { who: ply.color === g.playerColor ? 'you' : g.bot.name, reveal });
+  }
+
+  /**
+   * With `wonLine`: the collapsed coach row's line (coach.ts `wonAnywaySummary`), so the row does not
+   * show a weak label beside a move that mates without why. Nothing for any other move.
+   */
+  function wonSummary(ply: Ply): Pick<CoachView, 'summary'> {
+    const g = game.value;
+    const summary = g ? wonAnywaySummary(ply.classification?.wonAnyway, ply.color === g.playerColor ? 'you' : g.bot.name) : null;
+    return summary ? { summary } : {};
   }
 
   function humanTurnLive(): boolean {
@@ -2533,9 +2597,13 @@ export function createStore(state: AppState): Store {
       ? summarizeGame(ps[pre - 1].fenAfter, ps[pre - 1].evalWhite ?? null, own, g.playerColor)
       : summarizeGame(g.startFen, state.startEval.value, ps, g.playerColor);
     const c = sum.counts[g.playerColor];
+    const you = sum.accuracy[g.playerColor];
+    // Why the accuracy stays high beside weak moves made when you were already winning.
+    const note = alreadyWonSheetNote({ counts: c, alreadyWon: sum.alreadyWon?.[g.playerColor] });
     return {
-      accuracy: { you: sum.accuracy[g.playerColor], bot: sum.accuracy[otherColor(g.playerColor)] },
+      accuracy: { you, bot: sum.accuracy[otherColor(g.playerColor)] },
       counts: { blunder: c.blunder ?? 0, mistake: c.mistake ?? 0, miss: c.miss ?? 0, inaccuracy: c.inaccuracy ?? 0 },
+      ...(note ? { note } : {}),
     };
   });
 
@@ -2549,9 +2617,13 @@ export function createStore(state: AppState): Store {
     // Accuracy and counts are free; the key moments (each with its comment) are Pro, and so is Try again.
     const hide = locked('reviewDetails');
     const tries = tryAgainMoments.value;
+    // Weak moves made when that side was already winning, which accuracy does not count (once the
+    // counts are final).
+    const notes = r.progress === null ? reviewAccuracyNotes(r, g.playerColor, botName) : [];
     return {
       progress: r.progress,
       accuracy: r.accuracy,
+      ...(notes.length ? { accuracyNotes: notes } : {}),
       counts: r.counts,
       playerColor: g.playerColor,
       names: g.playerColor === 'w' ? { w: 'You', b: botName } : { w: botName, b: 'You' },
@@ -2613,7 +2685,12 @@ export function createStore(state: AppState): Store {
           view.verdict = v.title.slice(label.length).trim();
         }
         view.evalLabel = formatScore(r.evalWhite, sideToMove(mv.fenAfter));
-        if (!locked('coachExplanations')) view.lines = [r.explanation.headline, ...r.explanation.details.slice(0, 1)];
+        if (!locked('coachExplanations')) {
+          // A weak class the won game makes all but free: why (said by color for the computer's side).
+          const who = mv.color === g.playerColor ? 'you' : mv.color === 'w' ? 'White' : 'Black';
+          const won = wonAnywayLine(r.classification, r.classification.wonAnyway, { who, reveal: true });
+          view.lines = [r.explanation.headline, ...r.explanation.details.slice(0, 1), ...(won ? [won] : [])];
+        }
       } else if (mv.failed) {
         view.verdict = 'Couldn’t check this move';
         view.actions.push({ id: 'retryRating', label: 'Check again' });
@@ -2702,6 +2779,7 @@ export function createStore(state: AppState): Store {
     punishView,
     practicePosition,
     tryAgainMoments,
+    sheetTries,
   };
 }
 
@@ -2712,14 +2790,18 @@ export function createStore(state: AppState): Store {
  * gives the classification, or, when the played move was about as good itself, "Your Nxd5 was
  * fine: X was only slightly better." (nothing when it scored at least as well; analysis/
  * nearEqual.ts `bestMoveNote`, `voice` 'neutral' for the opponent's move: "Nxd5 was fine: …").
+ * `won`: the line on a weak class a won game makes all but free (coach.ts `wonAnywayLine`), last
+ * (it may name the better move itself: "A faster mate was available (Qh7#), …").
  */
 export function explanationLines(
   e: Explanation | undefined | null,
   bestSan?: string | null,
   move?: { cl: Classification; playedUci: string; voice?: NearVoice },
+  won?: string | null,
 ): string[] {
   // "Nf3 is a known opening move." only repeats the verdict ("Nf3 is a book move"): say what "book" means instead.
   const lines = e ? [e.headline, ...e.details].map((l) => (BOOK_ECHO.test(l) ? BOOK_MEANING : l)) : [];
+  if (won) lines.push(won);
   if (bestSan && !lines.some((l) => mentionsMove(l, bestSan))) {
     const note = move ? bestMoveNote(move.cl, move.playedUci, move.voice) : bestWasSentence(bestSan);
     if (note) lines.push(note);

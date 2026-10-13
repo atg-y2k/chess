@@ -615,3 +615,120 @@ describe('AnalysisService: withdrawn requests (EnsureOptions.signal)', () => {
     svc.watch(null);
   });
 });
+
+describe('AnalysisService priorities (EnsureOptions.priority)', () => {
+  const done = (depth = 14) => ({ depth, lines: lines(depth), bestMove: 'e2e4', done: true });
+
+  it('runs queued requests by priority, first come first served among equals', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    const order: string[] = [];
+    const ask = (name: string, fen: string, priority?: number) =>
+      void svc.ensure(fen, { minDepth: 14, multiPv: 3, ...(priority !== undefined ? { priority } : {}) }).then(() => order.push(name));
+    ask('running', FENS.italian);
+    ask('background', FENS.qgd);
+    ask('opponent', FENS.sicilian, 20);
+    ask('background 2', FENS.endgame);
+    ask('verdict', FENS.middle, 40);
+    ask('opponent 2', FENS.afterE4, 20);
+    // The running search is of the default priority (0) too: nothing pre-empted it... until the
+    // higher ones came: it was put back at the head of its own priority.
+    const fens = () => eng.calls.filter((c) => !c.ended).map((c) => c.fen);
+    expect(eng.calls[0].ended).toBe(true);
+    await tickle();
+    expect(fens()).toEqual([FENS.middle]);
+    for (let i = 0; i < 6; i++) {
+      eng.calls.find((c) => !c.ended)?.end(done());
+      await tickle();
+    }
+    expect(order).toEqual(['verdict', 'opponent', 'opponent 2', 'running', 'background', 'background 2']);
+  });
+
+  it('a higher priority pre-empts the running search, which is searched again afterwards; an equal or lower one waits', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    let lower: AnalysisResult | null = null;
+    void svc.ensure(FENS.italian, { minDepth: 14, multiPv: 1, priority: 10 }).then((r) => (lower = r));
+    eng.calls[0].opts.onInfo?.({ ...partial(9, 1), fen: FENS.italian });
+    // The same priority waits for it (FIFO)...
+    void svc.ensure(FENS.endgame, { minDepth: 14, multiPv: 3, priority: 10 });
+    expect(eng.calls).toHaveLength(1);
+    // ...a higher one cuts it short at once.
+    let verdict: AnalysisResult | null = null;
+    void svc.ensure(FENS.middle, { minDepth: 14, multiPv: 3, priority: 40 }).then((r) => (verdict = r));
+    expect(eng.calls[0].ended).toBe(true);
+    await tickle();
+    expect(eng.calls.map((c) => c.fen)).toEqual([FENS.italian, FENS.middle]);
+    expect(lower).toBeNull(); // not answered with the partial result
+    eng.calls[1].end(done());
+    await tickle();
+    expect(verdict).toMatchObject({ depth: 14, done: true });
+    // The pre-empted search comes back before the later one of its own priority.
+    expect(eng.calls.map((c) => c.fen)).toEqual([FENS.italian, FENS.middle, FENS.italian]);
+    eng.calls[2].end({ ...done(), lines: lines(14, 1) });
+    await tickle();
+    expect(lower).toMatchObject({ depth: 14, done: true });
+    expect(eng.calls.at(-1)!.fen).toBe(FENS.endgame);
+  });
+
+  it('a request joining a queued search raises its priority; the eval bar’s live search always yields', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng, { liveDepth: 18 });
+    svc.watch(FENS.start);
+    expect(eng.calls).toHaveLength(1);
+    // Any request pre-empts the live search, whatever its priority.
+    void svc.ensure(FENS.italian, { minDepth: 14, multiPv: 3, priority: 20 });
+    expect(eng.calls[0].ended).toBe(true);
+    expect(eng.calls[1].fen).toBe(FENS.italian);
+    void svc.ensure(FENS.qgd, { minDepth: 14, multiPv: 3, priority: 20 });
+    void svc.ensure(FENS.sicilian, { minDepth: 14, multiPv: 3, priority: 20 });
+    // The player's move: the queued sicilian search is asked for again with the verdict's priority.
+    void svc.ensure(FENS.sicilian, { minDepth: 14, multiPv: 3, priority: 40 });
+    // It pre-empts the running opponent search and goes first.
+    expect(eng.calls[1].ended).toBe(true);
+    await tickle();
+    expect(eng.calls.at(-1)!.fen).toBe(FENS.sicilian);
+    eng.calls.at(-1)!.end(done());
+    await tickle();
+    expect(eng.calls.at(-1)!.fen).toBe(FENS.italian);
+    eng.calls.at(-1)!.end(done());
+    await tickle();
+    expect(eng.calls.at(-1)!.fen).toBe(FENS.qgd);
+    eng.calls.at(-1)!.end(done());
+    await tickle();
+    // Then the live analysis resumes.
+    expect(eng.calls.at(-1)!.fen).toBe(FENS.start);
+    svc.watch(null);
+  });
+
+  it('a request joining the running search lifts it above later requests; a withdrawn one lowers it again', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    void svc.ensure(FENS.italian, { minDepth: 14, multiPv: 3, priority: 20 });
+    const ctl = new AbortController();
+    // Joins the running search (same budget): no restart, and nothing of priority 30 pre-empts it now.
+    void svc.ensure(FENS.italian, { minDepth: 14, multiPv: 3, priority: 40, signal: ctl.signal });
+    void svc.ensure(FENS.qgd, { minDepth: 14, multiPv: 3, priority: 30 });
+    expect(eng.calls).toHaveLength(1);
+    expect(eng.calls[0].ended).toBe(false);
+    // Withdrawn: the search is back at its own priority, and the waiting one of 30 pre-empts it.
+    ctl.abort();
+    await tickle();
+    expect(eng.calls[0].ended).toBe(true);
+    expect(eng.calls.at(-1)!.fen).toBe(FENS.qgd);
+  });
+
+  it('while paused nothing is pre-empted; resumed, the highest priority runs first', async () => {
+    const eng = new ManualEngine();
+    const svc = new AnalysisService(eng);
+    void svc.ensure(FENS.italian, { minDepth: 14, multiPv: 3, priority: 10 });
+    svc.setPaused(true);
+    await tickle();
+    void svc.ensure(FENS.middle, { minDepth: 14, multiPv: 3, priority: 40 });
+    await tickle();
+    expect(eng.calls.filter((c) => !c.ended)).toHaveLength(0);
+    svc.setPaused(false);
+    await tickle();
+    expect(eng.calls.at(-1)!.fen).toBe(FENS.middle);
+  });
+});

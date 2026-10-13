@@ -70,7 +70,7 @@ src/
     coach.ts               coach wording and rules that need no engine (class sentences, move labels, tips,
                            the recapture tip, which actions a classification offers, answer-free text while
                            Retry is offered, neutral verdicts for praised moves that give something away)
-    review.ts              game summary (accuracy, counts, key moments)
+    review.ts              game summary (accuracy, counts, key moments, weak moves made in a won game and their note)
     practice.ts            Try again: the moves of any game (the one on the board, or an earlier one) that can be tried
                            again, one try's pure state (attempt, verdict, hints, answer) and its wording
     archive.ts             earlier games: the compact analysis a GameRecord keeps (encode / decode), the moves from its PGN,
@@ -148,8 +148,12 @@ scripts/appstore-screenshots.mjs                App Store screenshots (Playwrigh
   (history included). A bot search that follows analysis first sends `ucinewgame`, so the bot never
   profits from the analysis hash table (its calibration assumes an engine of its own).
 - `AnalysisService`:
-  - `ensure(fen, {minDepth, multiPv, maxNodes, signal})`: high priority, cached by `fenKey`. It
-    pre-empts live analysis, then live analysis resumes. A search cut short by an engine restart is
+  - `ensure(fen, {minDepth, multiPv, maxNodes, signal, priority})`: high priority, cached by `fenKey`. It
+    pre-empts live analysis, then live analysis resumes. Requests run by `priority` (higher first, FIFO
+    among equals; default 0), and one of a higher priority pre-empts a running `ensure` search of a lower
+    one, which goes back to the head of its priority and is searched again on a warm hash; a request
+    that joins a queued or running search lifts it to its own priority (a withdrawn one lowers it again).
+    The controller's levels are `ANALYSIS_PRIORITY` (see "Coach flow"). A search cut short by an engine restart is
     retried (up to twice) before its waiters get the best result so far. A request whose `signal`
     aborts is withdrawn: it resolves at once with the best so far (`aborted: true`), a queued search
     nobody else waits for is dropped, and the running one goes on only as live analysis (replaced
@@ -243,7 +247,8 @@ export class AnalysisService {
   /** High-priority analysis to minDepth within maxNodes (default defaultEnsureNodes(multiPv): 1.2M for MultiPV 3),
    *  cached by fenKey; pre-empts live analysis, which resumes afterwards. A result that ran out of nodes below
    *  minDepth is final (not aborted) and answers later requests with the same or a smaller budget. */
-  ensure(fen: string, opts: { minDepth: number; multiPv?: number; maxNodes?: number /*Infinity = none*/; signal?: AbortSignal /*withdraws it*/ }): Promise<AnalysisResult>;
+  ensure(fen: string, opts: { minDepth: number; multiPv?: number; maxNodes?: number /*Infinity = none*/; signal?: AbortSignal /*withdraws it*/;
+    priority?: number /*higher first, pre-empts a running lower one; default 0*/ }): Promise<AnalysisResult>;
   /** Live analysis target (null = none). Streams updates to subscribers; stops at liveDepth or liveNodes. */
   watch(fen: string | null): void;
   subscribe(cb: (r: AnalysisResult) => void): () => void;
@@ -330,7 +335,20 @@ export function classifyMove(p: {
 //   outside the band (at most NEAR_EQUAL_RECHECK_CP behind), or for a listed move its `after` search puts that far
 //   below the best line, the second opinion decides: its `after` search against `bestAfter` (like with like). The
 //   class itself does not depend on any of this.
+//   `wonAnyway` ({ kind: 'slower' | 'lost'; mateIn }): the class (always an inaccuracy) is weak only by the mate-distance
+//   rules while the move kept the game won, a mate more than 6 moves slower than the best line's (reason `mate_slower`,
+//   the coach's own ladder; lichess gives a slower mate no verdict), or a forced mate given up for +10 or more
+//   (`lost_mate`, lichess's floor, when the winning chances lost alone would not make it weak); `mateIn` is the best
+//   line's mate. The coach says it costs nothing (coach.ts `wonAnywayLine`).
 export function nearBestRecheck(p): string | null; // the FEN to search for `bestAfter` when the verdict needs it, else null
+/** `wonAnyway` for a move of a history record kept before the history stored it (archive.ts `decodeAnalysis`), from the
+ *  White-POV evaluations kept before and after it: an inaccuracy (the only class classify gives it) from a forced mate
+ *  (before) that still mates ('slower') or keeps +10 or more ('lost'); null otherwise or when one is missing. */
+export function wonAnywayFromEvals(cls: MoveClass, beforeWhite: Score | null | undefined, afterWhite: Score | null | undefined, mover: Color): WonAnyway | null;
+/** That FEN, and whether its search can change the class (`affectsClass`: a listed move its own search scores more than
+ *  LISTED_DISPUTE_CP above its line, judged against the best move's own search); otherwise it settles only `nearBest`,
+ *  `aboveBest` and `equalBest`, so the words and never the class, win chances or accuracy. Null when none is needed. */
+export function secondOpinionNeed(p): { fen: string; affectsClass: boolean } | null;
 // analysis/nearEqual.ts — THE definition of "about as good" (feedback, Show best, review, explorer ratings, hints)
 export const NEAR_EQUAL_CP = 25;         // against the best line (a listed move's line, or a move's own search): 25 cp...
 export const NEAR_EQUAL_SEARCH_CP = 30;  // ...the second opinion, two searches of their own (after each move): 30 cp...
@@ -416,10 +434,10 @@ export function threatProbeFen(fen: string): string | null;  // the null-move po
 /** Real when moving again gains the opponent a forced mate (the player not being mated anyway), or >= THREAT_MIN_CP with a line
  *  that wins >= THREAT_MIN_MATERIAL pawns of material (a piece that only escapes, a tempo or a pawn never is). */
 export function judgeThreat(fen: string, now: AnalysisResult, probe: AnalysisResult, opts: { name: string }): ThreatAlert | null;
-/** Both searches requested at once and queued before the annotation of the opponent's move; the analysis engine runs them
- *  one after the other (THREAT_DEPTH within THREAT_NODES each, MultiPV 1: about 0.6 s on an iPhone, which the annotation
- *  waits; the alert is up that soon). null = no threat, undefined = could not tell (withdrawn, failed, cut short early).
- *  Never rejects. */
+/** Both searches requested at once, right after the opponent's move and with its priority (ANALYSIS_PRIORITY.opponent),
+ *  so ahead of its rating; the analysis engine runs them one after the other (THREAT_DEPTH within THREAT_NODES each,
+ *  MultiPV 1: about 0.6 s on an iPhone; the alert is up that soon). Your move withdraws them, and your verdict's searches
+ *  come first anyway. null = no threat, undefined = could not tell (withdrawn, failed, cut short early). Never rejects. */
 export function probeThreat(fen: string, analyze: ThreatAnalyze, opts: { name: string; signal?: AbortSignal }): Promise<ThreatAlert | null | undefined>;
 
 // rating/rating.ts
@@ -453,7 +471,8 @@ export function slimmedHistories(history: readonly GameRecord[]): (() => GameRec
 export function sanitizeAnalysis(v: unknown): CompactAnalysis | null; // a record's `analysis`, else null (an older record)
 // GameRecord (rating/types.ts) also has, all optional (older records have none): botId (the opponent's persona id),
 // preplayed (opening practice's book moves), provisional (a rated game while the rating was new, set by applyGameResult)
-// and analysis: CompactAnalysis { v: 1; s: start eval; p: one token per ply; h?: the key moments' headlines by ply index }.
+// and analysis: CompactAnalysis { v: 1; s: start eval; p: one token per ply; h?: the key moments' headlines by ply index;
+// w?: 1, the tokens carry `wonAnyway` (absent in records kept before they did) }.
 // rating/history.ts (pure; the Menu's rating chart)
 export interface RatingPoint { kind: 'start' | 'level' | 'game'; rating: number; record?: GameRecord; game?: number; provisional?: boolean }
 export interface RatingHistory { points: RatingPoint[]; peak: number; current: number; provisional: { from: number; to: number }[];
@@ -493,8 +512,9 @@ export interface SavedGame {
   practice?: { from: string; after?: boolean };
 }   // over.ratingChange may carry `provisional: true` (the rating was new); unknown extra fields survive sanitizing (the controller also stores `startEval`); an explanation's `concedes`
     // must be 'material' or 'mate', else it is dropped; a classification's `nearBest` must be a boolean, its
-    // `aboveBest` a boolean with nearBest true, and its `equalBest` a non-empty list of { san, uci, score? }, else
-    // they are dropped (older saves have none); a `punishment` must be { uci, san, reason: string | null }, else it is dropped
+    // `aboveBest` a boolean with nearBest true, its `equalBest` a non-empty list of { san, uci, score? }, and its
+    // `wonAnyway` { kind: 'slower' | 'lost', mateIn: a positive integer }, else they are dropped (older saves have
+    // none); a `punishment` must be { uci, san, reason: string | null }, else it is dropped
 export function saveGame(g: SavedGame): boolean; export function loadGame(): SavedGame | null; export function clearGame(): void;
 export function saveSettings(s: GameSettings): void; export function loadSettings(): GameSettings;
 export function requestPersistentStorage(): Promise<boolean>;
@@ -503,6 +523,13 @@ export function offersShowBest(cl: Pick<Classification, 'cls' | 'bestMoveUci'>, 
 export const RETRY_CLASSES: ReadonlySet<MoveClass>;  // mistake, miss, blunder
 export function answerFreeLines(e: Explanation | undefined | null, cl: Classification): string[]; // text that does not give the better move (or one of
                                                      // `equalBest`) away (while Retry is offered)
+/** The collapsed coach row's line for such a move (store and viewer `summary`, CoachPanel `summary`): "Still winning: a
+ *  faster mate was available." ("Pip was still winning: …"; "…: the missed mate hardly matters." for a mate given up). */
+export function wonAnywaySummary(won: WonAnyway | null | undefined, who: 'you' | string): string | null;
+/** "A faster mate was available (Qh7+, mate in 3), but you were winning anyway." / "Pip had a faster mate (Qh2#), but was
+ *  winning anyway." (the move only with `reveal`), or for a mate given up "You were winning anyway, so the missed mate
+ *  hardly matters."; null without `won`. Added after the explanation (store `explanationLines`' `won`). */
+export function wonAnywayLine(cl, won: WonAnyway | null | undefined, o: { who: 'you' | string; reveal: boolean }): string | null;
 /** Show best's title: "Top choices" ("Top choice") when the played move was about as good (isNearBest), "Slightly
  *  better: c6" for an Excellent or Good move that was not (no `concedes`; not for older saves), else "Best was c6". */
 export function showBestTitle(ply, bestSan: string | null): string;
@@ -563,8 +590,10 @@ export function hintText(fen, uci, level: 1 | 2): string; // "Move a knight." / 
 // ("Qd3 is a blunder.", SAME_MOVE_LINE), solvedLine (FOUND_BEST_LINE, FOUND_NEAR_LINE, "That’s better than Qxb2."), NOT_QUITE, lastMomentLine
 // game/archive.ts (pure: earlier games from the history)
 /** A ply's token in GameRecord.analysis.p: class letter (B G s e g k f i m x b; '-' not analyzed), the White-POV eval after
- *  it ("34", "-120", "#3", "#-2", "#0"), flags (n near-best, a above-best, c / d concedes material / mate) and ":" with the
- *  engine's better move: "s34", "e-12:g1f3", "bn#-3:d1h5". Win chances, accuracy and the better move's SAN are derived. */
+ *  it ("34", "-120", "#3", "#-2", "#0"), flags (n near-best, a above-best, c / d concedes material / mate), `wonAnyway`
+ *  (w slower / l lost, with the best line's mate) and ":" with the engine's better move: "s34", "e-12:g1f3",
+ *  "bn#-3:d1h5", "i#9w1:e1e8". Win chances, accuracy and the better move's SAN are derived; for a record without
+ *  `CompactAnalysis.w` (kept before the tokens carried it), `wonAnyway` is derived from the evaluations kept. */
 export function encodeAnalysis(plies, startEval, opts: { playerColor; preplayed? }): CompactAnalysis; // + the key moments' headlines
 export function decodeAnalysis(plies, analysis): { plies: Ply[]; startEval: Score | null }; // a malformed token, or a count
                                                      // that does not match the moves, leaves the plies unanalyzed
@@ -851,8 +880,12 @@ interface PlayerStripProps {
   (`practice`: opening practice's line, "Opening practice: Italian Game"; `practiceLabel`: Play on from here's "Practice from
   move 12"; either replaces "Unrated game").
   `practice` (opening practice, the line's name) replaces "Unrated game" with "Opening practice: Italian Game". `play`
-  (`{ accuracy: { you, bot }, counts: { blunder, mistake, miss, inaccuracy } }`, or 'pending' while the last moves are
-  checked: "Checking your moves…") shows "Accuracy: You 91% · Bao 76%" and "You: 2 mistakes, 1 blunder" (`weakMovesText`);
+  (`{ accuracy: { you, bot }, counts: { blunder, mistake, miss, inaccuracy }, note? }`, or 'pending' while the last moves are
+  checked: "Checking your moves…") shows "Accuracy: You 91% · Bao 76%" and "You: 2 mistakes, 1 blunder" (`weakMovesText`),
+  and `note` (review.ts `alreadyWonSheetNote`, the short form: "7 of them came when you were already winning, so they
+  didn’t lower your accuracy.") under them when some of the player's weak moves came when they were already winning;
+  its Try again button counts `store.sheetTries` (`tryAgainMoments` without those moves, `weakInWonGame`; none: no
+  button);
   `rule` (coach.ts `drawRuleText`) a draw rule in plain words under the reason; `provisional` a note under the rating change
   that new ratings move fast.
   White is on the left and Black on the right (each labeled with its color), with the result between them as chess
@@ -971,6 +1004,9 @@ interface ReviewPanelProps {
   onSelectPly: (current: number) => void;
   onClose: () => void;
   onTryAgain?: (index: number) => void; // the "Try again" beside a moment with `tryAgain` (none without it)
+  accuracyNotes?: readonly string[]; // review.ts `reviewAccuracyNotes`: under the accuracies (first in the body), the
+                              // player's then the opponent's `alreadyWonNote`, each only when that side has weak moves
+                              // made in a won game; once the analysis is done
 }
 ```
 A key moment with `concedes` shows a neutral grey marker and the label "Gives up material" / "Faster mate"
@@ -1048,7 +1084,9 @@ Draw mode's `toggleDraw()`, `exitDraw()`, `setDrawColor(color)`, `drawShape(shap
 advice by `engineFailureKind`. Dependencies are injectable (`ControllerDeps`): `createEngines(request:
 { onProgress })` (a zero-argument factory also type-checks), `onlineEvents` (where `online` comes
 from, for the download retry), `storage`, `rng`, `sound`, `now`, `thinkDelay`, `createBot`,
-`createId`, `analysisOptions`, `entitlements` (Pro; default `getEntitlements()`). `BotLike` is `{ newGame(elo); move(fen, elo, history, signal?, startFen?) }`;
+`createId`, `analysisOptions`, `entitlements` (Pro; default `getEntitlements()`), `feedbackHoldMs` (the hold's cap, default
+FEEDBACK_HOLD_MS), `feedbackLeadMs` (the verdict's lead before the held reply, default FEEDBACK_LEAD_MS, 0 with
+`thinkDelay: false`; see "Feedback first"). `BotLike` is `{ newGame(elo); move(fen, elo, history, signal?, startFen?) }`;
 the controller passes the game's `startFen`, so games from a custom position get the repetition
 handling too.
 
@@ -1091,10 +1129,11 @@ moments on the graph, and the coach's verdict in the third person ("Pip’s 12�
 `titleMove` "Pip’s 12… Nf6") with the neutral explanation and *Show best* (the position before its move,
 `runAction('showBest')` takes the ply from `store.coach.index`). Browsing back to a bot move shows its
 verdict too. With the coach on as well, `store.coach` has both: one expanded (`subject` 'you' |
-'opponent') and the other as `other` (a compact row, "You" always above). Your move stays expanded while
-it has something to fix (an inaccuracy or worse, something given away, Retry, a failed check: the
-store's `needsAttention`); otherwise the opponent's latest move is, also while your move is still being
-checked, so the rows do not swap on every move. The player can pick the other with
+'opponent') and the other as `other` (a compact row, "You" always above). The panel follows the game
+forward: your move is expanded while it is the latest ply (checked, then its verdict, which the bot's held
+reply waits for: see "Feedback first"), then the opponent's reply once it is played, one swap per move and
+never back. Your move stays expanded after the reply while it has something to fix (an inaccuracy or worse,
+something given away, Retry, a failed check, whether it punished a mistake: the store's `needsAttention`). The player can pick the other with
 `selectCoachFeedback`, which holds until the next ply or a takeback (`store.coachFocus`, keyed by the
 ply count; `truncate()` clears it). `paired` (coach and opponent ratings on during play) gives the
 panel a larger threshold before it collapses (`COACH_TIGHT_PAIRED_PX`, and `PANEL_MIN_TEXT_PX`, see
@@ -1133,8 +1172,9 @@ with it is unrated (`startGame`), `setSettings({ threatAlerts: true })` in a rat
 locked the toggles show a lock and open the paywall, `newGame` drops it, a refund switches it off and drops its question).
 `updateWatch()` calls `kickThreat()`: on the player's turn in the live game (threat alerts on, allowed, the game unrated),
 the live position is probed once (analysis/threat.ts `probeThreat` through `AnalysisService.ensure`, two searches of
-THREAT_NODES = 150k nodes each at depth 12, queued together before the annotation of the opponent's move and run one after
-the other, so the annotation waits about 0.6 s on an iPhone while the alert is up that soon; the bot has its own engine). Results are kept by position for the game (a takeback or Retry back to one
+THREAT_NODES = 150k nodes each at depth 12, asked together right after the opponent's move at its priority
+(`ANALYSIS_PRIORITY.opponent`), so ahead of its rating, and run one after the other: about 0.6 s on an iPhone, and the alert
+is up that soon; the player's move withdraws them, and its verdict's searches come first; the bot has its own engine). Results are kept by position for the game (a takeback or Retry back to one
 asks nothing new; a new game, a restore or new engines forget them); a probe for a position that is no longer the live
 one on the player's turn is withdrawn (`signal`), and an unknown result (withdrawn, cut short) is asked again later. The
 result lands in `store.threat`; `store.threatAlert` shows it only for the live position on the player's turn (never after
@@ -1145,6 +1185,46 @@ touches the punishment waits. Collapsed, the alert takes the coach's row also wh
 coach view gets `alert` (its text) in every panel of the turn (the coach's, a hint, Retry's prompt, coach off), the idle
 "Your move" panel drops its general tip under it, and the board adds the threat's arrow ('threat' brush). No probe in
 check (a null move is illegal; the check is the threat).
+
+**Feedback first** (README "The coach"). The bot's reply to the player's move used to land before the coach's
+verdict on it whenever the bot thought faster than the analysis engine checked the move (a weak bot replies in
+0.3-1 s; a check is an `after` search of up to 1.2M nodes, about 2.5 s on an iPhone, and a near-equal second
+opinion was another one). Now, in this order of importance:
+- *The reply waits for the verdict* (`holdForFeedback`). The bot still computes its reply at once, in parallel;
+  `requestBotMove` then waits, still `botThinking` (the strip's dots), following `feedbackState(index)` (an
+  `effect` over the signals): 'checking' until the player's move (the one replied to) has its verdict
+  (classification and explanation), then 'shown'; 'off' (the reply goes at once) when its check failed
+  (`failedAnnotations`), the coach is switched off, the explorer, Try again, the game viewer or the Openings
+  section opens, or the game is no longer the one on the board. Once the verdict is shown, the reply waits until
+  it has been up FEEDBACK_LEAD_MS (600 ms, `annotate` records when: `verdictShown`), so it is painted and readable
+  on its own before the bot's piece moves (it used to land in the same task, so on the same frame); nothing is
+  added when the verdict was up that long during the bot's own think time. It never waits longer than
+  FEEDBACK_HOLD_MS (3.5 s, `ControllerDeps.feedbackHoldMs`) beyond the bot's own think time, lead included, and
+  the bot's `AbortSignal` drops the reply as before (Undo, Retry or a takeback asked for, a new game, resigning,
+  the game's end, the page hidden, an engine failure). No wait with the coach off or after a move the game ended
+  with (there is no reply). `idle()` waits for a held reply too (it is part of the bot's task). With
+  `rateOpponent` on, the dual coach keeps the player's move expanded until the reply lands (see "Opponent
+  ratings").
+- *The verdict is final when shown.* The near-equal second opinion comes before it (`annotate`): the one that only
+  settles "about as good" with SECOND_OPINION (depth 14, MultiPV 1: only its score is compared, within 300k
+  nodes, a quarter of an annotation's budget; a median of 45k nodes, about 0.1 s on an iPhone), the rare one that
+  can change the class (`secondOpinionNeed`'s `affectsClass`) with the annotation request. So the words never
+  change after the verdict is shown (no "c6 was slightly more accurate." turning into "Your Nxd5 was fine: …"),
+  and "You punished it!" comes with the verdict.
+- *Priorities* (`ANALYSIS_PRIORITY`, `EnsureOptions.priority`): `verdict` (40) for the player's moves while
+  playing, so the verdict on the latest one never waits behind anything (`prefetchVerdict` asks for its positions
+  before and after the moment the move is played, which lifts the end of the opponent's move's rating, the same
+  search, and pre-empts a lower one running; the annotation then finds them in the cache); `user` (30) for a hint,
+  Show best and Try again; `opponent` (20) for the opponent's moves' ratings and the threat probes (asked first,
+  so the alert is up in a fraction of a second; the player's move withdraws them); 0 for the review, the
+  explorer, the game viewer and the Openings section. The eval bar's live search yields to every `ensure`. The
+  annotation queue goes in order (a verdict needs the previous move's), so an opponent's move that a later move
+  of the player's waits for is searched at `verdict` too: `annotationPriority` is asked anew for each of its
+  searches (its second opinion included), and `prefetchVerdict` asks the one in flight again at `verdict`
+  (`annotationInFlight`), so it keeps running rather than being cut short by the player's searches. The queue
+  picks up a ply played while it was finishing (`kickAnnotations`), since the verdict that ends it is what
+  releases the reply; a throw inside `annotate` (a bug, not the engine) marks that move failed ("Couldn’t check
+  …", Check again), so the queue moves on and a held reply goes.
 
 **Coach flow.** Every ply is annotated in the background (`ensure` depth 14, MultiPV 3, within
 `ANNOTATE_NODES` = 1.2M nodes, before and after the move; `classifyMove` gets `prevFenBefore` from
@@ -1174,9 +1254,9 @@ draws the best move and the alternatives, no arrow for `aboveBest`), and *Show b
 with the moves and their evaluations ("c6 +0.6 · c5 +0.7 · g6 +0.7", then the played move from its own side:
 "Your Nxd5: +0.9, close behind." or "…, at least as good."), the best move's explanation without ranking
 (`explainBestMove`'s `compare: false`: no "only move" or "more precise than", the list ranks them) and
-"Engine line: …". Just outside the band, `annotate` and the explorer's ratings first search the position
-after the best move (`secondOpinion`, classify.ts `nearBestRecheck`, one more depth-14 search; a failed or cut
-short one is skipped). A clearly worse move keeps its correction and names the alternatives ("Best was c6
+"Engine line: …". Just outside the band, the position after the best move is searched too (`secondOpinion`,
+classify.ts `secondOpinionNeed`; a failed or cut short one is skipped), before the verdict (see "Feedback
+first"), in the game as in the explorer's ratings and Try again's checks. A clearly worse move keeps its correction and names the alternatives ("Best was c6
 (c5 and g6 were about as good)."; one helper, `bestWasSentence`, words every "Best was"; not after a reason),
 and *Show best* adds them ("c5 and g6 were about as good.") unless its explanation already does; its title is
 "Slightly better: c6" for an Excellent or Good move (no `concedes`), else "Best was c6". Its arrows: the played
@@ -1306,7 +1386,7 @@ itself made Pro, `requirePro('explorer')` would open the paywall). State: `store
   cache once known): it is the watched position, so its search streams to the eval bar, the arrows and
   "Best here", which would otherwise wait for every earlier move's rating after a long line tried with the
   engine off. A rating that throws (`classifyMove`, `explainMove`…) marks its move failed (*Try again*)
-  and the run goes on, so nothing retries without end. The explorer has at most one rating search in the `ensure` FIFO (plus a
+  and the run goes on, so nothing retries without end. The explorer has at most one rating search in the `ensure` queue (plus a
   pending *Reply*) and the game's annotations keep their turn (the bot has its own engine); results are
   cached by position, so stepping through the line or replaying a move asks for nothing new. A result
   is dropped unless the move's path (`movePath`) and the explorer session still match; a failed rating
@@ -1432,7 +1512,34 @@ an `?engines` parameter from the address instead, which would force one engine a
 **Review.** `summarizeGame` (review.ts) lists as key moments the plies in `KEY_CLASSES` plus the
 concessions (`concession(ply)`), and adds the inaccuracies when that makes fewer than 3; over 12, it
 keeps the most important (concessions rank with the inaccuracies). Counts and accuracy use the
-classes as they are.
+classes as they are. The labels and the accuracy measure different things (a label compares the move
+with the engine's best; accuracy follows the winning chances over the game, lichess's formula, which
+caps the evaluation at ±10, a mate counting as 10), so a high accuracy can sit beside weak moves made
+in a won game (classify.ts: a mate played 7+ moves slower is an inaccuracy by the coach's own ladder, giving up
+a mate at +10 or more one too by lichess's floor, and neither moves the accuracy). The labels stay, and the
+coach explains them:
+- on the move, `Classification.wonAnyway` (the game history keeps it: archive.ts tokens 'w'/'l' with the mate,
+  `CompactAnalysis.w`; for a record kept before it did, `decodeAnalysis` derives it from the evaluations kept,
+  `wonAnywayFromEvals`) adds `wonAnywayLine` after the explanation, wherever the explanation shows
+  (the coach on your move and the opponent's, browsing back, Game Review, the game viewer, the explorer):
+  "A faster mate was available (Qh7+, mate in 3), but you were winning anyway." ("Pip had a faster mate
+  (Qh2#), but was winning anyway."; `explain.ts` then says only how the move mates, "Qb1 still forces mate in
+  9.", without "Best was …"), or "You were winning anyway, so the missed mate hardly matters." after "You
+  missed a forced mate in 6.". The faster mate is named only when nothing keeps the better move hidden
+  (`reveal`: not while Retry is on offer, a punishment is to be found or was just named, a key moment is to
+  be tried again, or a rated game is on in the game viewer); nothing while the explanations are locked. A
+  collapsed coach row (a short phone) leads with `wonAnywaySummary` (the view's `summary`) instead of the
+  explanation's first line;
+- under the accuracy, `summarizeGame`'s `alreadyWon` counts per side and class the weak moves made in a won
+  game (`weakInWonGame`: the evaluations before and after it both +10 or a mate for the mover, exactly the ones
+  accuracy is computed from, so a counted move never lowered it), and `alreadyWonNote` says it ("7 of your 9
+  inaccuracies came when you were already winning, so they didn’t lower your winning chances — that’s why your
+  accuracy is still 99.1%."; the "that’s why" only when they are at least half of the side's weak moves, else
+  "…, so it didn’t lower your winning chances."; below ACCURACY_NOTE_MIN (90), compared with the accuracy as
+  shown, "…, so they didn’t lower your winning chances or your accuracy."; "4 of Pip’s 6 inaccuracies came when
+  Pip was already winning, …"), never at 0: the review's and the game viewer's report `accuracyNotes`
+  (`reviewAccuracyNotes`: yours, then the opponent's; once the counts are final), and in short the game-over
+  sheet's `play.note` (`alreadyWonSheetNote`, yours). The counts table stays as it is.
 
 In phase `review` the panel slot shows the ReviewPanel summary first; stepping to another
 move (toolbar ‹ ›, move list, graph, a key moment) swaps it for the coach's comment on that move
@@ -1547,8 +1654,8 @@ and opening practice's coach banner (`runAction('opening')`, `{ lineId, ply }`: 
   ("is a good book move too, but this line goes another way. Try again.") shows no answer and costs nothing.
 - **Evaluation** (`useEval`): the app's own `AnalysisService` (App passes the controller's), `ensure(fen, { minDepth:
   12, multiPv: 1, maxNodes: 250k, signal })` after the position has stayed put for 220 ms, withdrawn when it changes
-  or the page closes, so the section has at most one short search in the FIFO and the game's annotations wait for
-  nothing more; a cached result of depth 10 or more is shown at once. No engine yet: no number. While a new
+  or the page closes, so the section has at most one short search in the queue (at the default priority, after
+  the game's annotations); a cached result of depth 10 or more is shown at once. No engine yet: no number. While a new
   position is searched the bar keeps its last fill (pulsing) but drops the verdict: words such as "about equal"
   only ever describe the position on the board (`verdictFor`).
 - **Pages.** Home (search, the beginner card and a link that brings it back, Start here with `starterFamilies`,
@@ -1834,7 +1941,7 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
 
 ## Tests
 
-- `npm test`: Vitest unit tests in node, about 1,280 tests in 72 files (the one test in
+- `npm test`: Vitest unit tests in node, about 1,360 tests in 74 files (the one test in
   `tests/bot/calibration.slow.test.ts` is skipped unless `CALIBRATE=1`, see `npm run calibrate`). They
   cover pure logic, the engine layer against scripted transports, the controller against a fake
   engine and a scripted bot (`tests/helpers/fakeEngine.ts`), the store's view models, UI helpers, the
@@ -1849,6 +1956,26 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   StockfishEngine over a scripted UCI transport, `tests/helpers/uciTransport.ts`, and nothing shown even
   for positions the engine knows; the switch, its question and when it is dropped (a refund too), per-game
   memory, Pro; the position on the board analyzed before a backlog of ratings; a rating that throws failing once);
+  `tests/game/feedback.controller.test.ts` feedback first with a fake engine whose results land when the test says
+  (FakeEngine `manual`): the bot's reply held, still thinking, until the verdict on your move is shown, no extra wait
+  when it is already there, the cap, no wait with the coach off or after a move that ended the game; the verdict's
+  lead (the reply a lead after the verdict, not in the same task; nothing added when it was up during the bot's
+  think, only what is left of it, within the cap, Undo and coach off during it); every path that lets the reply go or
+  drops it (the check failing, a check that threw, the engine breaking, Undo, a takeback asked for in a rated game, a
+  new game, resigning, the page hidden and shown, the coach switched off, the explorer, the Openings section, the game
+  viewer); the near-equal second opinion before the verdict (SECOND_OPINION's request, the words never changing, "You
+  punished it!" with the verdict and the panel staying on your move); your move's searches ahead of the threat probes
+  and the opponent's rating, and an earlier move's search your verdict waits for asked at its priority (and kept
+  running); the dual coach following the game forward; `tests/engine/AnalysisService.test.ts` also covers the
+  priorities (the queue's order, a higher one pre-empting the running search, which comes back first among its own;
+  joining lifts a search, withdrawing lowers it; the live search always yields; nothing pre-empted while paused);
+  `tests/game/accuracyNote.test.ts` weak moves in a won game (`wonAnyway` from the mate-distance rules and never
+  otherwise, a slower mate the reply's search misses, the history's tokens and the derivation for records kept
+  before them for either color, only ever an inaccuracy; the coach's line for you and the opponent with Try again, a
+  rated game in the viewer and Pro locked, none for a real mistake, the collapsed row's summary; `weakInWonGame` by
+  the evaluations accuracy uses and the count, the user's "99% with 9 inaccuracies" game also as Black, every wording
+  of the note ("that’s why" only for most of them, the threshold as shown), the game-over sheet's short form and its
+  Try again count, Game Review's report and the game viewer's for records kept before and now);
   `tests/analysis/nearEqual.test.ts` and `tests/game/nearEqual.controller.test.ts` near-equal awareness (the rule
   and its constants, the second opinion, `equalBest` / `nearBest` / `aboveBest` from fixed engine lines, every
   wording, the Kieseritzky 5...Be7, a mate or repetition draw above the best line, and the user's 3...Nxd5 case,
@@ -1856,7 +1983,7 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   lines and arrows, the opponent's move, Game Review, the explorer, Retry, Pro locked, a restored game and an older
   save; the fake engine's `fixed` lines), and `tests/analysis/nearEqual.engine.test.ts` the user's case with the real
   engine in three histories that put 3...Nxd5 outside the band of the best line (kept "about as good" by the second
-  opinion);
+  opinion, with the annotation request and with SECOND_OPINION);
   `tests/game/opponent.test.ts` the opponent's move ratings (the view models with the coach and the
   setting on or off, the two rows, rated games and the question, Show best, the Pro gating, the review
   unchanged); `tests/game/punish.test.ts` "can you punish it?" (the wording and `punishmentOf`; hidden until Show me
@@ -1912,7 +2039,7 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   check), the moves that end a game by rule, an engine line cut at a repetition, a disputed MultiPV score, and key
   moments (numbering from any start, the player's first, whose move).
 - `npm run e2e`: Playwright on the production build with the real engine, iPhone 15 Pro emulation,
-  62 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id`, iOS tags, engine MIME
+  64 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id`, iOS tags, engine MIME
   types, service worker and precache, offline, license notices served as files, full-screen layout);
   `e2e/game.spec.ts` (15) plays through the UI (moves by tapping squares, coach, hint, undo, flip,
   reload, resign, review, a game as Black, a mating promotion, the move list staying on the current
@@ -1936,6 +2063,9 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   once you move); threat alerts switched on in the Menu during a rated game (Cancel keeps it rated, Turn on: Unrated);
   "can you punish it?" after the bot's 2…Qh4 (an opening line it follows; nothing names Nxh4, Show me offered, no arrow;
   "You punished it!" after Nxh4).
+  `e2e/feedback.spec.ts` (1): against Pip with the analysis slowed through the debug hook (every result 0.8 s late),
+  the coach's verdict on each of three moves is on the screen before the bot's reply appears in the move list, and the
+  bot shows as thinking meanwhile.
   `e2e/practice.spec.ts` (1): Try again from Game Review after 3. Qxf7+?? (the key moment's button and its name, Back
   to the review and again, a move that is no better taken back with its arrow, a hint naming the piece and never the
   answer, the engine's move found, Play on from here: an unrated game from that position, the earlier game once in

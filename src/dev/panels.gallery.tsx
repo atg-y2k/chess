@@ -1,7 +1,7 @@
 /**
  * Dev page for the in-game panels: /gallery.html?g=panels
  *   &view=live    (default) the game screen with realistic mock data (40-ply game)
- *   &view=review  the review screen (ReviewPanel in place of the coach)
+ *   &view=review  the review screen (ReviewPanel in place of the coach); &note=1 with the accuracy notes
  *   &view=states  every panel in its edge-case states
  *   &sim=0|1      iPhone safe-area simulation (default: on for narrow viewports)
  *   &chrome=0     hide the view switcher (for screenshots)
@@ -19,6 +19,7 @@ import type { Classification, Explanation, MoveClass } from '../analysis/types';
 import { capturedPieces, material, sideToMove, START_FEN } from '../chess/utils';
 import type { Score } from '../engine/types';
 import type { Color, Ply } from '../game/types';
+import { alreadyWonNote } from '../game/review';
 import { CLASS_META, classBadgeSvg } from '../ui/ClassIcon';
 import { CoachPanel, type CoachPanelProps } from '../ui/CoachPanel';
 import { ExplorerPanel } from '../ui/ExplorerPanel';
@@ -404,6 +405,14 @@ function GameScreen({ view, setView }: { view: 'live' | 'review'; setView: (v: V
           <ReviewPanel
             progress={progress}
             accuracy={progress == null ? { w: 86.4, b: 61.9 } : { w: null, b: null }}
+            {...(new URLSearchParams(location.search).get('note') === '1'
+              ? {
+                  accuracyNotes: [
+                    alreadyWonNote({ counts: { inaccuracy: 9 }, alreadyWon: { inaccuracy: 7 }, accuracy: 99.1, who: 'you', decimals: 1 })!,
+                    alreadyWonNote({ counts: { inaccuracy: 2 }, alreadyWon: { inaccuracy: 2 }, accuracy: 61.9, who: BOT.name, decimals: 1 })!,
+                  ],
+                }
+              : {})}
             counts={countsFor(reviewedPlies)}
             playerColor={PLAYER_COLOR}
             names={{ w: PLAYER.name, b: BOT.name }}

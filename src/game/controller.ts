@@ -6,9 +6,9 @@
  * methods below. Every async continuation (bot move, annotation, hint, review) is guarded by the
  * game id plus an epoch/ply token, so undo, new game or resign can never apply stale results.
  */
-import { batch, computed, type ReadonlySignal } from '@preact/signals';
+import { batch, computed, effect, type ReadonlySignal } from '@preact/signals';
 import { Chess, type Move } from 'chess.js';
-import { classifyMove, nearBestRecheck, type ClassifyMoveInput } from '../analysis/classify';
+import { classifyMove, secondOpinionNeed, type ClassifyMoveInput } from '../analysis/classify';
 import { cutAtRepetition, explainBestMove, explainMove, type PrevMove } from '../analysis/explain';
 import { ALTERNATIVES_SUFFIX, alternativesSentence, equalAlternatives } from '../analysis/nearEqual';
 import { probeThreat, type ThreatAlert } from '../analysis/threat';
@@ -169,6 +169,43 @@ export const ANNOTATE_MULTIPV = 3;
 export const ANNOTATE_NODES = defaultEnsureNodes(ANNOTATE_MULTIPV);
 /** The `ensure()` request of every annotation, hint, Show best and review search. */
 const ANNOTATE: EnsureOptions = { minDepth: ANNOTATE_DEPTH, multiPv: ANNOTATE_MULTIPV, maxNodes: ANNOTATE_NODES };
+/**
+ * Priorities of the analysis engine's searches (`EnsureOptions.priority`: higher first, and a
+ * higher one pre-empts a running lower one; the eval bar's live analysis always yields to them):
+ * - `verdict`: the player's moves while playing (their positions before and after, and their second
+ *   opinion), so the coach's verdict on the latest one, which the bot's reply waits for
+ *   (FEEDBACK_HOLD_MS), comes first; also an earlier move's searches while that verdict waits for
+ *   them (the queue goes in order, see `annotationPriority`);
+ * - `user`: what the player is waiting for on the screen (a hint, Show best, a move tried again);
+ * - `opponent`: the opponent's moves while playing (their rating) and the threat probes.
+ * The review, the explorer, the game viewer and the Openings section ask with the default (0).
+ */
+export const ANALYSIS_PRIORITY = { verdict: 40, user: 30, opponent: 20 } as const;
+/**
+ * The near-equal second opinion that only settles "about as good" (classify.ts `secondOpinionNeed`),
+ * asked before the verdict: the position after the engine's best move to depth 14 with one line
+ * (only its score is compared), within 300k nodes, a quarter of an annotation's budget. Measured on the 138 moves of the
+ * near-equal calibration's 105 positions that need one (against depth-20 searches): MultiPV 1
+ * reaches depth 14 in a median of 45k nodes instead of 250k (about 0.1 s on an iPhone instead of
+ * 0.5 s; never shallower within 300k), and calls 16 of the 24 moves that are truly about as good
+ * so (the annotation request, MultiPV 3 within 1.2M nodes: 14), with no more false comfort (21
+ * against 22 moves called so that were 0.03 or more worse, 3 and 3 at 0.05). The one that can
+ * change the class keeps the annotation request.
+ */
+export const SECOND_OPINION: EnsureOptions = { minDepth: ANNOTATE_DEPTH, multiPv: 1, maxNodes: 300_000 };
+/**
+ * Feedback first: with the coach on, the bot's reply to the player's move waits until the coach's
+ * verdict on that move is shown (or its check failed), at most this long beyond the bot's own
+ * think time, so the reply never lands before the feedback (see `holdForFeedback`).
+ */
+export const FEEDBACK_HOLD_MS = 3500;
+/**
+ * Feedback first, on the screen: the held reply comes at least this long after the verdict was
+ * shown (within FEEDBACK_HOLD_MS), so the verdict is painted and can be read on its own before the
+ * bot's piece moves. Nothing is added when the verdict was up that long during the bot's own think
+ * time. Not in tests that switch the bot's think time off (`ControllerDeps.thinkDelay`).
+ */
+export const FEEDBACK_LEAD_MS = 600;
 /** Shown when the engine cannot start. */
 export const ENGINE_START_FAILED = 'The chess engine could not start.';
 /** Advice when the browser lacks Web Workers or WebAssembly SIMD. */
@@ -240,6 +277,13 @@ export interface ControllerDeps {
   analysisOptions?: AnalysisServiceOptions;
   /** Pro and the paywall (default: the app's, `getEntitlements()`). */
   entitlements?: Entitlements;
+  /** Longest wait of the bot's reply for the coach's verdict (default FEEDBACK_HOLD_MS). */
+  feedbackHoldMs?: number;
+  /**
+   * How long the held reply comes after the verdict at least (default FEEDBACK_LEAD_MS, or 0 with
+   * `thinkDelay: false`).
+   */
+  feedbackLeadMs?: number;
 }
 
 /**
@@ -427,6 +471,10 @@ export class GameController {
   private readonly sound: SoundPort;
   private readonly now: () => number;
   private readonly thinkDelay: boolean;
+  private readonly feedbackHoldMs: number;
+  private readonly feedbackLeadMs: number;
+  /** When the coach's verdict on the player's latest move was shown (`holdForFeedback`'s lead), by annotation key. */
+  private verdictShown: { key: string; at: number } | null = null;
   private readonly makeEngines: (request: CreateEnginesRequest) => Promise<EngineSet>;
   private readonly onlineEvents: OnlineEvents | null;
   /** Removes the pending "retry when back online" listener, if any. */
@@ -493,6 +541,10 @@ export class GameController {
    */
   private readonly threats = new Map<string, ThreatAlert | null>();
   private readonly threatProbes = new Map<string, { ctl: AbortController; task: Promise<void> }>();
+  /** Withdraws the searches asked for the player's latest move ahead of the annotation queue (`prefetchVerdict`). */
+  private prefetchAbort: AbortController | null = null;
+  /** The search the annotation queue is waiting for (`annotationSearch`), if any. */
+  private annotationInFlight: { svc: AnalysisService; fen: string; opts: EnsureOptions } | null = null;
   /**
    * Try again (see `tryAgain`): bumped for every try, so late analyses of another one are dropped;
    * the abort withdraws the try's analysis requests when it ends; the tasks (the answer's analysis,
@@ -520,6 +572,8 @@ export class GameController {
     this.sound = deps.sound ?? { play: playSound, setEnabled: setSoundEnabled };
     this.now = deps.now ?? Date.now;
     this.thinkDelay = deps.thinkDelay ?? true;
+    this.feedbackHoldMs = deps.feedbackHoldMs ?? FEEDBACK_HOLD_MS;
+    this.feedbackLeadMs = deps.feedbackLeadMs ?? (this.thinkDelay ? FEEDBACK_LEAD_MS : 0);
     this.makeEngines = deps.createEngines ?? defaultCreateEngines;
     this.onlineEvents =
       deps.onlineEvents !== undefined ? deps.onlineEvents : typeof window === 'undefined' ? null : (window as OnlineEvents);
@@ -735,6 +789,7 @@ export class GameController {
     this.dropPractice();
     this.dropViewer();
     this.resetThreats();
+    this.dropPrefetch();
     this.epoch++;
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -762,6 +817,7 @@ export class GameController {
     this.dropExplorer();
     this.dropPractice();
     this.dropViewer();
+    this.dropPrefetch();
     this.exitDraw();
     this.epoch++;
     batch(() => {
@@ -830,6 +886,7 @@ export class GameController {
     this.dropExplorer();
     this.dropPractice();
     this.dropViewer();
+    this.dropPrefetch();
     this.exitDraw();
     // Another game's drawings go (the same game again, after an engine failure, keeps them), and so
     // do its threat alerts and a punishment shown.
@@ -1027,6 +1084,7 @@ export class GameController {
     this.dropExplorer();
     this.dropPractice();
     this.dropViewer();
+    this.dropPrefetch();
     this.exitDraw();
     this.analysis.cancelAll();
     // Forget the live target: a new game on the position already watched (a new game or rematch
@@ -1183,6 +1241,7 @@ export class GameController {
     });
     this.sound.play(soundForSan(ply.san));
     this.updateWatch();
+    if (ply.color === g.playerColor) this.prefetchVerdict(ply);
     this.kickAnnotations();
     if (!this.checkGameEnd()) {
       this.save();
@@ -1243,6 +1302,8 @@ export class GameController {
             ? await bot.lineMove(fen, g.botElo, lineUci, history, ctl.signal, g.startFen)
             : { uci: lineUci, source: 'book' as const, thinkMs: 0 }
           : await bot.move(fen, g.botElo, history, ctl.signal, g.startFen);
+        // Feedback first: the reply waits (still "thinking") for the coach's verdict on the move it answers.
+        if (move && stillCurrent()) await this.holdForFeedback(plyCount - 1, ctl.signal);
         if (this.botCtl === ctl) {
           this.botCtl = null;
           s.botThinking.value = false;
@@ -1261,6 +1322,72 @@ export class GameController {
     this.botTask = task;
     void task.then(() => {
       if (this.botTask === task) this.botTask = null;
+    });
+  }
+
+  /**
+   * Feedback first: whether the bot's reply to ply `index` (the move the bot answers) is held for the
+   * coach's verdict on it ('off' when not), and whether that verdict is shown. Held only for the
+   * player's move with the coach on, while that move is the last one of the live game and its check
+   * has not failed, and while the game is on the screen: not while exploring, trying a move again,
+   * in the game viewer or the Openings section, nor once the game is over. Reads signals, so
+   * `holdForFeedback` follows it.
+   */
+  private feedbackState(index: number): 'off' | 'checking' | 'shown' {
+    const s = this.s;
+    const g = s.game.value;
+    const ps = s.plies.value;
+    const ply = ps[index];
+    if (!g || !ply || !this.analysis || ply.color !== g.playerColor || index < preplayedOf(g) || ps.length !== index + 1) return 'off';
+    if (s.phase.value !== 'playing' || s.outcome.value || !s.settings.value.coach) return 'off';
+    if (s.explorer.value || s.practice.value || s.viewer.value || openingsOpen.value) return 'off';
+    if (s.failedAnnotations.value.has(annotationKey(g.id, ply))) return 'off';
+    return ply.classification && ply.explanation ? 'shown' : 'checking';
+  }
+
+  /**
+   * Resolves when the bot's reply to ply `index` may be played (see `feedbackState`): FEEDBACK_LEAD_MS
+   * (`ControllerDeps.feedbackLeadMs`) after the verdict was shown, so the verdict is on the screen on
+   * its own first (at once when it has been up that long: no extra delay beyond the bot's own think
+   * time), and at once when the reply is not held (the coach off, the check failed, the explorer, Try
+   * again, the game viewer or the Openings section open, the game over). Also when `signal` aborts
+   * (Undo, Retry, a new game, resigning, the page hidden, an engine failure: the reply is dropped),
+   * and after FEEDBACK_HOLD_MS (`ControllerDeps.feedbackHoldMs`) at most, so it never waits for good.
+   */
+  private holdForFeedback(index: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted || this.feedbackState(index) === 'off') return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let done = false;
+      let stop: (() => void) | null = null;
+      let lead: ReturnType<typeof setTimeout> | undefined;
+      const release = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(cap);
+        clearTimeout(lead);
+        signal.removeEventListener('abort', release);
+        stop?.();
+        resolve();
+      };
+      const cap = setTimeout(release, this.feedbackHoldMs);
+      signal.addEventListener('abort', release, { once: true });
+      const dispose = effect(() => {
+        const state = this.feedbackState(index);
+        if (state === 'off') {
+          release();
+          return;
+        }
+        if (state !== 'shown' || lead !== undefined || done) return;
+        // The verdict is in: the reply comes once it has been on the screen for the lead.
+        const g = this.s.game.peek()!;
+        const key = annotationKey(g.id, this.s.plies.peek()[index]);
+        const shown = this.verdictShown?.key === key ? this.verdictShown.at : -Infinity;
+        const wait = shown + this.feedbackLeadMs - this.now();
+        if (wait <= 0) release();
+        else lead = setTimeout(release, wait);
+      });
+      if (done) dispose();
+      else stop = dispose;
     });
   }
 
@@ -1527,6 +1654,7 @@ export class GameController {
 
   private truncate(n: number): void {
     this.abortBot();
+    this.dropPrefetch();
     this.epoch++;
     const ps = this.s.plies.value;
     for (let i = ps.length; i > n; i--) this.chess.undo();
@@ -1584,7 +1712,7 @@ export class GameController {
     this.updateWatch();
     let r: AnalysisResult;
     try {
-      r = await svc.ensure(fen, ANNOTATE);
+      r = await svc.ensure(fen, { ...ANNOTATE, priority: ANALYSIS_PRIORITY.user });
     } catch {
       r = { fen, depth: 0, lines: [], bestMove: null, done: false, aborted: true };
     }
@@ -1830,7 +1958,7 @@ export class GameController {
     const s = this.s;
     let r: AnalysisResult | undefined;
     try {
-      r = await svc.ensure(ply.fenBefore, ANNOTATE);
+      r = await svc.ensure(ply.fenBefore, { ...ANNOTATE, priority: ANALYSIS_PRIORITY.user });
     } catch (e) {
       console.warn('[game] show best: analysis failed', e);
     }
@@ -2135,7 +2263,7 @@ export class GameController {
     }
     if (this.threatProbes.has(key)) return;
     const ctl = new AbortController();
-    const task = probeThreat(fen, (f, o) => svc.ensure(f, o), { name: g.bot.name, signal: ctl.signal })
+    const task = probeThreat(fen, (f, o) => svc.ensure(f, { ...o, priority: ANALYSIS_PRIORITY.opponent }), { name: g.bot.name, signal: ctl.signal })
       .then((alert) => {
         // Not known (withdrawn, or a search cut short): asked again when the position comes back.
         if (alert === undefined || ctl.signal.aborted || this.analysis !== svc || s.game.value?.id !== g.id) return;
@@ -2365,7 +2493,7 @@ export class GameController {
     const ply = practicePly(p0);
     let r: AnalysisResult | undefined;
     try {
-      r = await svc.ensure(ply.fenBefore, { ...ANNOTATE, signal: this.practiceAbort?.signal });
+      r = await svc.ensure(ply.fenBefore, { ...ANNOTATE, signal: this.practiceAbort?.signal, priority: ANALYSIS_PRIORITY.user });
     } catch (e) {
       console.warn('[game] try again: analysis failed', e);
     }
@@ -2426,6 +2554,7 @@ export class GameController {
     const r = await this.rateLineMove(svc, {
       move: a,
       signal: this.practiceAbort?.signal,
+      priority: ANALYSIS_PRIORITY.user,
       alive,
       context: () => ({
         startFen: game.startFen,
@@ -2996,6 +3125,8 @@ export class GameController {
     o: {
       move: Pick<Ply, 'uci' | 'san' | 'color' | 'fenBefore' | 'fenAfter'>;
       signal?: AbortSignal;
+      /** ANALYSIS_PRIORITY (default 0: the explorer, the game viewer). */
+      priority?: number;
       alive: () => boolean;
       context: () => {
         startFen: string;
@@ -3015,12 +3146,13 @@ export class GameController {
   ): Promise<(PracticeRating & { isBook: boolean }) | 'failed' | 'stale'> {
     const m = o.move;
     const signal = o.signal;
+    const priority = o.priority ?? 0;
     let before: AnalysisResult;
     let after: AnalysisResult;
     try {
-      before = await svc.ensure(m.fenBefore, { ...ANNOTATE, signal });
+      before = await svc.ensure(m.fenBefore, { ...ANNOTATE, signal, priority });
       if (!o.alive()) return 'stale';
-      after = await svc.ensure(m.fenAfter, { ...ANNOTATE, signal });
+      after = await svc.ensure(m.fenAfter, { ...ANNOTATE, signal, priority });
     } catch (e) {
       console.warn('[game] analysis failed', e);
       return o.alive() ? 'failed' : 'stale';
@@ -3053,7 +3185,13 @@ export class GameController {
       prevMove: prevMove ? { to: prevMove.to } : undefined,
       prevFenBefore: c.prev?.fenBefore,
     };
-    const bestAfter = await this.secondOpinion(svc, input, signal);
+    // Here the near-equal verdict is part of the answer (the explorer's rating, whether a move tried
+    // again found it), so the second opinion comes before it (the one that only words it with
+    // SECOND_OPINION, as in the game).
+    const need = secondOpinionNeed(input);
+    const bestAfter = need
+      ? await this.secondOpinion(svc, need.fen, { ...(need.affectsClass ? ANNOTATE : SECOND_OPINION), priority, ...(signal ? { signal } : {}) })
+      : undefined;
     if (!o.alive()) return 'stale';
     const classification = classifyMove({ ...input, ...(bestAfter ? { bestAfter } : {}) });
     const explanation = drawn
@@ -3195,25 +3333,49 @@ export class GameController {
 
   private kickAnnotations(): void {
     if (this.annotating || !this.analysis) return;
+    let threw = false;
     const task: Promise<void> = this.runAnnotations()
-      .catch((e: unknown) => console.error('[game] annotation failed', e))
+      .catch((e: unknown) => {
+        threw = true;
+        console.error('[game] annotation failed', e);
+      })
       .finally(() => {
-        if (this.annotating === task) this.annotating = null;
+        if (this.annotating !== task) return;
+        this.annotating = null;
+        // A move played after the queue last looked (the bot's reply, released by the verdict that
+        // ended it) is annotated now.
+        if (!threw && this.nextToAnnotate()) this.kickAnnotations();
       });
     this.annotating = task;
   }
 
+  /** The first ply still to annotate (not settled, and its analysis has not failed), if any. */
+  private nextToAnnotate(): { gameId: string; ply: Ply } | null {
+    const g = this.s.game.value;
+    if (!g || !this.analysis) return null;
+    const failed = this.s.failedAnnotations.value;
+    const pre = preplayedOf(g);
+    const ply = this.s.plies.value.find((p) => !isSettled(p, pre) && !failed.has(annotationKey(g.id, p)));
+    return ply ? { gameId: g.id, ply } : null;
+  }
+
   private async runAnnotations(): Promise<void> {
     for (;;) {
-      const g = this.s.game.value;
-      if (!g || !this.analysis) return;
-      const failed = this.s.failedAnnotations.value;
-      const pre = preplayedOf(g);
-      const ply = this.s.plies.value.find((p) => !isSettled(p, pre) && !failed.has(annotationKey(g.id, p)));
-      if (!ply) return;
-      const res = await this.annotate(g.id, ply);
+      const next = this.nextToAnnotate();
+      if (!next) return;
+      const { gameId, ply } = next;
+      let res: AnnotateResult;
+      try {
+        res = await this.annotate(gameId, ply);
+      } catch (e) {
+        // A bug, not the engine: the move is marked as not checked ("Couldn’t check …", Check again),
+        // so the queue moves on and a reply held for its verdict goes (rather than the same throw
+        // stopping every later verdict).
+        console.error('[game] annotation failed', e);
+        res = 'failed';
+      }
       if (res === 'failed') {
-        this.markFailed(annotationKey(g.id, ply));
+        this.markFailed(annotationKey(gameId, ply));
         this.recordAnalysis();
       }
     }
@@ -3252,9 +3414,9 @@ export class GameController {
     let before: AnalysisResult;
     let after: AnalysisResult;
     try {
-      before = await svc.ensure(ply.fenBefore, ANNOTATE);
+      before = await this.annotationSearch(svc, ply.fenBefore, { ...ANNOTATE, priority: this.annotationPriority(ply) });
       if (!current()) return 'stale';
-      after = await svc.ensure(ply.fenAfter, ANNOTATE);
+      after = await this.annotationSearch(svc, ply.fenAfter, { ...ANNOTATE, priority: this.annotationPriority(ply) });
     } catch (e) {
       console.warn('[game] analysis failed', e);
       return current() ? 'failed' : 'stale';
@@ -3295,7 +3457,14 @@ export class GameController {
       prevMove: prevMove ? { to: prevMove.to } : undefined,
       prevFenBefore: prev?.fenBefore,
     };
-    const bestAfter = await this.secondOpinion(svc, input);
+    // The second opinion (near-equal awareness), before the verdict, so its words never change once
+    // shown: the one that only settles "about as good" with its small request (SECOND_OPINION, about
+    // 0.1 s on an iPhone), the rare one that can change the class with the annotation's. Its priority
+    // is asked now: your move played meanwhile waits for this one's verdict (`annotationPriority`).
+    const need = secondOpinionNeed(input);
+    const bestAfter = need
+      ? await this.secondOpinion(svc, need.fen, { ...(need.affectsClass ? ANNOTATE : SECOND_OPINION), priority: this.annotationPriority(ply) }, true)
+      : undefined;
     if (!current()) return 'stale';
     const classification = classifyMove({ ...input, ...(bestAfter ? { bestAfter } : {}) });
     const explanation = drawn
@@ -3336,6 +3505,8 @@ export class GameController {
       const sb = whiteScore(before);
       if (sb) next[index - 1] = { ...latest[index - 1], evalWhite: sb, evalDepth: before.depth };
     }
+    // The player's verdict: when it was shown (the held reply's lead, `holdForFeedback`).
+    if (human) this.verdictShown = { key: annotationKey(gameId, ply), at: this.now() };
     batch(() => {
       s.plies.value = next;
       if (index === 0) {
@@ -3351,23 +3522,82 @@ export class GameController {
   }
 
   /**
+   * The priority of a ply's annotation searches (ANALYSIS_PRIORITY), asked anew for each search:
+   * while playing, the player's moves first (the coach's verdict, which the bot's reply waits for),
+   * then the opponent's; but an opponent's move that a later move of the player's is waiting for
+   * (the queue goes in order: that verdict needs this one's) comes with that verdict's. The default
+   * in the review.
+   */
+  private annotationPriority(ply: Pick<Ply, 'index' | 'color'>): number {
+    const s = this.s;
+    const g = s.game.value;
+    if (!g || s.phase.value !== 'playing' || s.outcome.value) return 0;
+    if (ply.color === g.playerColor) return ANALYSIS_PRIORITY.verdict;
+    return s.plies.value.slice(ply.index + 1).some((p) => p.color === g.playerColor) ? ANALYSIS_PRIORITY.verdict : ANALYSIS_PRIORITY.opponent;
+  }
+
+  /**
+   * One of an annotation's searches (`annotate`), remembered while it runs (`annotationInFlight`), so
+   * that the player's move, whose verdict waits for it, can ask it sooner (`prefetchVerdict`).
+   */
+  private async annotationSearch(svc: AnalysisService, fen: string, opts: EnsureOptions): Promise<AnalysisResult> {
+    const mine = { svc, fen, opts };
+    this.annotationInFlight = mine;
+    try {
+      return await svc.ensure(fen, opts);
+    } finally {
+      if (this.annotationInFlight === mine) this.annotationInFlight = null;
+    }
+  }
+
+  /**
+   * The player's move was just played: its positions before and after are searched now, ahead of
+   * anything else on the analysis engine (the opponent's previous move's rating ends with the same
+   * search; a running lower-priority search is pre-empted), so its verdict does not wait for the
+   * annotation queue to get there. The annotation finds them in the cache (or joins them). The
+   * search an earlier move's annotation is waiting for (the opponent's second opinion, say), which
+   * this verdict waits for too, is asked again with the verdict's priority: it keeps running (or
+   * moves up the queue) rather than being cut short by these. Withdrawn when the moves change
+   * (`dropPrefetch`).
+   */
+  private prefetchVerdict(ply: Ply): void {
+    const svc = this.analysis;
+    if (!svc || this.s.phase.value !== 'playing') return;
+    this.prefetchAbort ??= new AbortController();
+    const signal = this.prefetchAbort.signal;
+    const asked = (r: Promise<AnalysisResult>) => r.catch((e: unknown) => console.warn('[game] analysis failed', e));
+    const earlier = this.annotationInFlight;
+    if (earlier?.svc === svc && (earlier.opts.priority ?? 0) < ANALYSIS_PRIORITY.verdict) {
+      asked(svc.ensure(earlier.fen, { ...earlier.opts, priority: ANALYSIS_PRIORITY.verdict, signal }));
+    }
+    const req = { ...ANNOTATE, priority: ANALYSIS_PRIORITY.verdict, signal };
+    for (const fen of [ply.fenBefore, ply.fenAfter]) asked(svc.ensure(fen, req));
+  }
+
+  /** Withdraws the searches `prefetchVerdict` asked for (a takeback, a new game, a restore, new engines). */
+  private dropPrefetch(): void {
+    this.prefetchAbort?.abort();
+    this.prefetchAbort = null;
+  }
+
+  /**
    * The second opinion on whether a move was about as good as the engine's best (analysis/
-   * nearEqual.ts, `nearBestRecheck`): when the move's own search puts it a little outside the band
-   * of the best line, the position after the best move is searched the same way (depth 14, MultiPV
-   * 3, within ANNOTATE_NODES), so the two moves are compared like with like. Undefined when not
-   * needed, or when that search fails or is cut short: the move is then judged without it (and
-   * corrected, as before the second opinion existed).
+   * nearEqual.ts, classify.ts `secondOpinionNeed`): when the move's own search puts it a little
+   * outside the band of the best line, the position after the best move (`fen`) is searched too, so
+   * the two moves are compared like with like: with `request` (SECOND_OPINION when it only settles
+   * "about as good", ANNOTATE when it can change the class). Undefined when that search fails or is
+   * cut short: the move is then judged without it (and corrected, as before the second opinion
+   * existed). `annotation`: an annotation's (`annotationSearch`).
    */
   private async secondOpinion(
     svc: AnalysisService,
-    input: ClassifyMoveInput,
-    signal?: AbortSignal,
+    fen: string,
+    request: EnsureOptions,
+    annotation = false,
   ): Promise<AnalysisResult | undefined> {
-    const fen = nearBestRecheck(input);
-    if (!fen) return undefined;
     try {
-      const r = await svc.ensure(fen, { ...ANNOTATE, ...(signal ? { signal } : {}) });
-      return r.aborted && !r.terminal && r.depth < ANNOTATE_DEPTH ? undefined : r;
+      const r = annotation ? await this.annotationSearch(svc, fen, request) : await svc.ensure(fen, request);
+      return (r.aborted && !r.terminal && r.depth < request.minDepth) || (!r.terminal && !r.lines.length) ? undefined : r;
     } catch (e) {
       console.warn('[game] second opinion failed', e);
       return undefined;
@@ -4064,8 +4294,9 @@ export class GameController {
   // Test / e2e support
 
   /**
-   * Resolves once no boot, bot move, background annotation, review, Show best analysis, explorer
-   * analysis (ratings, Engine reply), threat probe or Try again analysis is pending. For tests and e2e scripts (do not
+   * Resolves once no boot, bot move (held for the coach's verdict too), background annotation,
+   * review, Show best analysis, explorer analysis (ratings, Engine reply), threat probe or Try again
+   * analysis is pending. For tests and e2e scripts (do not
    * await it while a bot move is blocked on purpose).
    */
   async idle(): Promise<void> {

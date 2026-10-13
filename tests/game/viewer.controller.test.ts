@@ -353,7 +353,10 @@ describe('the game viewer: fixes', () => {
     }
     s.engines.analysis.delayMs = 30; // the annotations lag behind
     expect(s.controller.playerMove('h5', 'f7')).toBe(true);
-    await new Promise((r) => setTimeout(r, 5));
+    // The reply (Kxf7) comes once Qxf7+ has its verdict (feedback first); resigned right then, before
+    // the reply is checked.
+    for (let i = 0; i < 1000 && s.store.plies.value.length < 6; i++) await new Promise((r) => setTimeout(r, 1));
+    expect(s.store.plies.value).toHaveLength(6);
     s.controller.resign();
     const id = s.store.game.value!.id;
     const checked = s.store.plies.value.filter((p) => p.classification).length;

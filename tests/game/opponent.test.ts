@@ -202,23 +202,23 @@ describe('rate opponent: the view models during play', () => {
     expect(store.evalGraph.value.markers).toEqual([]);
   });
 
-  it('the rows never swap on a fine move: while it is checked and after the reply, the opponent’s stays expanded', () => {
-    // Your 3. Bc4 is being checked (the bot is thinking): the bot's 2… Nc6 stays expanded, yours is
-    // the row above, as before your move.
+  it('the panel follows the game forward on a fine move: yours while it is checked and rated, then the reply', () => {
+    // Your 3. Bc4 is being checked (the bot's reply waits for its verdict): yours is expanded, the
+    // bot's 2… Nc6 is the row above, as the moves were played.
     const good = { 4: 'good' } as const;
     const { state, store } = view({ plies: annotated(5, { bare: [4] }) });
-    expect(store.coach.value).toMatchObject({ title: 'Pip’s 2… Nc6 is good', subject: 'opponent', index: 3 });
-    expect(store.coach.value.other).toEqual({ subject: 'you', who: 'You', move: '3. Bc4', verdict: 'Checking…', busy: true, place: 'before' });
+    expect(store.coach.value).toMatchObject({ title: 'Checking Bc4…', subject: 'you', index: 4, busy: true });
+    expect(store.coach.value.other).toEqual({ subject: 'opponent', who: 'Pip', move: '2… Nc6', verdict: 'Good', cls: 'good', place: 'after' });
     expect(store.board.value.badge).toBeUndefined(); // your move is not rated yet
-    // Rated good: still the same layout.
+    // Rated good: its verdict, expanded until the reply.
     state.plies.value = annotated(5, { cls: good });
-    expect(store.coach.value).toMatchObject({ subject: 'opponent', index: 3 });
-    expect(store.coach.value.other).toMatchObject({ subject: 'you', verdict: 'Good', place: 'before' });
+    expect(store.coach.value).toMatchObject({ title: '3. Bc4 is good', subject: 'you', index: 4 });
+    expect(store.coach.value.other).toMatchObject({ subject: 'opponent', verdict: 'Good' });
     expect(store.board.value.badge).toEqual({ square: 'c4', cls: 'good' });
-    // The bot's reply: its move takes the open place, yours stays above.
+    // The bot's reply: its move takes the panel (one swap forward), yours is the row above.
     state.plies.value = annotated(6, { cls: good, bare: [5] });
     expect(store.coach.value).toMatchObject({ title: 'Checking Pip’s Nd4…', subject: 'opponent', index: 5 });
-    expect(store.coach.value.other).toMatchObject({ subject: 'you', place: 'before' });
+    expect(store.coach.value.other).toMatchObject({ subject: 'you', verdict: 'Good', place: 'before' });
     state.plies.value = annotated(6, { cls: good });
     expect(store.coach.value).toMatchObject({ title: 'Pip’s 3… Nd4 is a mistake', subject: 'opponent' });
   });

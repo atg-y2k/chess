@@ -32,6 +32,8 @@ export interface CoachPanelProps {
   titleMove?: string;
   /** Explanation sentences; the first one is emphasised. */
   lines: string[];
+  /** The collapsed row's line instead of the first of `lines` (the move a won game made all but free: why). */
+  summary?: string;
   /** Analysing spinner (and a text skeleton while `lines` is empty). */
   busy?: boolean;
   actions?: CoachAction[];
@@ -180,6 +182,7 @@ export function CoachPanel({
   title,
   titleMove,
   lines,
+  summary,
   busy = false,
   actions,
   collapsed = false,
@@ -283,7 +286,7 @@ export function CoachPanel({
           ) : (
             <>
               <span class={titleClass}>{titleText}</span>
-              {lines[0] && <span class="coach-summary">{lines[0]}</span>}
+              {(summary ?? lines[0]) && <span class="coach-summary">{summary ?? lines[0]}</span>}
             </>
           )}
           {onToggleCollapsed && <IconChevronRight size={18} class="coach-chevron coach-chevron--up" />}

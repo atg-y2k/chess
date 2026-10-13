@@ -35,11 +35,13 @@ import {
   namesMove,
   offersShowBest,
   verdictTitle,
+  wonAnywayLine,
+  wonAnywaySummary,
 } from './coach';
 import { DRAW_COLORS, NO_DRAWINGS, NO_SHAPES, shapesAt, type DrawColor, type Drawings } from './drawings';
 import type { ProFeature } from './entitlements';
 import { practiceMoments, tryKey, type PracticeGame } from './practice';
-import { summarizeGame } from './review';
+import { reviewAccuracyNotes, summarizeGame } from './review';
 import {
   explanationLines,
   positionInfo,
@@ -231,7 +233,16 @@ export interface ViewerView {
   /** The review's report while it is on show (else null). */
   report: ReviewView | null;
   /** The comment on the move on the board (or on the game). */
-  coach: { title: string; titleMove?: string; cls?: MoveClass; lines: string[]; busy: boolean; actions: ViewerAction[] };
+  coach: {
+    title: string;
+    titleMove?: string;
+    cls?: MoveClass;
+    lines: string[];
+    /** The collapsed row's line instead of the first of `lines` (CoachPanel `summary`). */
+    summary?: string;
+    busy: boolean;
+    actions: ViewerAction[];
+  };
   toolbar: {
     prev: boolean;
     next: boolean;
@@ -403,10 +414,13 @@ export function viewerView(v: GameViewer, ctx: ViewerContext): ViewerView {
     const sum = viewerSummary(v)!;
     const hide = locked('reviewDetails');
     const progress = v.review?.progress ?? null;
+    // As in Game Review: weak moves made when that side was already winning, once every move is checked.
+    const notes = progress === null ? reviewAccuracyNotes(sum, human, v.bot.name) : [];
     report = {
       progress,
       // As in Game Review: the accuracy once every move is checked (the counts fill in as they are).
       accuracy: progress === null ? sum.accuracy : { w: null, b: null },
+      ...(notes.length ? { accuracyNotes: notes } : {}),
       counts: sum.counts,
       playerColor: human,
       names: human === 'w' ? { w: 'You', b: v.bot.name } : { w: v.bot.name, b: 'You' },
@@ -520,10 +534,16 @@ function viewerCoach(
   const tryable = tries.has(ply.index);
   const hidden = !!ctx.ratedGame || (tryable && !revealed(ply.index));
   const better = !TOP_CLASSES.has(cl.cls) ? cl.bestMoveSan : null;
+  // A weak class the won game made all but free: why (a record kept before the history stored it
+  // has it from its evaluations, archive.ts `decodeAnalysis`); the faster mate named only when
+  // nothing keeps the better move hidden. The collapsed row leads with it.
+  const who = human ? 'you' : v.bot.name;
+  const won = wonAnywayLine(cl, cl.wonAnyway, { who, reveal: !hidden });
+  const summary = won ? wonAnywaySummary(cl.wonAnyway, who) : null;
   let lines: string[];
-  if (hidden && human && better) lines = answerFreeLines(ply.explanation, cl);
+  if (hidden && human && better) lines = [...answerFreeLines(ply.explanation, cl), ...(won ? [won] : [])];
   else {
-    lines = explanationLines(ply.explanation, better, { cl, playedUci: ply.uci, voice: human ? 'you' : 'neutral' });
+    lines = explanationLines(ply.explanation, better, { cl, playedUci: ply.uci, voice: human ? 'you' : 'neutral' }, won);
     if (hidden) {
       const names = betterMoves(cl);
       lines = lines.filter((l) => !names.some((san) => namesMove(l, san)));
@@ -537,5 +557,5 @@ function viewerCoach(
     if (hidden && offersShowBest(cl, ply.uci)) actions.push({ id: 'showBest', label: 'Show best' });
   }
   // The comment kept in the history is being written again in full.
-  return { ...titled, lines: noted(lines), busy: v.explaining === ply.index, actions };
+  return { ...titled, lines: noted(lines), ...(summary ? { summary } : {}), busy: v.explaining === ply.index, actions };
 }

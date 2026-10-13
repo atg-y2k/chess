@@ -11,12 +11,14 @@
  * it does not correct the move ("Your Nxd5 was fine: c6, c5 and g6 were only slightly better.").
  *
  * A played move is first compared with the best line (`NEAR_EQUAL_CP`). Just outside it, a second
- * opinion compares like with like: the position after the best move is searched as the one after
- * the played move was, and the two searches decide (`NEAR_EQUAL_SEARCH_CP`, classify.ts
- * `nearBestRecheck`). The top line is the best of several noisy estimates and tends to come out
- * high: in the user's position, over 80 real-engine runs with live analysis, the best line came out
- * between -0.40 and -0.77 and Nxd5's own search between -0.66 and -0.97; Nxd5 was corrected in 11
- * runs without the second opinion, in 4 with it.
+ * opinion compares like with like: the position after the best move is searched to the same depth
+ * as the one after the played move was, and the two searches decide (`NEAR_EQUAL_SEARCH_CP`,
+ * classify.ts `nearBestRecheck`; with one line and a smaller budget, GameController SECOND_OPINION,
+ * which agreed with depth-20 searches at least as often as a search like the played move's). The
+ * top line is the best of several noisy estimates and tends to come out high: in the user's
+ * position, over 80 real-engine runs with live analysis, the best line came out between -0.40 and
+ * -0.77 and Nxd5's own search between -0.66 and -0.97; Nxd5 was corrected in 11 runs without the
+ * second opinion, in 4 with it.
  *
  * The bands were calibrated against the real engine: the coach's budget against a depth-20 search
  * (MultiPV 4, and each other candidate move searched on its own) in 105 opening and middlegame

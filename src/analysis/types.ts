@@ -61,6 +61,24 @@ export interface Classification {
    * move. Absent otherwise.
    */
   aboveBest?: boolean;
+  /**
+   * The class is weak (an inaccuracy) only because of the mate-distance rules, while the move kept a
+   * won game (classify.ts): a checkmate more than six moves slower than the best one (the coach's
+   * own rule), or a forced mate given up for a position still +10 or better (lichess's). It barely
+   * changes the mover's winning chances, and not their accuracy (which caps the evaluation at ±10,
+   * analysis/accuracy.ts): the coach says so (coach.ts `wonAnywayLine`). Absent otherwise; the game
+   * history keeps it (game/archive.ts), and judges it from the evaluations for records kept before
+   * it did (`wonAnywayFromEvals`).
+   */
+  wonAnyway?: WonAnyway;
+}
+
+/** See `Classification.wonAnyway`. */
+export interface WonAnyway {
+  /** 'slower': the move still forces mate, more slowly; 'lost': no forced mate any more, still +10 or better. */
+  kind: 'slower' | 'lost';
+  /** The best move's forced mate, in moves (counted from the position before the move). */
+  mateIn: number;
 }
 
 /** One of `Classification.equalBest`. */

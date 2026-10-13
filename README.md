@@ -132,10 +132,11 @@ and explains it. For example, "14. Qg4 is a blunder" with "This hangs your queen
   the engine's choice, the coach does not correct it: it says, for example, "Your Nxd5 was fine: c6,
   c5 and g6 were only slightly better.", and Show best lists the **Top choices** with their
   evaluations ("c6 +0.6 · c5 +0.7 · g6 +0.7", then "Your Nxd5: +0.9, close behind."). When your move
-  looks a little worse at first, the coach checks the engine's choice the same way before it says
-  so, which takes a moment longer. A move that was clearly worse still gets "Best was c6", with the
-  moves that were about as good: "Best was c6 (c5 and g6 were about as good)." (An Excellent or Good
-  move that was not quite as good gets "Slightly better: c6".)
+  looks a little worse at first, the coach takes a quick extra look at the engine's choice the same
+  way before it says so, so what it says does not change once shown. A move that was clearly worse
+  still gets "Best was c6", with the moves that were about as good: "Best was c6 (c5 and g6 were
+  about as good)." (An Excellent or Good move that was not quite as good gets "Slightly better:
+  c6".)
 - **Retry** (after a mistake, miss or blunder, when takebacks are on) takes your move back so you
   can look for a better one. While Retry is on offer, the coach does not give away the answer. The
   "Retry" prompt is still there if iOS closes the app in the meantime.
@@ -158,10 +159,12 @@ move list (the same icons as yours), its big moments a dot on the graph, and the
 the verdict and the explanation in the third person, for example "Pip’s 12… Nf6 is a mistake" with
 "This leaves Black's knight on f6 undefended." and what it should have played ("Pip should have played
 Bc5, …"). **Show best** shows that move, with arrows on the position before its move. With the coach on too, the panel shows both moves, yours
-always on top: one open, the other as a row ("You ★ 12. Nf3 Best"); tap the row to open it. Your move
-stays open while it has something to fix (an inaccuracy or worse, with Retry and Show best at hand);
-after a good move the computer's latest move is open. On a short phone (or in landscape) both fit in
-one row ("You ★ Best | Pip ? Mistake"); tap a half to read it. With the coach off, the panel shows
+always on top: one open, the other as a row ("You ★ 12. Nf3 Best"); tap the row to open it. The
+panel follows the game: your move is open while it is the latest one (while it is checked, then its
+verdict, which the computer's reply waits for), then the computer's reply once it is played. Your
+move stays open while it has something to fix (an inaccuracy or worse, with Retry and Show best at
+hand). On a short phone (or in landscape) both fit in one row ("You ★ Best | Pip ? Mistake"); tap a
+half to read it. With the coach off, the panel shows
 only the computer's moves. The option is in the New game sheet and the Menu. It shows you when the
 computer goes wrong, so it makes the game unrated, and it stays on for your next games until you
 switch it off (see [Rated and unrated games](#your-rating-what-elo-means)).
@@ -209,6 +212,14 @@ and shows no move icon for it. Game Review lists it among the key moments.
 The coach needs a moment to check each move, a few seconds at most: in the rare, very sharp
 position where a deeper look would take the engine minutes, it settles for a slightly shallower
 one. If the check fails (rarely), it says "Couldn't check …" with a **Check again** button.
+
+**Feedback first.** With the coach on, your opponent waits for it: the computer's reply to your move
+comes once the coach's verdict on that move has been on the screen on its own for a moment (about
+half a second), so you always see how your move was before the next one is played. Meanwhile your
+opponent shows as thinking, as usual; when the verdict was already up while it thought, it replies
+as quickly as it always does, and it never waits more than a few extra seconds (the verdict then
+follows). The coach checks your latest move before anything else (the opponent's move, a threat, the
+evaluation bar).
 
 When it is your move right after your opponent took one of your pieces and you can take back
 without losing material, the coach's tip says so, for example "Rocco just took your bishop on c1.
@@ -596,6 +607,35 @@ game's position; when there are more than 12, yours come first.
 over the game. The chess.com formulas are private, so the numbers are similar in spirit but will not
 match chess.com exactly. The Brilliant and Great thresholds depend on your rating.
 
+**Accuracy and the labels measure different things.** The labels compare each move with the
+engine's best one; accuracy follows how much your winning chances changed over the whole game, and
+counts any position of +10 or more (or a forced mate) as the same, already won. So a high accuracy
+can sit beside several inaccuracies in a game you were winning anyway: the coach calls a checkmate
+played more than six moves slower than the fastest one an inaccuracy, and, like lichess, so is
+letting a forced mate go while you stay +10 or more ahead, but neither lowers your accuracy. The
+labels stay, and the coach says why:
+
+- **On the move:** "f3 still forces mate in 9." with "A faster mate was available (Qd8#), but you
+  were winning anyway." (with its distance when it is longer: "(Qh7+, mate in 3)"), or, after "You
+  missed a forced mate in 6.", "You were winning anyway, so the missed mate hardly matters." For the
+  computer's moves: "Pip had a faster mate (Qh2#), but was winning anyway." While the better move is
+  still yours to find (Try again, or a rated game in the game viewer), the line does not name it: "A
+  faster mate was available, but you were winning anyway." On a short phone, where the coach is one
+  row, the row says "Still winning: a faster mate was available."
+- **Under the accuracy** (Game Review's report, also in the game viewer): how many of your weak moves
+  came when you were already winning, for example "7 of your 9 inaccuracies came when you were
+  already winning, so they didn’t lower your winning chances — that’s why your accuracy is still
+  99.1%." The "that’s why" comes only when those are at least half of your weak moves (else it ends
+  "…, so it didn’t lower your winning chances."), and below 90% it ends "…, so they didn’t lower your winning
+  chances or your accuracy." Game Review says it for your opponent's column too ("4 of Pip’s 6
+  inaccuracies came when Pip was already winning, …"). The game-over sheet says it in short under
+  your count ("7 of them came when you were already winning, so they didn’t lower your accuracy."),
+  and its **Try your mistakes again** leaves those moves out (Game Review still offers them). A weak
+  move counts when the evaluations before and after it were both +10 or more (or a mate) for the side
+  that played it, which is exactly when accuracy does not count it. The game history keeps the
+  coach's reason for each move; for games kept before it did, the game viewer works it out from the
+  evaluations kept.
+
 ## The Menu
 
 - **Flip board, Export PGN, New game and Resign** (Resign asks first, and says what it costs your
@@ -676,7 +716,7 @@ Requires Node 24 (chessground declares `engines.node >= 24`).
 ```sh
 npm ci                 # install
 npm run dev            # dev server with hot reload (http://localhost:5173)
-npm test               # unit tests (Vitest: about 1,280 tests in 72 files; the calibration test is skipped)
+npm test               # unit tests (Vitest: about 1,360 tests in 74 files; the calibration test is skipped)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
 npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting

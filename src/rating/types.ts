@@ -54,6 +54,11 @@ export interface CompactAnalysis {
   p: string;
   /** The explanation headlines of the game's key moments, by ply index (Game Review's list, Try again). */
   h?: Record<string, string>;
+  /**
+   * The tokens say which weak moves a won game made all but free (`Classification.wonAnyway`, flags
+   * 'w' and 'l'). Absent in records kept before they did: that is then judged from the evaluations.
+   */
+  w?: 1;
 }
 
 export interface PlayerProfile {

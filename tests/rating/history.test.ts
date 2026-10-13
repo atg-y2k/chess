@@ -212,6 +212,10 @@ describe('what the history keeps of a game', () => {
       history: [{ ...good, analysis: { v: 1, s: 12, p: 'k30', h: { '0': 'ok', x: 'no', '1': 7 } } }],
     }).history[0];
     expect(h.analysis).toEqual({ v: 1, s: '', p: 'k30', h: { '0': 'ok' } });
+    // The won-anyway marker (archive.ts): kept when it is 1, dropped otherwise.
+    const marked = (w: unknown) => sanitizeProfile({ ...defaultProfile(), history: [{ ...good, analysis: { v: 1, s: '', p: 'i#9w1', w } }] }).history[0];
+    expect(marked(1).analysis).toEqual({ v: 1, s: '', p: 'i#9w1', w: 1 });
+    expect(marked('yes').analysis).toEqual({ v: 1, s: '', p: 'i#9w1' });
     expect(sanitizeProfile({ ...defaultProfile(), history: [{ ...good, analysis: { v: 1, s: '', p: 'x'.repeat(20_000) } }] }).history[0].analysis).toBeUndefined();
     // A record that was not rated is never new.
     expect(sanitizeProfile({ ...defaultProfile(), history: [{ ...good, rated: false, provisional: true }] }).history[0].provisional).toBeUndefined();
