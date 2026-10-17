@@ -69,10 +69,20 @@ export function pairMoves(plies: Ply[]): MovePair[] {
 
 /**
  * Scrolls `box` so that its current move (`aria-current`) is centered; without one, to the start
- * (before the first move) or the end. Short hops animate when `smooth`; long jumps snap.
+ * (before the first move) or the end. Short hops animate when `smooth`; long jumps snap. A list
+ * that wraps into rows (where the page gives it the height: a split screen, a tablet) scrolls up and
+ * down instead.
  */
 function centerCurrent(box: HTMLElement, current: number, smooth: boolean): void {
   const el = box.querySelector<HTMLElement>('[aria-current="true"]');
+  if (box.scrollHeight > box.clientHeight + 1 && box.scrollWidth <= box.clientWidth + 1) {
+    const max = box.scrollHeight - box.clientHeight;
+    const target = el ? el.offsetTop + el.offsetHeight / 2 - box.clientHeight / 2 : current === 0 ? 0 : max;
+    const top = Math.max(0, Math.min(max, target));
+    const delta = Math.abs(box.scrollTop - top);
+    if (delta > 1) box.scrollTo({ top, behavior: smooth && delta < box.clientHeight * 1.5 ? 'smooth' : 'auto' });
+    return;
+  }
   const max = box.scrollWidth - box.clientWidth;
   const target = el ? el.offsetLeft + el.offsetWidth / 2 - box.clientWidth / 2 : current === 0 ? 0 : max;
   const left = Math.max(0, Math.min(max, target));
@@ -115,25 +125,27 @@ export function MoveList({
     mounted.current = true;
   }, [current, plies.length, iconKey]);
 
-  // A new width (rotation to portrait or landscape, a resized window) leaves the current move
-  // off-center, or out of view: center it again, at once.
+  // A new size (rotation to portrait or landscape, a resized window, a fold or an unfold) leaves the
+  // current move off-center, or out of view: center it again, at once.
   useEffect(() => {
     const box = scrollRef.current;
     if (!box || typeof ResizeObserver === 'undefined') return;
     let width = box.clientWidth;
+    let height = box.clientHeight;
     const ro = new ResizeObserver(() => {
-      if (box.clientWidth === width) return;
+      if (box.clientWidth === width && box.clientHeight === height) return;
       width = box.clientWidth;
+      height = box.clientHeight;
       centerCurrent(box, currentRef.current, false);
     });
     ro.observe(box);
     return () => ro.disconnect();
   }, []);
 
-  // Desktop: let a vertical mouse wheel scroll the row sideways.
+  // Desktop: let a vertical mouse wheel scroll the row sideways (a list in rows scrolls by itself).
   const onWheel = (e: WheelEvent) => {
     const box = scrollRef.current;
-    if (!box || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    if (!box || Math.abs(e.deltaY) <= Math.abs(e.deltaX) || box.scrollWidth <= box.clientWidth + 1) return;
     box.scrollLeft += e.deltaY;
     e.preventDefault();
   };

@@ -53,7 +53,7 @@ repository.
 | Build number | `CURRENT_PROJECT_VERSION` in `project.pbxproj` (1). It must go up with every upload; a CI workflow can set it, e.g. to the run number. |
 | Minimum iOS (16.4, for WebAssembly SIMD) | `IPHONEOS_DEPLOYMENT_TARGET` in `project.pbxproj` (all four entries). Keep it a plain number: `cap sync` reads the first one to write `.iOS(.v16)` into `App/CapApp-SPM/Package.swift`. |
 | iPhone only | `TARGETED_DEVICE_FAMILY = 1` in `project.pbxproj` (`"1,2"` adds iPad, which then needs iPad screenshots). |
-| Portrait only | `UISupportedInterfaceOrientations` in `Info.plist`. |
+| Orientations (portrait on a regular iPhone, every way on the iPhone Duo) | `UISupportedInterfaceOrientations` in `Info.plist` and `supportedInterfaceOrientations` in `App/App/MainViewController.swift`; see [Orientations, multitasking and the iPhone Duo](#orientations-multitasking-and-the-iphone-duo). |
 | Pro in-app purchase ID | `src/native/purchases.ts`. |
 | Background color (`#1d1c1a`) | `capacitor.config.ts` (web view, launch screen plugin) and `App/App/Base.lproj/LaunchScreen.storyboard`. |
 
@@ -63,6 +63,72 @@ with `UIViewControllerBasedStatusBarAppearance = YES` (what @capacitor/status-ba
 permission (`NS…UsageDescription`) keys, since the app uses none. `App/App/PrivacyInfo.xcprivacy`
 declares the one required-reason API the app uses: UserDefaults (`CA92.1`), through
 @capacitor/preferences.
+
+## Orientations, multitasking and the iPhone Duo
+
+On the iPhone Duo the app turns with the device, like the web app: its layout follows the window
+(portrait, landscape, the Duo's displays, Split View; see `src/App.css` and `src/layout/fold.ts`). On
+every other iPhone it stays in portrait, as it always has.
+
+- `UISupportedInterfaceOrientations`: all four. iOS has no per-model key (the Duo reads the iPhone
+  one), and iPad-style multitasking (Split View, Slide Over, resizable windows) wants all four
+  orientations, a launch storyboard (`UILaunchStoryboardName`, `LaunchScreen.storyboard`) and no
+  `UIRequiresFullScreen` (deprecated since iOS 26; leave it out). The same key serves iPad if it is
+  ever added (`TARGETED_DEVICE_FAMILY = 1` today). iPhones with Face ID never turn upside down anyway.
+- `MainViewController.supportedInterfaceOrientations` narrows that per screen: a tall phone screen
+  (the long side more than 1.6 times the short one: every iPhone but the Duo, whose displays are about
+  1.4) gets portrait only; the Duo's displays get all four. It asks again when the window first shows
+  and after every size change (`setNeedsUpdateOfSupportedInterfaceOrientations`), so folding or
+  unfolding, which moves the app to the other display, picks the right set. A launch with a regular
+  iPhone held sideways may show the launch screen in landscape for a moment before the app turns
+  upright.
+- `UIApplicationSupportsMultipleScenes` stays `false`: one window. Two windows of the app side by
+  side would be two web views sharing one localStorage, each saving its own game over the other's.
+  The app still sits beside another app in Split View: that needs no extra scene.
+- `vite.config.ts` (`nativeProjectSettings`) only rewrites the bundle ID, the version and the
+  display name; it never touches these keys.
+- The launch screen is the app's mark on `#1d1c1a`, "aspect fill", so it covers any screen in any
+  orientation; in landscape the mark sits slightly higher than the app's own start screen shows it.
+- The status bar: iOS hides it on an iPhone in landscape. The web view runs under it either way
+  (`overlaysWebView`), and the CSS pads the app with the safe areas, which in landscape are along
+  the sides (the Dynamic Island) and the bottom. On the Duo's open inner display it runs down the
+  right edge; the App Store app sets its text color with the theme (`src/native/statusbar.ts`), and
+  the installed web app paints a dark band down that side in the light theme (`src/styles/app.css`).
+
+**The iPhone Duo** (announced on September 9, 2026; iOS 27.1). Its open inner display (7.6", 2670 ×
+1878 px) has the status bar, a vertical Dynamic Island and the Dock along its right edge, a fold down
+its middle, and iPad-style Split View; the outer display is 5.4" (1398 × 2034 px). What Apple had not
+published when this was written, and so is not verified: the displays' sizes in points and their
+scale factor, the safe-area insets in each posture, whether WKWebView reports the fold (the Viewport
+Segments API, `window.viewport.segments`, and the Device Posture API: WebKit had shipped neither as
+of mid-2026), whether its user agent says iPhone or, like iPadOS, Mac, and whether iPhone apps get
+Split View on it as they are or need iPad-style multitasking (all four orientations, which the app
+lists). The app recognizes the inner display by its size when nothing reports the fold. Without a
+reported posture, half folded (tabletop) needs the Menu's "Keep the board off the fold": Automatic
+can't tell it from flat. One blind spot: should the Duo turn out to be @2x (about 1335 × 939 points)
+and send the Mac user agent, its inner display looks like an iPad, so Automatic leaves it whole (the
+setting still splits it).
+
+To check and tune it:
+
+1. Build with the Xcode that has the iOS 27 SDK (the first that knows the iPhone Duo) and run the app
+   in its iPhone Duo simulator: open and closed, portrait and landscape, half folded, and in Split
+   View beside another app at each width. Check that the app turns on both displays (and stays
+   upright on a regular iPhone simulator), that Split View is offered, where the status bar is drawn
+   and that it is readable in the light theme, and, in Safari, the same in a tab and installed.
+2. In Safari's Web Inspector on the simulator, read `innerWidth`, `innerHeight`, `screen.width`,
+   `screen.height`, `devicePixelRatio`, `navigator.userAgent`, `navigator.maxTouchPoints`,
+   `window.viewport?.segments`, `navigator.devicePosture`, `matchMedia('(device-posture: folded)')`
+   and the safe areas (`getComputedStyle(document.getElementById('app'))`'s padding) in each state.
+3. Put what you find where it is used: the `FOLD` estimates in `src/layout/fold.ts` (the inner
+   display's smallest short side and largest aspect ratio, the clearance kept around the fold, the
+   share of the height a Safari tab keeps; the 1.6 ratio is also in `MainViewController.swift`), the
+   window-shape thresholds of the Duo's whole-screen layouts in `src/App.css` (short, wide portrait;
+   big portrait; squat landscape: the media queries next to "the iPhone Duo's outer display" and "its
+   inner display upright"), the test viewports at the top of `e2e/foldable.spec.ts`, and, for the web
+   app's launch images, the displays' sizes in `SPLASH_SCREENS` in `vite.config.ts`, with their
+   images made by `node scripts/make-splash.mjs --size=<width>x<height>` (device pixels; add
+   `--scale=0.667` at @2x).
 
 ## Build and run on a Mac
 
@@ -142,8 +208,9 @@ emulation) without a service worker and passes the engine self-test.
 
 Needs a Mac or a device: building and archiving (`xcodebuild`, signing), Swift Package resolution,
 the shared scheme, and everything at run time in WKWebView: the workers and WebAssembly under
-`capacitor://`, the launch screen hand-over, the status bar, haptics, the share sheet, the
-Preferences backup, audio with the silent switch, safe areas, and memory with two engines.
+`capacitor://`, the launch screen hand-over (also in landscape), the status bar, haptics, the share
+sheet, the Preferences backup, audio with the silent switch, safe areas, rotation, memory with two
+engines, and the iPhone Duo (see above).
 
 ## In-app purchase (Pro, StoreKit 2)
 
@@ -156,7 +223,7 @@ device, and the entitlement check works offline.
 | File | What it does |
 |---|---|
 | `App/App/StorePlugin.swift` | The app's own Capacitor plugin, `Store`: `getProduct`, `isUnlocked`, `purchase`, `restore` (each takes `{productId}`), and the `entitlementChanged` event `{productId, unlocked}`. It listens to `Transaction.updates` from launch, so it sees Ask to Buy approvals, purchases on other devices, refunds and revocations. |
-| `App/App/MainViewController.swift` | `CAPBridgeViewController` plus `registerPluginInstance(StorePlugin())` in `capacitorDidLoad()`. `SceneDelegate.swift` creates it, and `Main.storyboard` names it too. |
+| `App/App/MainViewController.swift` | `CAPBridgeViewController` plus `registerPluginInstance(StorePlugin())` in `capacitorDidLoad()`, and the orientations per screen (portrait on a tall phone screen). `SceneDelegate.swift` creates it, and `Main.storyboard` names it too. |
 | `App/App/Products.storekit` | A local StoreKit configuration for testing in Xcode: Pro at $9.99, Family Sharing on. It is in the project but not in Copy Bundle Resources, so it is not shipped. |
 | `src/native/purchases.ts` | The JavaScript side. `getPurchases()` returns the native store in the app, a mock store in a `VITE_PAYWALL=1` web build, and "always unlocked" in the PWA. Failures come back as results (`restore()` gives `restored`, `none`, `cancelled` or `failed`, so an offline restore is not reported as "nothing to restore"), except that `isUnlocked()` rejects when the plugin is missing or the call fails, so a cached Pro is kept rather than locked. `loadStorePlugin()` logs a `console.error` if the `Store` plugin was not registered. |
 

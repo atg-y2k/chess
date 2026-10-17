@@ -135,6 +135,13 @@ export const IconGauge = (p: IconProps) => (
   </Svg>
 );
 
+/** A check mark (the chosen row of a list of choices). */
+export const IconCheck = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m5 12.5 4.5 4.5L19 7.5" />
+  </Svg>
+);
+
 export const IconCheckCircle = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="9" />

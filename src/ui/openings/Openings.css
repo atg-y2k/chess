@@ -155,6 +155,14 @@
 
 /* ---------------------------------------------------------------- shared pieces */
 
+/*
+ * Readable lines on a wide page (a tablet, a desktop, the iPhone Duo's inner display used whole):
+ * about 70 characters at most, however wide the page.
+ */
+:is(.op-guide-summary, .op-bullets, .op-trap-note, .op-note-text, .op-intro p, .op-intro-list, .op-hero-side, .op-note, .op-empty, .op-feedback-text) {
+  max-width: 68ch;
+}
+
 .op-section {
   margin-top: 22px;
 }
@@ -940,9 +948,13 @@
   margin: 0 4px 8px;
 }
 
+/*
+ * Six buttons of at least 44 px in a row (284 px with the gaps); a narrower column (beside the board
+ * on the iPhone Duo's outer display in landscape, Split View's third) makes two rows of three.
+ */
 .op-controls {
   display: grid;
-  grid-template-columns: repeat(6, minmax(44px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(clamp(44px, (284px - 100%) * 1000, (100% - 8px) / 3), 1fr));
   gap: 4px;
   margin-top: 6px;
 }
@@ -975,13 +987,14 @@
   background: var(--accent-strong);
 }
 
+/* It scrolls to the page's edges, but not into the safe areas (a landscape phone's notch, system UI). */
 .op-strip {
   display: flex;
   align-items: center;
   gap: 2px;
   min-height: 48px;
-  margin: 8px calc(-1 * var(--op-pad)) 0;
-  padding: 0 var(--op-pad);
+  margin: 8px min(0px, var(--safe-right) - var(--op-pad)) 0 min(0px, var(--safe-left) - var(--op-pad));
+  padding: 0 max(0px, var(--op-pad) - var(--safe-right)) 0 max(0px, var(--op-pad) - var(--safe-left));
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -1346,12 +1359,23 @@
   line-height: 1.4;
 }
 
+/*
+ * A short, wide portrait page (the iPhone Duo's outer display, Split View on its inner one): the
+ * board leaves room under it for the step controls, the moves and the start of the note.
+ */
+@container opscroll (aspect-ratio >= 5 / 8) and (aspect-ratio < 5 / 4) {
+  .op-learn {
+    --op-board: min(100cqw - 2 * var(--op-pad) - var(--op-bar) - 4px, 100cqh - 240px, 560px);
+  }
+}
+
 /* Wide screens (landscape phones, desktop): the board on the left, the rest beside it. */
 @container opscroll (min-aspect-ratio: 5 / 4) and (min-width: 600px) {
   .op-page:has(> .op-learn) {
     max-width: none;
   }
   .op-learn {
+    /* Half the width at most (a narrow side column puts the step controls in two rows). */
     --op-board: min(100cqh - 24px - var(--safe-bottom), 50cqw, 620px);
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -1468,4 +1492,205 @@
 /* During a rated game: why the board has no evaluation bar. */
 .op-eval-hidden {
   margin: 2px 2px 0;
+}
+
+/*
+ * A screen split along its fold (src/layout/fold.ts, App.css). Open like a book: the board pages
+ * (learn, tree, drill) keep the board in the first segment and the rest in the second. Half folded
+ * (tabletop): the board fits in the top half. The text pages show two at a time, one per segment.
+ */
+@container opscroll (min-aspect-ratio: 5 / 4) and (min-width: 600px) {
+  :root[data-fold='book'] .op-learn {
+    --op-board: min(
+      100cqh - 24px - var(--safe-bottom),
+      var(--fold-start) - max(var(--op-pad), var(--safe-left)) - var(--op-bar) - 4px - var(--fold-clear),
+      620px
+    );
+    grid-template-columns: calc(var(--fold-start) - max(var(--op-pad), var(--safe-left)) - var(--fold-clear)) minmax(0, 1fr);
+    /* The side starts a page margin after the fold, as the second pane's text does. */
+    column-gap: calc(var(--fold-end) - var(--fold-start) + var(--fold-clear) + var(--op-pad));
+  }
+  /*
+   * The device turned around (the system UI along the left edge: `data-fold-board='end'`): the board
+   * in the right segment, clear of it, as on the game screen; the rest in the left one, ending a page
+   * margin before the fold.
+   */
+  :root[data-fold='book'][data-fold-board='end'] .op-learn {
+    --op-board: min(
+      100cqh - 24px - var(--safe-bottom),
+      100cqw - var(--fold-end) - max(var(--op-pad), var(--safe-right)) - var(--op-bar) - 4px - var(--fold-clear),
+      620px
+    );
+    grid-template-columns: minmax(0, 1fr) calc(100cqw - var(--fold-end) - max(var(--op-pad), var(--safe-right)) - var(--fold-clear));
+  }
+  :root[data-fold='book'][data-fold-board='end'] .op-learn > .op-learn-board {
+    grid-area: 1 / 2;
+  }
+  :root[data-fold='book'][data-fold-board='end'] .op-learn > .op-learn-side {
+    grid-area: 1 / 1;
+  }
+  /* The move strip keeps to its column: not up to the fold, nor under the system UI at the edge. */
+  :root[data-fold='book'] .op-learn .op-strip {
+    margin-right: 0;
+    margin-left: 0;
+    padding: 0;
+  }
+}
+/* Book, a board page: the title over the second segment, not across the fold. */
+:root[data-fold='book']:not([data-fold-board='end']) .op-view:not([data-panes]) > .op-pane > .op-nav {
+  grid-template-columns:
+    calc(var(--fold-start) - max(4px, var(--safe-left)) - var(--fold-clear))
+    calc(var(--fold-end) - var(--fold-start) + 2 * var(--fold-clear) - 12px)
+    minmax(0, 1fr)
+    minmax(min-content, auto);
+}
+:root[data-fold='book']:not([data-fold-board='end']) .op-view:not([data-panes]) > .op-pane > .op-nav > .op-nav-title {
+  grid-column: 3;
+  max-width: none;
+}
+:root[data-fold='book'] .op-view:not([data-panes]) > .op-pane > .op-nav > .op-nav-side--end {
+  grid-column: 4;
+}
+/*
+ * Turned around (the board in the right segment): the title over the left one, after Back, and Done
+ * at the right edge. The columns: Back, the title up to the fold, the fold, the board's segment.
+ */
+:root[data-fold='book'][data-fold-board='end'] .op-view:not([data-panes]) > .op-pane > .op-nav {
+  grid-template-columns:
+    minmax(min-content, auto)
+    minmax(0, 1fr)
+    calc(var(--fold-end) - var(--fold-start) + 2 * var(--fold-clear) - 8px)
+    calc(100% + max(4px, var(--safe-left)) - var(--fold-end) - var(--fold-clear));
+}
+:root[data-fold='book'][data-fold-board='end'] .op-view:not([data-panes]) > .op-pane > .op-nav > .op-nav-title {
+  grid-column: 2;
+  max-width: none;
+}
+
+/*
+ * Split, the text pages (OpeningsView): two panes, one per segment, each with its own bar and its
+ * own scroll: the list in the first (left, or top), the page it opened in the second. A pane's
+ * edges at the fold need no safe-area padding (the zeroed --safe-* below), only its outer ones.
+ */
+.op-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+/* One page (no split): the same element, as the whole view. */
+.op-view:not([data-panes]) > .op-pane {
+  flex: 1 1 auto;
+}
+.op-view[data-panes] {
+  display: grid;
+}
+.op-view[data-panes='book'] {
+  grid-template-columns:
+    calc(var(--fold-start) - var(--fold-clear))
+    calc(var(--fold-end) - var(--fold-start) + 2 * var(--fold-clear))
+    minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.op-view[data-panes='book'] > .op-pane:first-child {
+  grid-column: 1;
+  --safe-right: 0px;
+}
+.op-view[data-panes='book'] > .op-pane + .op-pane {
+  grid-column: 3;
+  --safe-left: 0px;
+}
+.op-view[data-panes='tabletop'] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows:
+    calc(var(--fold-start) - var(--safe-top) - var(--fold-clear))
+    calc(var(--fold-end) - var(--fold-start) + 2 * var(--fold-clear))
+    minmax(0, 1fr);
+}
+.op-view[data-panes='tabletop'] > .op-pane:first-child {
+  grid-row: 1;
+  --safe-bottom: 0px;
+}
+.op-view[data-panes='tabletop'] > .op-pane + .op-pane {
+  grid-row: 3;
+  --safe-top: 0px;
+}
+/* The fold's gap between the panes: the bars meet across it as one, the pages keep their own edges. */
+.op-view[data-panes='book']::before {
+  content: '';
+  grid-row: 1;
+  grid-column: 2;
+  border-bottom: 1px solid var(--op-sep);
+  height: 48px;
+  background: color-mix(in srgb, var(--bg) 92%, var(--surface));
+}
+/* A pane is about a phone's width: the page's own margins, at most a comfortable line (~70ch). */
+.op-view[data-panes] .op-page {
+  max-width: 640px;
+}
+.op-view[data-panes] .op-nav-title {
+  max-width: none;
+}
+/* Nothing opened from the list yet. */
+.op-pane-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px max(24px, var(--safe-right)) calc(24px + var(--safe-bottom)) max(24px, var(--safe-left));
+  color: var(--text-faint);
+  text-align: center;
+}
+.op-pane-empty svg {
+  color: var(--cls-book);
+}
+.op-pane-empty-title {
+  margin: 6px 0 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.op-pane-empty .op-note {
+  max-width: 30ch;
+  margin: 0;
+  font-size: 14px;
+}
+/* Loading: in the second segment (book) or the top one (tabletop), never across the fold. */
+:root[data-fold='book']:not([data-fold-board='end']) .op-loading {
+  padding-left: calc(var(--fold-end) + var(--fold-clear));
+}
+:root[data-fold='book'][data-fold-board='end'] .op-loading {
+  padding-right: calc(100% - var(--fold-start) + var(--fold-clear));
+}
+/* Tabletop: from under the navigation bar (48px) to the fold, not from 100dvh (short in iOS standalone mode). */
+:root[data-fold='tabletop'] .op-loading {
+  flex: none;
+  height: calc(var(--fold-start) - var(--fold-clear) - var(--safe-top) - 48px);
+}
+:root[data-fold='tabletop'] .op-learn {
+  --op-board: min(
+    100cqw - 2 * var(--op-pad) - var(--op-bar) - 4px,
+    var(--fold-start) - var(--safe-top) - 60px - var(--fold-clear),
+    560px
+  );
+}
+/*
+ * Tabletop: the board stays put in the top half (sticky, down to the fold) while the rest scrolls in
+ * the bottom half, under it: nothing scrolls across the fold. (48px: the navigation bar.)
+ */
+:root[data-fold='tabletop'] .op-page:has(> .op-learn) {
+  padding-top: 0;
+}
+:root[data-fold='tabletop'] .op-learn-board {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  align-items: flex-start;
+  height: calc(var(--fold-end) + var(--fold-clear) - var(--safe-top) - 48px);
+  margin: 0 calc(-1 * var(--op-pad));
+  padding: 10px var(--op-pad) 0;
+  background: var(--bg);
 }

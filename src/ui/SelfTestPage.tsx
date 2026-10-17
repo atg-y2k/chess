@@ -3,9 +3,10 @@
  * searches, MultiPV, mate, bot strength options, cache, concurrency) and shows the live log with a
  * PASS / FAIL verdict and a "Copy log" button, so the engine can be checked on a real iPhone.
  */
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { copyText } from '../clipboard';
 import { runEngineSelfTest } from '../engine/selfTest';
+import { applyFoldLayout, chooseFoldLayout, loadFoldSetting, NO_FOLD_LAYOUT, watchFold } from '../layout/fold';
 import { LegalFooter } from './About';
 import './SelfTestPage.css';
 
@@ -25,6 +26,20 @@ export function SelfTestPage({ run = runEngineSelfTest, copy = copyText }: SelfT
   const [runId, setRunId] = useState(0);
   const [copied, setCopied] = useState<'ok' | 'fail' | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
+
+  // A foldable's inner display (the iPhone Duo): the log takes a segment of its own, as the app's
+  // panels do (the page has no App around it to set the fold up; the Menu's setting applies). Before
+  // the first paint, so the page never shows unsplit first.
+  useLayoutEffect(() => {
+    const fold = watchFold();
+    const setting = loadFoldSetting();
+    const stop = fold.info.subscribe((info) => applyFoldLayout(chooseFoldLayout(info, setting)));
+    return () => {
+      stop();
+      fold.stop();
+      applyFoldLayout(NO_FOLD_LAYOUT);
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;

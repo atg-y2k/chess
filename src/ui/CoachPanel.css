@@ -566,6 +566,33 @@
 .coach-row--dual .coach-chevron {
   margin-left: 2px;
 }
+/*
+ * A narrow column (a squat landscape window, such as the iPhone Duo's outer display on its side): the
+ * halves one above the other, each with room for its name and its verdict.
+ */
+@container panel (max-width: 280px) {
+  .coach-row--dual {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    border-radius: 18px;
+  }
+  .coach-row--dual > .coach-avatar {
+    grid-row: 1 / span 2;
+  }
+  .coach-row--dual > .coach-half {
+    grid-column: 2;
+  }
+  .coach-row--dual > .coach-chevron {
+    grid-row: 1 / span 2;
+    grid-column: 3;
+  }
+  .coach-row--dual > .coach-half + .coach-half {
+    border-left: 0;
+    border-top: 1px solid var(--coach-bubble-border);
+    padding-left: 6px;
+  }
+}
 
 :root[data-theme='light'] .coach-other[data-cls],
 :root[data-theme='light'] .coach-half[data-cls] {

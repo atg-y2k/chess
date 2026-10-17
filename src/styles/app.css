@@ -163,6 +163,31 @@ body {
     box-shadow: inset 0 var(--safe-top) 0 0 #1d1c1a;
   }
 }
+/*
+ * The same down the side of a foldable's inner display open like a book (the iPhone Duo puts its
+ * status bar, Dynamic Island and Dock along the right edge, the left one with the device turned
+ * around: `data-fold-board='end'`, src/layout/fold.ts), where the top band can't reach: a band as
+ * wide as that side's safe area, over every layer (none draws anything there). Regular iPhones in
+ * landscape hide the status bar and keep their look.
+ */
+@media (display-mode: standalone) {
+  :root[data-theme='light'][data-fold='book'] body::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
+    width: var(--safe-right);
+    background: #1d1c1a;
+    pointer-events: none;
+  }
+  :root[data-theme='light'][data-fold='book'][data-fold-board='end'] body::after {
+    right: auto;
+    left: 0;
+    width: var(--safe-left);
+  }
+}
 
 button {
   font: inherit;

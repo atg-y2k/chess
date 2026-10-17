@@ -60,6 +60,7 @@
 }
 
 .selftest-intro {
+  max-width: 68ch;
   margin: 0;
   font-size: 14px;
   color: var(--text-dim);
@@ -101,4 +102,60 @@
   justify-content: center;
   color: var(--accent);
   text-decoration: none;
+}
+
+/*
+ * A screen split along its fold (src/layout/fold.ts): the log in a segment of its own, never across
+ * the fold. Open like a book: the title, the notes and the buttons in the first segment, the log in
+ * the second. Half folded (tabletop): those in the top half, the log in the bottom one.
+ */
+:root[data-fold] .selftest {
+  display: grid;
+  max-width: none;
+  margin: 0;
+  gap: 10px 0;
+}
+:root[data-fold='book'] .selftest {
+  grid-template-columns:
+    calc(var(--fold-start) - var(--safe-left) - var(--fold-clear) - 16px)
+    calc(var(--fold-end) - var(--fold-start) + 2 * var(--fold-clear))
+    minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-areas:
+    'head . log'
+    'intro . log'
+    'actions . log'
+    'foot . log';
+  padding-right: 0;
+}
+/*
+ * Tabletop: the log's row runs from the fold to the page's bottom edge: 100% (the page's height) plus
+ * what is above its top (the safe area, its 12px padding), not 100dvh (short in iOS standalone mode).
+ */
+:root[data-fold='tabletop'] .selftest {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows:
+    auto auto auto minmax(0, 1fr)
+    calc(var(--fold-end) - var(--fold-start) + 2 * var(--fold-clear) - 20px)
+    calc(100% + var(--safe-top) + 12px - var(--fold-end) - var(--fold-clear));
+  grid-template-areas: 'head' 'intro' 'actions' 'foot' '.' 'log';
+}
+:root[data-fold] .selftest-head {
+  grid-area: head;
+}
+:root[data-fold] .selftest-intro {
+  grid-area: intro;
+}
+:root[data-fold] .selftest-actions {
+  grid-area: actions;
+  align-self: start;
+}
+:root[data-fold] .selftest .about-footer {
+  grid-area: foot;
+  align-self: end;
+  margin: 0;
+}
+:root[data-fold] .selftest-log {
+  grid-area: log;
+  min-height: 0;
 }

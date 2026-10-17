@@ -97,6 +97,8 @@ export function GameViewer(p: GameViewerProps) {
           <IconShare size={22} />
         </button>
       </header>
+      {/* As on the game screen: the board with its strips, and the rest (boxes only on a split screen). */}
+      <div class="app-stage">
         <div class="app-player app-player--top">
           <PlayerStrip {...v.top} />
         </div>
@@ -105,6 +107,8 @@ export function GameViewer(p: GameViewerProps) {
           <PlayerStrip {...v.bottom} />
           {!v.missing && <DrawControls {...p} />}
         </div>
+      </div>
+      <div class="app-side">
         <Panel {...p} />
         <div class="app-graph">
           <EvalGraph points={v.graph.points} current={v.graph.current} markers={v.graph.markers} onSelect={p.onGoTo} height={32} />
@@ -131,6 +135,7 @@ export function GameViewer(p: GameViewerProps) {
             ]}
           />
         </div>
+      </div>
     </div>
   );
 }

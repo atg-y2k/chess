@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from 'preact/hooks';
 import type { BotPersona } from '../bot/types';
 import type { ProFeature } from '../game/entitlements';
 import type { GameSettings } from '../game/types';
+import { FOLD_SETTINGS, type FoldSetting } from '../layout/fold';
 import { formatGameDate, recordOutcome } from '../rating/history';
 import { PROVISIONAL_GAMES, formatRatingDelta } from '../rating/rating';
 import type { GameRecord, PlayerProfile } from '../rating/types';
@@ -12,6 +13,7 @@ import {
   IconBook,
   IconBotRated,
   IconChart,
+  IconCheck,
   IconCheckCircle,
   IconChevronRight,
   IconCoach,
@@ -54,6 +56,12 @@ export interface MenuSheetProps {
   /** Colour theme preference; with `onThemeChange` an "Appearance" picker is shown. */
   theme?: ThemePref;
   onThemeChange?: (theme: ThemePref) => void;
+  /**
+   * The "Foldable screen" setting (src/layout/fold.ts), under Appearance: offered where a fold is
+   * reported or can be assumed, so the setting can act (omitted: no section). `postureReported`: the
+   * browser says when the screen is half folded (else the note says how to split it then).
+   */
+  foldable?: { value: FoldSetting; onChange: (value: FoldSetting) => void; postureReported: boolean };
   /** The engine setup, for the "Engine" section (omitted: no section). */
   engine?: EngineInfo;
   /** "Try two engines again" (offered in single mode): forget the compatibility decision and reload. */
@@ -178,6 +186,7 @@ export function MenuSheet({
   bots,
   theme,
   onThemeChange,
+  foldable,
   engine,
   onRetryDualEngines,
   selfTestHref = '?enginetest',
@@ -196,6 +205,7 @@ export function MenuSheet({
   const [confirming, setConfirming] = useState(false);
   const confirmId = useId();
   const themeLabelId = useId();
+  const foldLabelId = useId();
 
   // Never reopen in the confirm state; leave it if resigning becomes impossible.
   useEffect(() => {
@@ -366,6 +376,16 @@ export function MenuSheet({
             Appearance
           </h3>
           <ThemePicker labelledBy={themeLabelId} value={theme} onChange={onThemeChange} />
+        </section>
+      )}
+
+      {foldable && (
+        <section class="sheet-section" data-id="foldable">
+          <h3 class="sheet-label" id={foldLabelId}>
+            Foldable screen
+          </h3>
+          <FoldPicker labelledBy={foldLabelId} value={foldable.value} onChange={foldable.onChange} />
+          <p class="sheet-note">{foldNote(foldable.postureReported)}</p>
         </section>
       )}
 
@@ -542,6 +562,51 @@ function ThemePicker({
         >
           <span class="menu-theme-swatch" data-swatch={t.value} aria-hidden="true" />
           {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Under the "Foldable screen" choices: what Automatic does. Half folded is automatic only where the
+ * browser reports the fold or the posture (Chromium); Safari and the App Store app report neither
+ * (WebKit, as of mid-2026), so there it is the other choice.
+ */
+export function foldNote(postureReported: boolean): string {
+  const book = 'Automatic puts the board on one side of the fold and the coach on the other when the screen is open like a book';
+  return postureReported
+    ? `${book}, or half folded on a table.`
+    : `${book}. Upright, it uses the whole screen; to keep the board in the top half when the phone stands half folded on a table, choose “Keep the board off the fold.”`;
+}
+
+/** The "Foldable screen" choices: a radio group of rows with a check mark (iOS Settings style). */
+function FoldPicker({ value, onChange, labelledBy }: { value: FoldSetting; onChange: (v: FoldSetting) => void; labelledBy: string }) {
+  const index = Math.max(0, FOLD_SETTINGS.findIndex((f) => f.value === value));
+  const onKeyDown = (e: KeyboardEvent) => {
+    const step = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = FOLD_SETTINGS[(index + step + FOLD_SETTINGS.length) % FOLD_SETTINGS.length].value;
+    onChange(next);
+    const group = e.currentTarget as HTMLElement;
+    requestAnimationFrame(() => group.querySelector<HTMLElement>(`[data-fold-opt="${next}"]`)?.focus());
+  };
+  return (
+    <div class="sheet-group menu-fold" role="radiogroup" aria-labelledby={labelledBy} onKeyDown={onKeyDown}>
+      {FOLD_SETTINGS.map((f) => (
+        <button
+          key={f.value}
+          type="button"
+          role="radio"
+          class="menu-row menu-row--link menu-fold-opt"
+          data-fold-opt={f.value}
+          aria-checked={f.value === value ? 'true' : 'false'}
+          tabIndex={f.value === value ? 0 : -1}
+          onClick={() => onChange(f.value)}
+        >
+          <span class="menu-row-label">{f.label}</span>
+          {f.value === value && <IconCheck size={20} class="menu-fold-check" />}
         </button>
       ))}
     </div>

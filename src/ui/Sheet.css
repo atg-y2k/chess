@@ -39,7 +39,8 @@
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-width: 560px;
+  /* Clear of system UI along a side (a Split View window beside the iPhone Duo's): centered between the insets. */
+  max-width: min(560px, 100% - 2 * max(var(--safe-left), var(--safe-right)));
   max-height: min(90dvh, calc(100dvh - var(--safe-top) - 8px));
   background: var(--sheet-bg);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
@@ -259,4 +260,29 @@
   .sheet[data-state='closing'] .sheet-panel {
     transition-duration: 0.01s;
   }
+}
+
+/*
+ * A screen split along its fold (src/layout/fold.ts, App.css): a sheet never straddles the fold. It
+ * opens in the panel's segment (book; the backdrop still covers the whole screen), inside its safe
+ * area (the Duo's system UI runs along the outer edge, so the panel needs no side padding for it),
+ * or in the bottom half (tabletop), never taller than that half.
+ */
+:root[data-fold='book']:not([data-fold-board='end']) .sheet {
+  padding-left: calc(var(--fold-end) + var(--fold-clear));
+  padding-right: var(--safe-right);
+}
+:root[data-fold='book'][data-fold-board='end'] .sheet {
+  padding-left: var(--safe-left);
+  padding-right: calc(100% - var(--fold-start) + var(--fold-clear));
+}
+:root[data-fold='book'] .sheet-panel {
+  --safe-left: 0px;
+  --safe-right: 0px;
+}
+:root[data-fold='tabletop'] .sheet {
+  padding-top: calc(var(--fold-end) + var(--fold-clear));
+}
+:root[data-fold='tabletop'] .sheet-panel {
+  max-height: 100%;
 }
