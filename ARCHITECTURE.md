@@ -22,6 +22,9 @@ src/
                            controller; renders <App/> (or the engine self-test page with ?enginetest), calls boot()
   App.tsx / App.css        screen layout + wiring of store/controller to components (see "App shell")
   theme.ts                 color theme preference (dark default / light / system) -> <html data-theme>
+  layout/fold.ts           foldable screens (the iPhone Duo): where the fold is (Viewport Segments API, Device Posture
+                           API, else a heuristic from the screen's size), the "Foldable screen" setting, the layout it
+                           gives (book / tabletop / none) -> <html data-fold> (see "Screen layout")
   clipboard.ts             copyText() with a legacy fallback (PGN export, self-test log)
   pwa.ts / ios.ts          service-worker registration (kept alive) with a deferred reload; iOS zoom guards + first-tap hook
   styles/app.css           global design tokens (colors, radii, safe areas) + .btn styles
@@ -870,6 +873,11 @@ interface PlayerStripProps {
   - `pro?: { name; unlocked; pending?; restoring?; threatsLocked? }` + `onUnlock?(feature?)` + `onRestore?` + `arrowsLocked?`: where Pro is
     sold, a Pro section (Unlock, or "Unlocked ✓" / "Waiting for approval") with Restore Purchases; locked best-move
     arrows open the paywall.
+  - `foldable?: { value: FoldSetting; onChange; postureReported }`: a "Foldable screen" section under Appearance (a radio
+    group of rows with a check mark: Automatic, Keep the board off the fold, Use the whole screen; `foldNote()` under it,
+    which says to pick Keep the board off the fold for a half-folded screen where the browser doesn't report the posture).
+    App passes it where the setting can act, a fold reported or assumed (`FoldInfo.offered`), so a stored choice never
+    acts where the Menu can't change it.
   - `onOpenGame?(id)`: the Recent games rows are buttons (`data-id="recent-game"`, a chevron) and the stats card ends with the
     rating chart (`RatingChart`), whose games open too: App passes `controller.openGame(id, { from: 'menu' })`.
   - `engine: { mode: 'dual' | 'single' | null; singleUntil?: number | null }`: a "Stockfish 19" row reading "2 workers" or
@@ -1722,6 +1730,98 @@ fit, `PanelArea` collapses it too, for as long as the slot keeps its size (e.g. 
 height on the left; the right column (280–420 px) holds the opponent strip, coach / review panel,
 graph, move list, your strip and the toolbar.
 
+**Other window shapes** (media queries on the window, so Split View and rotation simply resize):
+- *Short, wide portrait* (aspect 5:8 to 5:4: the iPhone Duo's outer display, Split View halves): the
+  board runs out of height with width to spare, so the eval graph moves beside the move list (a
+  120 px column; the opening's chip keeps its whole name beside the moves) and the strips are exactly
+  40 px (no padding around their two lines): outer display 315 → 363 px. Game Review's floating
+  summary, in every portrait window, shows the nearest whole number of ranks of the board above it
+  (about 3 on a phone, none on these short, wide windows, where the room left is a sliver): its
+  `top` from the board as drawn, `round()`ed to ranks, the board's edge taken from the registered
+  `--app-board-len` set on the panel, whose own `cqw` would measure the panel (a column beside the
+  move list on a big portrait screen); under `@supports`, else the max-height of portrait. Never a
+  band of pieces cut in half.
+- *Big portrait* (aspect < 5:4, at least 560 × 780: the Duo's inner display upright, iPads): the coach
+  panel and the move list side by side under the board (the coach row at least 176 px), the graph and
+  the toolbar under them: on the Duo a 453 px board with the coach expanded, instead of 533 px with
+  the coach folded to one row.
+- *Squat landscape* (aspect 5:4 to 3:2, at most 520 px tall: the outer display on its side): the
+  toolbar runs along the bottom under both columns, so the side column can be 236 px and the board
+  grows from 235 to 288 px; in a panel under 250 px the coach drops its avatar; the game viewer's header
+  is two lines (about 50 px) between Back and the share button: the title, then the facts (one line,
+  cut with "…") and the rating.
+- Where the move list has height (big portrait, a split screen) it wraps into rows and scrolls up and
+  down (MoveList centers the current move vertically then), with the opening chip under it.
+
+**Foldable screens** (`src/layout/fold.ts`, applied by App's `useFold` to `<html>`: `data-fold`,
+`data-fold-board`, `--fold-start` / `--fold-end` in viewport px; every rule keeps `--fold-clear`, 8 px,
+around the fold). The game screen's children sit in two wrappers, `.app-stage` (the strips and the
+board) and `.app-side` (the rest), which are `display: contents` except on a split screen, so one tree
+serves every layout and a fold or an unfold is only a resize (nothing re-mounts, nothing loses state):
+- `book` (side-by-side segments): the grid's columns are the first segment, the fold and the second.
+  The stage (a size container, so `--app-board` is measured in it) centers the board between its
+  strips in the board's segment (the first, or the second when the system UI is on the left: the
+  segment clear of it); the side is a column: coach / explorer / review panel (a steady box up to
+  340 px; the report takes more), graph, the move list in rows, the toolbar, inside the safe area.
+- `tabletop` (top and bottom segments): the stage in the top one with the strips beside the board; the
+  side in the bottom one, the coach and the move list side by side, then the graph and the toolbar.
+- The game viewer (GameViewer.css) has the same wrappers, its header heading the side; sheets
+  (Sheet.css) open in the panel's segment inside its safe area, or in the bottom half (the game-over
+  sheet and the paywall in their compact form there); the toast (inside the safe areas, as everywhere)
+  and the error screen move to the panel's segment, the Openings section's loader too (tabletop: to
+  the top half, sized from the fold rather than from `100dvh`, which iOS standalone mode reports
+  short). The boot splash stays centered on the whole screen, where the launch screen before it shows
+  the mark (the App Store app's fades out over it; the web app's launch images are centered too), so
+  the mark never jumps sideways. In the light theme of the installed web app, a band in `#1d1c1a` runs
+  down the side the status bar is on (`body::after`, src/styles/app.css), as the top band does on a
+  phone.
+- **The Openings section** (App passes `split`, the layout's kind, to OpeningsView): the text pages
+  (Home, All openings, a family) show two at a time, one per segment, each a `.op-pane` with its own
+  bar and scroll: the list (the page under the top one, or the top one alone with an empty "Choose an
+  opening" pane beside it) and the page it opened. The list's choices replace the page beside it
+  (session `pushPageOver(key, page)`), and its own state (search text, Show all, the side filter)
+  updates by key (`updatePage(kind, change, key)`); Back, Escape and the browser's Back pop the top
+  page as before, and the list's bar has Back only when the list is not Home. A page keeps its scroll
+  offset as it moves between panes or through a fold (OpeningsView's `scrolls`, by page key). The
+  board pages (learn, tree, drill) stay one page: book, the board in the board's segment (the second
+  when the system UI is on the left, as on the game screen, with the title over the text's segment)
+  and the rest a page margin from the fold; tabletop, the board sticky in the top half while the rest
+  scrolls under it in the bottom half. One page alone is the same keyed `Pane` as a split screen's
+  list, so a fold or an unfold keeps the page on top (and a search field, its focus and the keyboard)
+  instead of re-creating it; where a re-created tree drops the focus (a page change gives the bar
+  new buttons), the control with the same `data-id` takes it back.
+- Narrower things: on a tabletop screen the player strips are a column beside the board, so
+  "Unrated" goes to their second row, the explorer's and Try again's tag hangs under the top strip
+  and the "Back to game" chip over the bottom one, clear of the names. The engine self-test page
+  (`?enginetest`, which has no App around it) watches the fold itself and puts its log in the second
+  segment. Text columns are capped at about 70 characters (Openings.css, the self-test page).
+- Narrow windows (the outer display, Split View): a sheet stays clear of system UI along a side
+  (`max-width` between the insets); Learn's step controls are six buttons of at least 44 px in a row,
+  or two rows of three in a column under 284 px (beside the board on a squat landscape page, where the
+  learn, drill and tree boards all keep half the width); on a short, wide portrait page the Learn
+  board leaves room for the controls, the moves and the note;
+  the game viewer's header in the squat landscape column puts the facts and the rating under the
+  title; a floating review summary never grows over the opponent's strip in portrait, and in a
+  landscape column, where it hangs from the top, the strip it covers is hidden (on phones too: its
+  avatar used to peek past the summary's round corner).
+- Detection order: the Viewport Segments API (two segments: split in any posture); else, on an iPhone
+  (or the iPadOS-style Mac user agent with touch on a screen smaller than any iPad) whose screen's
+  short side is ≥ 540 px and long/short ≤ 1.6, the heuristic fold across the middle of the long side:
+  in landscape while the window is as wide as the screen and at least 75% as tall (the installed
+  app, or a Safari tab under its toolbars), split; in portrait while the window covers the screen,
+  only when the posture is 'folded'. The Device Posture API gives the posture
+  (`navigator.devicePosture`, else the `(device-posture)` media feature); WebKit has neither, so in
+  Safari and the App Store app half folded needs the setting. The "Foldable screen" setting
+  (localStorage `chesscoach.fold`) forces the split (using the assumed fold when nothing reports one)
+  or the whole screen; the assumed fold, and so the setting, exists only on a touch screen shaped like
+  an inner display (iPads too: size can't tell them apart, nor an @2x Duo with the Mac user agent,
+  which Automatic leaves whole), never on a phone or the outer display. The safe areas are re-read
+  without a resize too (two hidden boxes as big as them, under a ResizeObserver: a turn by 180° moves
+  the system UI to the other side at the same size). The estimates are `FOLD`; the window-shape
+  thresholds above are the other place to recheck against the real point sizes.
+- Resizing never re-creates the board: Board's ResizeObserver redraws it at the new size and ends a
+  drag or a selection started on the old one; Draw mode drops a gesture in progress on a resize.
+
 **Themes:** dark by default; Light and Automatic (follows iOS) in the menu. `theme.ts` and an inline
 script in `index.html` set `<html data-theme>` before the first paint.
 
@@ -1880,8 +1980,11 @@ export function getEntitlements(): Entitlements; // the app's one instance (the 
 
 - `ios/App/App.xcodeproj` (scheme and target `App`), Swift Package Manager: `ios/App/CapApp-SPM/Package.swift`
   (rewritten by `cap sync`) pulls `capacitor-swift-pm` and the plugins from `node_modules/`, so
-  `npm ci` comes before any Xcode build. iOS 16.4+ (WebAssembly SIMD), iPhone only, portrait only,
-  `ITSAppUsesNonExemptEncryption = NO`, `PrivacyInfo.xcprivacy` (UserDefaults, reason CA92.1).
+  `npm ci` comes before any Xcode build. iOS 16.4+ (WebAssembly SIMD), iPhone only; every
+  orientation in `UISupportedInterfaceOrientations` (iOS has no per-model key; iPad-style multitasking
+  wants all four), narrowed at run time by `MainViewController.supportedInterfaceOrientations` to
+  portrait on a tall phone screen (long/short > 1.6: every iPhone but the Duo); one scene; see
+  ios/README-native.md for the iPhone Duo, `ITSAppUsesNonExemptEncryption = NO`, `PrivacyInfo.xcprivacy` (UserDefaults, reason CA92.1).
 - `.github/workflows/ios-build.yml`: on pushes and pull requests that touch the app, a `macos-26`
   runner with the latest stable Xcode runs `npm ci`, `build:native` and `cap:sync`, resolves the
   Swift packages, and builds Debug for the Simulator and Release for devices with
@@ -1941,13 +2044,21 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
 
 ## Tests
 
-- `npm test`: Vitest unit tests in node, about 1,360 tests in 74 files (the one test in
+- `npm test`: Vitest unit tests in node, about 1,380 tests in 75 files (the one test in
   `tests/bot/calibration.slow.test.ts` is skipped unless `CALIBRATE=1`, see `npm run calibrate`). They
   cover pure logic, the engine layer against scripted transports, the controller against a fake
   engine and a scripted bot (`tests/helpers/fakeEngine.ts`), the store's view models, UI helpers, the
   service-worker registration keeper and reload gate, and some real-engine checks that run the
   vendored Stockfish WASM in node (`tests/helpers/nodeTransport.ts`: engine searches, the position
-  history, bot mates and conversions). `tests/native/` covers src/native (platform flags, haptics,
+  history, bot mates and conversions). `tests/layout/fold.test.ts` covers foldable screens: detection (the
+  iPhone Duo's inner display in both orientations, from Safari's portrait-only screen size and a rotating
+  one, in the App Store app and with the iPadOS-style desktop user agent; never the outer display, regular
+  iPhones, iPads or desktops; Split View windows; the @2x size; the segments API's data, sorted, and its
+  one segment; the posture; a Safari tab held like a book, not upright; the Mac user agent at @2x left
+  whole), the layout each setting gives (Automatic's book and tabletop rules, a hinge mask, Keep the board
+  off the fold with an assumed fold, and never on the outer display, phones or desktops, Use the whole
+  screen, the board on the side away from the system UI, panes too small to split), `watchFold` re-reading
+  the safe areas without a resize, and the setting's storage. `tests/native/` covers src/native (platform flags, haptics,
   the storage mirror, share, and the purchases contract against a fake Store plugin, including that
   the JavaScript and Swift names match); `tests/game/entitlements.test.ts` and `paywall.test.ts` cover
   Pro's state and the gating in the controller and the view models; `tests/game/explorer.test.ts` the
@@ -2039,7 +2150,8 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   check), the moves that end a game by rule, an engine line cut at a repetition, a disputed MultiPV score, and key
   moments (numbering from any start, the player's first, whose move).
 - `npm run e2e`: Playwright on the production build with the real engine, iPhone 15 Pro emulation,
-  64 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id`, iOS tags, engine MIME
+  79 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id` and `orientation: any`, iOS
+  tags and the launch images in both orientations, engine MIME
   types, service worker and precache, offline, license notices served as files, full-screen layout);
   `e2e/game.spec.ts` (15) plays through the UI (moves by tapping squares, coach, hint, undo, flip,
   reload, resign, review, a game as Black, a mating promotion, the move list staying on the current
@@ -2105,6 +2217,28 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   sheet, accuracy, the new rating's note, the X on top), the Menu's tiles at 320 points, the ⓘ on a move off the
   book (taps keep the move), the Learn strip in landscape, and a game's opening chip (the game's position from the
   player's side, Back to my game).
+  `e2e/foldable.spec.ts` (15): foldable screens with the fold emulated through the DevTools protocol (a display
+  feature in `Emulation.setDeviceMetricsOverride`, `Emulation.setDevicePostureOverride`; Playwright's own
+  screenshot and viewport calls would reset it, so the spec sizes the page through the protocol) and the safe
+  areas through `--safe-*`: the book layout (the board, its eval bar and strips clear of the fold, the panel,
+  moves and toolbar in the other segment inside the safe area, tapped moves and the coach, the move list in
+  rows), WebKit's case with the segments and posture APIs hidden (the heuristic book in the installed app and
+  in a Safari tab, the Menu's note saying how to split half folded, the whole screen upright with the coach
+  and moves side by side, none assumed in an upright tab, tabletop only with a posture), the API's stacked
+  fold, the outer display both ways (a board of at least 360 px upright), the Split View widths and @2x (no
+  sideways scroll, every toolbar button in sight, at least 44 px and uncut, the board overlapping nothing, a
+  tapped move and the coach at each), folding and unfolding mid-game (the position, moves, coach, Draw mode,
+  the explorer and an open sheet kept), every kind of sheet and the toast in the panel's segment (and a
+  560 px card without the split), the Menu's Foldable screen setting (switching, stored, and with "Keep the
+  board off the fold" stored, no split and no setting in Split View, on the outer display and on an iPhone),
+  the system UI moved to the left without a resize (the board, then the Openings board, in the right
+  segment), the light theme's status bar band (the standalone rules applied by hand: Chromium can't emulate
+  the display mode), and the other screens: Openings open like a book and half folded, a search kept (its
+  field, text and focus) through a fold and an unfold, the Draw bar's turn dot on a phone, Game Review (its
+  floating summary leaving whole ranks or none above it on the outer display and in Split View), Try again
+  and the game viewer, the self-test page and the centered boot splash, and the narrow windows (the learn,
+  explore and drill boards at half the outer display's width in landscape, the step controls in two rows of
+  three, Split View, the viewer's header).
   `E2E_REQUIRE_APP_SW=1` makes the PWA tests fail if the app does not register its service worker.
 - The native shell itself (Swift, Xcode project) is only compiled on macOS: `ios-build.yml` in CI, or
   Xcode on a Mac. Runtime checks in WKWebView need a device (see `docs/APP_STORE.md`, "Device

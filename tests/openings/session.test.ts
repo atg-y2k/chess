@@ -15,6 +15,7 @@ import {
   popPage,
   popToRoot,
   pushPage,
+  pushPageOver,
   rememberScroll,
   replacePage,
   resetOpenings,
@@ -168,6 +169,41 @@ describe('navigation', () => {
     expect(currentPage.value).toMatchObject({ kind: 'line', moreOthers: true });
     popPage();
     expect(currentPage.value).toMatchObject({ kind: 'home', query: 'sicilian', allStarters: true, scroll: 510 });
+  });
+});
+
+describe('a split screen: the list beside the page it opened', () => {
+  it('updates a page under the top one by its key (the list beside it), and only a page of that kind', () => {
+    openOpenings();
+    pushPage({ kind: 'family', family: 'Italian Game' });
+    const [home, family] = openingsPages.value;
+    updatePage('home', (p) => ({ ...p, query: 'najdorf' }), home.key);
+    expect(openingsPages.value[0]).toMatchObject({ kind: 'home', query: 'najdorf', key: home.key });
+    expect(currentPage.value).toBe(openingsPages.value[1]);
+    expect(currentPage.value?.key).toBe(family.key);
+    // The wrong kind for that key, or a key no longer in the stack: nothing changes.
+    const before = openingsPages.value;
+    updatePage('families', (p) => ({ ...p, side: 'w' }), home.key);
+    updatePage('home', (p) => ({ ...p, query: 'x' }), 999_999);
+    expect(openingsPages.value).toBe(before);
+  });
+
+  it('a choice in the list replaces the pages above it', () => {
+    openOpenings();
+    pushPage({ kind: 'families' });
+    pushPage({ kind: 'family', family: 'Italian Game' });
+    pushPage(linePage('c50-italian-game'));
+    const [, families] = openingsPages.value;
+    pushPageOver(families.key!, { kind: 'family', family: 'Sicilian Defense' });
+    expect(kinds()).toEqual(['home', 'families', 'family']);
+    expect(currentPage.value).toMatchObject({ kind: 'family', family: 'Sicilian Defense' });
+    expect(navDirection.value).toBe('forward');
+    // Back still leads to the list.
+    popPage();
+    expect(currentPage.value?.key).toBe(families.key);
+    // A key no longer in the stack does nothing.
+    pushPageOver(123_456, { kind: 'families' });
+    expect(kinds()).toEqual(['home', 'families']);
   });
 });
 

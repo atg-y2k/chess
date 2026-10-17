@@ -267,6 +267,20 @@ export function popToRoot(): void {
   });
 }
 
+/**
+ * Opens a page over the one with this key, closing the pages above it: on a split screen the list
+ * shows beside the page it opened, and another choice in the list replaces that page (Back still
+ * returns to the list). Over the top page, as `pushPage`; a key no longer in the stack does nothing.
+ */
+export function pushPageOver(key: number, page: OpeningsPage): void {
+  const at = stack.value.findIndex((p) => p.key === key);
+  if (at < 0) return;
+  batch(() => {
+    stack.value = [...stack.value.slice(0, at + 1), keyed(page)];
+    direction.value = 'forward';
+  });
+}
+
 /** Replaces the top page with another one (e.g. the next variation's drill). */
 export function replacePage(page: OpeningsPage): void {
   batch(() => {
@@ -278,17 +292,21 @@ export function replacePage(page: OpeningsPage): void {
 /**
  * Changes the top page in place (same kind; its key stays, so its view keeps its state), e.g. the
  * line's move on the board. `kind` guards against updating another page that has meanwhile come on top.
+ * With `key`, the page with that key instead, wherever it is (on a split screen the list beside the
+ * top page is a page of its own: its search text, its "Show all").
  */
 export function updatePage<K extends OpeningsPage['kind']>(
   kind: K,
   change: (page: Extract<OpeningsPage, { kind: K }>) => Extract<OpeningsPage, { kind: K }>,
+  key?: number,
 ): void {
   const pages = stack.value;
-  const top = pages.at(-1);
-  if (!top || top.kind !== kind) return;
-  const next = change(top as Extract<OpeningsPage, { kind: K }>);
-  if (next === top) return;
-  stack.value = [...pages.slice(0, -1), { ...next, key: top.key }];
+  const at = key === undefined ? pages.length - 1 : pages.findIndex((p) => p.key === key);
+  const page = pages[at];
+  if (!page || page.kind !== kind) return;
+  const next = change(page as Extract<OpeningsPage, { kind: K }>);
+  if (next === page) return;
+  stack.value = [...pages.slice(0, at), { ...next, key: page.key }, ...pages.slice(at + 1)];
 }
 
 /**

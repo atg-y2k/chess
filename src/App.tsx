@@ -7,6 +7,12 @@
  * a column on the right. The board is as large as the space allows; the coach panel absorbs (or,
  * on short phones, gives up) the remaining height, so nothing scrolls and nothing jumps.
  *
+ * On a foldable's inner display (the iPhone Duo) open like a book, the board with its strips (the
+ * "stage") takes one side of the fold and everything else (the "side") the other; half folded
+ * (tabletop), the board is in the top half and the rest in the bottom one (src/layout/fold.ts,
+ * App.css). The same elements in the same order in every layout, so a fold, an unfold or a rotation
+ * is only a resize: nothing is re-created and nothing loses its state.
+ *
  * Each area is its own component reading only the signals it needs, so a live-analysis update
  * re-renders the eval bar and graph, not the board.
  */
@@ -22,6 +28,7 @@ import { nativeBuild } from './native/platform';
 import { DRAW_TIP } from './game/drawings';
 import type { ReadonlyStore, ToolbarId } from './game/store';
 import type { GameSettings, PromotionPiece } from './game/types';
+import { applyFoldLayout, chooseFoldLayout, loadFoldSetting, saveFoldSetting, watchFold, type FoldLayoutKind, type FoldSetting } from './layout/fold';
 import { closeOpenings, openingsLoadFailedText, openingsOpen, openOpenings, popPage } from './openings/session';
 import type { OfflineStatus } from './pwa';
 import { STARTING_LEVELS, formatRatingDelta } from './rating/rating';
@@ -117,6 +124,8 @@ export function App({ controller: c, offline }: AppProps) {
   const [theme, setTheme] = useState<ThemePref>(loadTheme);
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  const [foldSetting, setFoldSetting] = useState<FoldSetting>(loadFoldSetting);
+  const fold = useFold(foldSetting);
   const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
   /** In review: the summary (accuracy, key moments) rather than the coach on the current move. */
   const reviewSummary = useSignal(true);
@@ -140,6 +149,10 @@ export function App({ controller: c, offline }: AppProps) {
     setTheme(t);
     saveTheme(t);
     applyTheme(t);
+  };
+  const changeFoldSetting = (f: FoldSetting) => {
+    setFoldSetting(f);
+    saveFoldSetting(f);
   };
 
   const notify: Notify = (text) => setToast({ id: Date.now(), text });
@@ -221,32 +234,39 @@ export function App({ controller: c, offline }: AppProps) {
         data-graph={graphVisible ? '' : undefined}
         data-exploring={exploring ? '' : undefined}
         data-practice={practicing ? '' : undefined}
+        data-fold={fold.kind === 'none' ? undefined : fold.kind}
         aria-hidden={phase === 'boot' || phase === 'error' ? 'true' : undefined}
       >
-        <Player store={s} which="top">
-          {exploring && <ExploringTag onExit={() => c.exitExplorer()} />}
-          {practicing && <PracticeTag onExit={() => c.exitPractice()} />}
-        </Player>
-        <BoardArea c={c} />
-        <Player store={s} which="bottom">
-          <BackChip c={c} />
-          <DrawControls c={c} />
-        </Player>
-        <PanelArea c={c} summary={reviewSummary} />
-        {graphVisible && <GraphArea c={c} />}
-        <Moves c={c} />
-        <Tools c={c} summary={reviewSummary} />
+        {/* The board and its strips, and the rest: boxes of their own only on a split screen (App.css). */}
+        <div class="app-stage">
+          <Player store={s} which="top">
+            {exploring && <ExploringTag onExit={() => c.exitExplorer()} />}
+            {practicing && <PracticeTag onExit={() => c.exitPractice()} />}
+          </Player>
+          <BoardArea c={c} />
+          <Player store={s} which="bottom">
+            <BackChip c={c} />
+            <DrawControls c={c} />
+          </Player>
+        </div>
+        <div class="app-side">
+          <PanelArea c={c} summary={reviewSummary} />
+          {graphVisible && <GraphArea c={c} />}
+          <Moves c={c} />
+          <Tools c={c} summary={reviewSummary} />
+        </div>
       </main>
       <Sheets
         c={c}
         theme={theme}
         onTheme={changeTheme}
+        foldable={fold.offered ? { value: foldSetting, onChange: changeFoldSetting, postureReported: fold.postureReported } : undefined}
         onExport={exportPgn}
         notify={notify}
         offlineReady={!!offline?.value}
       />
       <Viewer c={c} notify={notify} />
-      <Openings c={c} notify={notify} />
+      <Openings c={c} notify={notify} split={fold.kind} />
       <Paywall c={c} />
       <Splash phase={phase} download={s.engineDownload} />
       {phase === 'error' && <ErrorScreen c={c} />}
@@ -259,6 +279,22 @@ export function App({ controller: c, offline }: AppProps) {
       </div>
     </>
   );
+}
+
+/**
+ * The fold (src/layout/fold.ts, kept up to date as the device folds, unfolds and rotates) and how the
+ * screen uses it with this setting, put on <html> for every layer (applyFoldLayout). `offered`: the
+ * Menu shows the "Foldable screen" setting (a fold is reported or can be assumed, so it can act);
+ * `postureReported`: the browser says when the screen is half folded (the segments API or the
+ * posture), so Automatic handles that too.
+ */
+function useFold(setting: FoldSetting): { kind: FoldLayoutKind; offered: boolean; postureReported: boolean } {
+  const [watcher] = useState(() => watchFold());
+  useEffect(() => watcher.stop, [watcher]);
+  const info = watcher.info.value;
+  const layout = useMemo(() => chooseFoldLayout(info, setting), [info, setting]);
+  useLayoutEffect(() => applyFoldLayout(layout), [layout.kind, layout.start, layout.end, layout.boardSide]);
+  return { kind: layout.kind, offered: info.offered, postureReported: info.reported };
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -363,7 +399,7 @@ function ExploringTag({ onExit }: { onExit: () => void }) {
   return (
     <button type="button" class="app-explore-tag" data-id="exploring" aria-label="Exploring. Back to the game" onClick={onExit}>
       <IconExplore size={15} />
-      Exploring
+      <span class="app-explore-tag-label">Exploring</span>
       <IconClose size={14} class="app-explore-tag-x" />
     </button>
   );
@@ -383,7 +419,7 @@ function PracticeTag({ onExit }: { onExit: () => void }) {
       onClick={onExit}
     >
       <IconReset size={15} />
-      Try again
+      <span class="app-explore-tag-label">Try again</span>
       <IconClose size={14} class="app-explore-tag-x" />
     </button>
   );
@@ -717,6 +753,7 @@ function Sheets({
   c,
   theme,
   onTheme,
+  foldable,
   onExport,
   notify,
   offlineReady,
@@ -724,6 +761,8 @@ function Sheets({
   c: GameController;
   theme: ThemePref;
   onTheme: (t: ThemePref) => void;
+  /** The Menu's "Foldable screen" setting (omitted: not offered on this screen). */
+  foldable?: { value: FoldSetting; onChange: (f: FoldSetting) => void; postureReported: boolean };
   onExport: () => void;
   notify: Notify;
   offlineReady: boolean;
@@ -795,6 +834,7 @@ function Sheets({
         bots={BOTS}
         theme={theme}
         onThemeChange={onTheme}
+        foldable={foldable}
         onChange={(partial) => c.setSettings(partial)}
         onResign={() => c.resign()}
         onExportPgn={() => {
@@ -1041,7 +1081,7 @@ const OPENINGS_CLOSE_MS = 300;
  * opened from, as it was. Back, Escape and the browser's or Android's Back button go back a page
  * (and close it from its first page). Playing an opening starts the game and closes it.
  */
-function Openings({ c, notify }: { c: GameController; notify: Notify }) {
+function Openings({ c, notify, split }: { c: GameController; notify: Notify; split: FoldLayoutKind }) {
   const open = openingsOpen.value;
   const [mounted, setMounted] = useState(open);
   const [mod, setMod] = useState<OpeningsModule | null>(null);
@@ -1140,6 +1180,8 @@ function Openings({ c, notify }: { c: GameController; notify: Notify }) {
           onBack={back}
           onClose={closeOpenings}
           isTop={isTop}
+          // On a screen split along its fold, the text pages show two at a time, one per segment.
+          split={split}
         />
       ) : (
         <div class="openings-shell-loading" role={failed ? 'alert' : 'status'}>

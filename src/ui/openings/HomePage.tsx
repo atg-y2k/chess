@@ -45,7 +45,7 @@ export function HomePage({ ctx, page }: { ctx: PageContext; page: HomePageState 
   const [debounced, setDebounced] = useState(page.query ?? '');
   const setQuery = (q: string) => {
     setQueryState(q);
-    updatePage('home', (p) => ((p.query ?? '') === q ? p : { ...p, query: q }));
+    updatePage('home', (p) => ((p.query ?? '') === q ? p : { ...p, query: q }), page.key);
   };
   useEffect(() => {
     if (!query.trim()) {
@@ -305,7 +305,7 @@ function HomeSections({ ctx, page }: { ctx: PageContext; page: HomePageState }) 
             class="op-more"
             data-id="starters-all"
             aria-expanded={allStarters ? 'true' : 'false'}
-            onClick={() => updatePage('home', (p) => ({ ...p, allStarters: !p.allStarters }))}
+            onClick={() => updatePage('home', (p) => ({ ...p, allStarters: !p.allStarters }), page.key)}
           >
             {allStarters ? 'Show fewer' : `Show all ${starters.length} openings for ${side === 'w' ? 'White' : 'Black'}`}
           </button>

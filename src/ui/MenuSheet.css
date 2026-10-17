@@ -143,6 +143,25 @@
   background: linear-gradient(135deg, #f4f1ec 0 50%, #1d1c1a 50% 100%);
 }
 
+/* ---------------------------------------------------------------- foldable screen */
+
+/* Text-only rows (no icon): the separators run from the text's start. */
+.menu-fold .menu-row + .menu-row::before {
+  left: 14px;
+}
+.menu-fold-opt {
+  min-height: 48px;
+}
+.menu-fold-opt .menu-row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.menu-fold-check {
+  flex: none;
+  color: var(--link);
+  stroke-width: 2.6;
+}
+
 /* ---------------------------------------------------------------- resign confirmation */
 
 .menu-confirm {

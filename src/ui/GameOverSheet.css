@@ -393,6 +393,52 @@
     min-height: 46px;
   }
 }
+/*
+ * The same in the bottom half of a screen split along its fold (tabletop, where sheets open: about
+ * 600 × 400 on the iPhone Duo's inner display), so its buttons fit without scrolling.
+ */
+:root[data-fold='tabletop'] .gos-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 20px;
+  /* Clear the floating close button (top-right). */
+  padding-top: 30px;
+}
+:root[data-fold='tabletop'] .gos-headline {
+  font-size: 26px;
+}
+:root[data-fold='tabletop'] .gos-reason {
+  font-size: 14px;
+}
+:root[data-fold='tabletop'] .gos-players {
+  margin-top: 12px;
+}
+:root[data-fold='tabletop'] .gos-avatar {
+  width: 52px;
+  height: 52px;
+}
+:root[data-fold='tabletop'] .gos-emoji {
+  font-size: 30px;
+}
+:root[data-fold='tabletop'] .gos-score {
+  margin-top: -9px;
+}
+:root[data-fold='tabletop'] .gos-result {
+  font-size: 20px;
+}
+:root[data-fold='tabletop'] .gos-rating {
+  margin-top: 0;
+}
+:root[data-fold='tabletop'] .gos-actions {
+  margin-top: 10px;
+}
+:root[data-fold='tabletop'] .gos-review {
+  min-height: 50px;
+}
+:root[data-fold='tabletop'] .gos-secondary {
+  min-height: 46px;
+}
 
 @keyframes gos-rise {
   from {

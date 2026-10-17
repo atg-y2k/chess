@@ -594,6 +594,7 @@ export class GameController {
       if (!v) return null;
       return viewerView(v, {
         locked: this.s.locked.value,
+        now: this.now(),
         drawColor: this.s.drawColor.value,
         ratedGame: this.ratedGameInProgress(),
         gameInProgress: this.gameToAbandon(),

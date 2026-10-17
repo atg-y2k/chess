@@ -42,7 +42,7 @@ import {
   ucisOf,
 } from '../../src/ui/openings/model';
 import { lineEnd, movesCount } from '../../src/ui/openings/LinePage';
-import { pageTitle } from '../../src/ui/openings/OpeningsView';
+import { pageTitle, panesFor } from '../../src/ui/openings/OpeningsView';
 import { keyVariationTitles } from '../../src/ui/openings/FamilyPage';
 import { playSettings } from '../../src/ui/openings/PlaySheet';
 import { evalFromResult, verdictFor } from '../../src/ui/openings/useEval';
@@ -407,5 +407,24 @@ describe('play-through fixes (October 2026)', () => {
     expect(trapHits('elephant')).toHaveLength(1);
     expect(trapHits('trap')).toEqual([]);
     for (const t of trapHits('mate trap legal scholar')) expect(resolveLine(t.id)).not.toBeNull();
+  });
+});
+
+describe('a split screen (a foldable open like a book, or half folded)', () => {
+  const home = { kind: 'home' as const, key: 1 };
+  const families = { kind: 'families' as const, key: 2 };
+  const family = { kind: 'family' as const, family: 'Italian Game', key: 3 };
+  const line = { ...linePage('c50-italian-game'), key: 4 };
+  it('shows the text pages two at a time: the list and the page it opened, or the list alone', () => {
+    expect(panesFor([home], 'book')).toEqual({ list: 0, detail: null });
+    expect(panesFor([home, family], 'book')).toEqual({ list: 0, detail: 1 });
+    expect(panesFor([home, families, family], 'tabletop')).toEqual({ list: 1, detail: 2 });
+    expect(panesFor([home, family, { ...family, family: 'Two Knights Defense', key: 5 }], 'book')).toEqual({ list: 1, detail: 2 });
+  });
+  it('keeps one page for a board page, and without a split', () => {
+    expect(panesFor([home, family, line], 'book')).toBeNull();
+    expect(panesFor([home, { ...drillPage('c50-italian-game', 'w'), key: 6 }], 'tabletop')).toBeNull();
+    expect(panesFor([home, family], 'none')).toBeNull();
+    expect(panesFor([], 'book')).toBeNull();
   });
 });

@@ -62,8 +62,10 @@ Plan on 3–6 weeks part-time from enrollment to "live", including one or two re
 - [ ] **Where to sell.** Untick **China mainland**: games there need a government approval number.
       Decide whether to sell in the **EU**, which requires public trader contact details (section 4).
 - [ ] **The free web version**: keep, limit or retire it (section 16).
-- [ ] Already decided in the project: iPhone only (no iPad screenshots needed), portrait only, iOS 16.4
-      or later (the engine needs WebAssembly SIMD), GPL-3.0-or-later.
+- [ ] Already decided in the project: iPhone only (no iPad screenshots needed; the iPhone Duo is an
+      iPhone), portrait on a regular iPhone and every orientation on the Duo (the layout follows the
+      window, the Duo's displays and Split View included), iOS 16.4 or later (the engine needs
+      WebAssembly SIMD), GPL-3.0-or-later.
 
 ## 1. Apple Developer Program (individual or company)
 
@@ -189,6 +191,16 @@ sign in with it on the iPhone (Settings → Developer, or Settings → App Store
 the scheme's StoreKit Configuration to **None**. TestFlight builds always use the sandbox, with nothing
 charged.
 
+**The iPhone Duo.** Build with the Xcode that has the **iOS 27 SDK** (the first that knows the iPhone
+Duo) and run the app in its iPhone Duo simulator before a release: the inner display open like a book
+(the board in the left half, clear of the fold), half folded (the board stays across the fold with
+Automatic unless WKWebView reports the posture; with Menu → Foldable screen → Keep the board off the
+fold, the board is in the top half), upright, the outer display both ways, Split View beside another
+app, and folding and unfolding mid-game (the game, an open sheet and Draw mode stay). Its point sizes,
+safe areas and whether WKWebView reports the fold or the posture were not published when the layout
+was written: `ios/README-native.md`, "Orientations, multitasking and the iPhone Duo", says what to
+check and where to tune.
+
 **Device checklist** (things only a real iPhone shows; see `ios/README-native.md`):
 
 - [ ] A fresh install in **airplane mode** starts and plays (nothing is downloaded).
@@ -200,6 +212,11 @@ charged.
 - [ ] Sounds follow the silent switch and don't stop your music; haptics on moves.
 - [ ] Export PGN opens the share sheet; Privacy Policy, Terms and Source code open in Safari.
 - [ ] Status bar readable in dark and light themes; nothing under the Dynamic Island or home indicator.
+- [ ] Turn a regular iPhone to landscape mid-game: the App Store app stays upright (the web app turns,
+      and its board, coach and buttons fit, its launch screen and start screen look right in
+      landscape, and nothing is lost).
+- [ ] On an iPhone Duo (or its simulator): the checks in the paragraph above, and Menu → Foldable
+      screen switches the arrangement.
 - [ ] Swipe the app away mid-game and reopen: the game, rating and Pro are still there.
 - [ ] VoiceOver can reach the main buttons.
 
@@ -286,6 +303,8 @@ uses no encryption of its own. App Store Connect then skips the encryption quest
 App Store Connect requires iPhone **6.9-inch** screenshots: 1320 × 2868 pixels (1290 × 2796 or
 1260 × 2736 also work), portrait, PNG or JPEG, **no transparency**, 1 to 10 of them. The first three
 show in search results. They must show the app in use. iPad screenshots are not needed (iPhone only).
+If App Store Connect adds a screenshot size for the iPhone Duo's inner display, take those in its
+simulator (the book layout shows the board and the coach side by side).
 
 **With the script** (renders the real app in Chromium at 440 × 956 points × 3):
 
@@ -553,7 +572,8 @@ them elsewhere and update `LEGAL_URLS` in `src/native/platform.ts` and the URLs 
 - [ ] Each spring Apple raises the required Xcode/SDK; the CI workflows use the newest stable Xcode.
 - [ ] Accept updated agreements in App Store Connect when asked (new apps and purchases are blocked
       until you do).
-- [ ] Ideas for later: Game Center, a widget, an iPad layout, a native Stockfish for faster analysis.
+- [ ] Ideas for later: Game Center, a widget, iPad support (device family 2: the large-screen layouts
+      are there), a native Stockfish for faster analysis.
 
 ## Sources (research of 2026-10-02)
 

@@ -66,7 +66,9 @@
 }
 
 .drawbar-mode {
-  flex: none;
+  /* The one part that gives way when the bar is short of room (its word: see the label). */
+  flex: 0 1 auto;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -77,6 +79,26 @@
 }
 .drawbar-mode svg {
   color: var(--drawbar-color);
+}
+/*
+ * Short of room ("Your move" in a 400 px side column), the word wraps onto a hidden second line
+ * (after an empty first item as tall as the line), and the pencil or the turn dot stays, centered
+ * and unclipped beside it.
+ */
+.drawbar-mode-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  height: 18px;
+  overflow: hidden;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.drawbar-mode-label::before {
+  content: '';
+  width: 0;
+  height: 18px;
 }
 /* The player's move in the game: the strip's pulsing turn dot (hidden under the bar) shows here. */
 .drawbar-turn {
