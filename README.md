@@ -46,6 +46,9 @@ optional one-time "Pro" purchase for the coaching features. See [iOS app](#ios-a
   computer that follow an opening.
 - **Takebacks, board flip and PGN export** (with evaluations and move marks) through the iOS share
   sheet or the clipboard.
+- **Board and piece styles:** 10 board colors (two of them textured: Wood and Marble) and 8 piece
+  sets, picked separately in the Menu's **Board & pieces**, with a live preview; free, also in the
+  App Store app (see [Board and pieces](#board-and-pieces)).
 - **Made for the iPhone:** full screen when installed, fits around the Dynamic Island and the home
   indicator, in portrait and landscape (the App Store app stays in portrait on a regular iPhone), dark
   theme by default (Light and Automatic in the Menu), sounds that follow the silent switch, and your
@@ -65,7 +68,7 @@ Chrome and the other iOS browsers can also add it to the Home Screen from their 
 Screen app keeps its own rating and saved game, separate from Safari's, so progress made in a Safari
 tab before installing does not carry over.
 
-The first visit downloads about 3.9 MB (less if the site compresses it). Most of that is the chess
+The first visit downloads about 4.2 MB (less if the site compresses it). Most of that is the chess
 engine (1.8 MB) and the opening book (0.9 MB). On a slow connection, the start screen shows
 "Downloading engine NN%…". Once a launch has finished that download while online, the app works
 **offline**, in airplane mode too: it says **Available offline** once when the download is done,
@@ -694,7 +697,8 @@ labels stay, and the coach says why:
 - **While playing:** Coach, Evaluation bar, Best-move arrows (makes the game unrated), Threat alerts
   and Rate opponent’s moves (each asks first in a rated game, then makes it unrated; either answer
   brings you back to the Menu) and Sound.
-- **Appearance:** Dark, Light or Automatic (follows iOS).
+- **Appearance:** Dark, Light or Automatic (follows iOS), and **Board & pieces**, which names the
+  board and the pieces in use and opens their picker (see [Board and pieces](#board-and-pieces)).
 - **Foldable screen** (where the screen can be split, such as the iPhone Duo's inner display):
   Automatic, Keep the board off the fold, or Use the whole screen (see
   [On the iPhone Duo](#on-the-iphone-duo)).
@@ -705,6 +709,37 @@ labels stay, and the coach says why:
   self-test**. See below.
 - **About:** the license notice, a link to the source code, the credits, and the third-party
   licenses and the engine's source and license (shown in the app).
+
+## Board and pieces
+
+Menu → **Board & pieces** (under Appearance) changes how the board looks, everywhere it is drawn: your
+game, the explorer, Game Review, the game viewer and the Openings section, with the captured pieces
+under the players and the kings in the New game sheet. It opens over the Menu, with a **live preview**
+on top: a real middlegame position (with its last move) in your choice, beside the names of the board
+and the pieces and the artist of the set. A tap on a board or a set applies it at once, to the preview
+and to your game behind the Menu, and remembers it; the preview stays in sight while you scroll the
+choices (in landscape, and on the iPhone Duo half folded, it sits beside them). The two choices are
+separate, so any board goes with any pieces. Both are free, also in the App Store app, and remembered
+(the App Store app backs them up with your other settings). The default is the look the app always
+had: the green board and the Classic pieces.
+
+- **Board:** Green, Brown, Wood (with a wood grain), Blue, Ice, Slate, Marble (with veins), Purple,
+  Coral and Olive, each shown as two of its squares. Each one has its own colors for the last move, the
+  selected piece, check, the move dots, the coordinates and the coach's move-quality tints (a Book move
+  is gold on the brown boards, where the usual tan would vanish), chosen so they all stay easy to see on
+  both squares, as do the coach's arrows and your drawings.
+- **Pieces:** Classic, MPchess, Chessnut, Celtic, Fantasy, Spatial, RhosGFX and Kiwen Suwi,
+  each shown as its white knight on your board's light square and its black king on the dark one (so
+  you see how well the set shows on that board). In the dark theme, Kiwen Suwi's black pieces, which
+  are flat dark shapes, sit on a light chip under the players and in the New game sheet, so they don't
+  vanish into the background. About credits them all (see
+  [Credits and licenses](#credits-and-licenses)).
+- **With VoiceOver** each choice reads by its full name ("Brown board", "Chessnut pieces"); with a
+  keyboard, the arrow keys move through the boards or the sets (Home and End go to the first and the
+  last), and Escape closes the picker, back to the Menu.
+
+Every set works offline (the web app saves them all with the app, and the App Store app ships them), but
+the board only downloads the set you use.
 
 ## If something goes wrong
 
@@ -767,7 +802,7 @@ Requires Node 24 (chessground declares `engines.node >= 24`).
 ```sh
 npm ci                 # install
 npm run dev            # dev server with hot reload (http://localhost:5173)
-npm test               # unit tests (Vitest: about 1,380 tests in 75 files; the calibration test is skipped)
+npm test               # unit tests (Vitest: about 1,425 tests in 77 files; the calibration test is skipped)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
 npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting
@@ -785,7 +820,8 @@ npm run calibrate      # play bot-vs-bot matches with the real engine to check t
 - `?engines=1` forces one shared engine worker for that visit (the fallback for devices that cannot
   run two). A remembered compatibility mode lasts 14 days; `?engines=2` (or the Menu's *Try two
   engines again*) clears it.
-- The dev-only component gallery is at `/gallery.html?g=<board|panels|sheets|engine>` (`npm run dev`).
+- The dev-only component gallery is at `/gallery.html?g=<board|panels|sheets|engine>` (`npm run dev`);
+  `&board=wood&pieces=chessnut` shows it in another skin (the board gallery also has pickers).
 - In the browser console, `__chessCoach.controller` is the game controller
   (e.g. `await __chessCoach.controller.idle()`).
 - `ARCHITECTURE.md` describes the modules, the contracts between them and the screen layout.
@@ -808,7 +844,8 @@ before, and every orientation on the iPhone Duo's nearly square displays.
 - **Free:** every opponent at any level, your rating (and its chart), the evaluation bar and graph,
   the move ratings and badges (also of the opponent's moves, with Rate opponent’s moves), accuracy,
   takebacks and Retry, the explorer with its engine off (trying moves for both sides), drawing on the
-  board, replaying your earlier games (the game viewer, Play here) and PGN export, and in the Openings section searching, browsing, stepping through any line, the move tree
+  board, replaying your earlier games (the game viewer, Play here) and PGN export, the board and piece
+  styles, and in the Openings section searching, browsing, stepping through any line, the move tree
   and playing openings.
 - **Pro:** the coach's explanations (the "why", also of the opponent's moves), Hint, Show best (and
   "Show me" for the punishment of the opponent's mistake; "can you punish it?" and "You punished it!"
@@ -872,7 +909,20 @@ Chess Coach is free software under the **GNU General Public License v3.0 or late
   **GPL-3.0**. The unmodified engine files, their checksums and the source links are in
   [`public/engine/`](public/engine/README.md).
 - [chessground](https://github.com/lichess-org/chessground) (the board) by lichess.org: **GPL-3.0**.
-  The piece set is cburnett's, as shipped with chessground.
+- The chess pieces (Menu → Board & pieces; every set ships with the app): **Classic**, the default, by
+  [Colin M.L. Burnett](https://en.wikipedia.org/wiki/User:Cburnett) as shipped with chessground
+  (GPL-2.0-or-later); and from lichess.org's
+  [lila](https://github.com/lichess-org/lila/tree/cd2656d2787a766ba743da8da1dd3b24975e6329/public/piece)
+  at a pinned commit, as lila ships them (lila prepared the artists' SVG files for the web; the app
+  changes nothing more): **MPchess** by [Maxime Chupin](https://github.com/chupinmaxime/mpchess-pieces)
+  (GPL-3.0-only), **Chessnut** by [Alexis Luengas](https://github.com/LexLuengas/chessnut-pieces)
+  (Apache-2.0, "Copyright 2015 Alexis Luengas"), **Celtic**, **Fantasy** and **Spatial** by
+  [Maurizio Monge](https://github.com/maurimo/chess-art) (MIT),
+  [**RhosGFX**](https://rhosgfx.itch.io/vector-chess-pieces) (CC0) and **Kiwen Suwi** by
+  [neverRare](https://github.com/neverRare/kiwen-suwi) ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).
+  Each set's files, README (artist, license, source, the upstream commit its license was checked at,
+  checksums) and license text are in [`public/pieces/`](public/pieces/) (the Classic set in
+  `src/ui/pieces/cburnett/`). The board themes are drawn by the app itself.
 - [chess.js](https://github.com/jhlywa/chess.js) (move rules): **BSD-2-Clause**.
 - [lichess chess-openings](https://github.com/lichess-org/chess-openings) (opening names and book):
   **CC0**.

@@ -9,6 +9,7 @@
  * the native app (`isNative`), startup first restores any storage iOS has purged
  * (src/native/storage.ts), the iOS share sheet backs `navigator.share`, every game sound also plays
  * a haptic, the status bar follows the theme, and the launch screen is hidden once the app renders.
+ * The color theme and the board and piece skins are applied before the first render.
  */
 import { signal } from '@preact/signals';
 import { render } from 'preact';
@@ -24,11 +25,14 @@ import { prepareNativeStorage } from './native/storage';
 import { hideSplash, syncStatusBarWithTheme } from './native/statusbar';
 import { registerServiceWorker, type OfflineStatus } from './pwa';
 import { applyTheme, loadTheme } from './theme';
+import { initSkins } from './ui/skins';
 
 const root = document.getElementById('app')!;
 const params = new URLSearchParams(location.search);
 
 applyTheme(loadTheme());
+// The board theme and piece set, before anything renders: a board never shows the default set first.
+initSkins();
 installIosGuards({ onFirstGesture: unlockAudio });
 if (isNative) {
   syncStatusBarWithTheme();
@@ -66,6 +70,7 @@ if (params.has('enginetest')) {
     .catch(() => {}) // without the backup, the app still starts
     .then(() => {
       applyTheme(loadTheme()); // in case the theme was among the restored keys
+      initSkins(); // and the board theme and piece set
       startApp();
     });
 } else {

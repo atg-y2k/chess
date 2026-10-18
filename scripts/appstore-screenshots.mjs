@@ -22,6 +22,8 @@
  *   node scripts/appstore-screenshots.mjs [options]
  *     --only=coach,hint   only these screens (names as above, without number and extension)
  *     --theme=light       light theme instead of the default dark one
+ *     --board=wood        a board theme other than the default green one (ids: src/ui/skins.ts)
+ *     --pieces=chessnut   a piece set other than the default Classic (cburnett) one
  *     --no-status-bar     leave out the drawn iOS status bar ("9:41") at the top
  *     --skip-build        reuse the previous build (node_modules/.cache/chess-coach-screenshots)
  *     --port=5640         port for the local preview server (default 5640)
@@ -69,12 +71,17 @@ const option = (name, fallback) => {
   return a ? a.slice(name.length + 3) : fallback;
 };
 if (flag('help') || flag('h')) {
-  console.log('Usage: node scripts/appstore-screenshots.mjs [--only=a,b] [--theme=dark|light] [--no-status-bar] [--skip-build] [--port=5640] [--out=DIR]');
+  console.log(
+    'Usage: node scripts/appstore-screenshots.mjs [--only=a,b] [--theme=dark|light] [--board=ID] [--pieces=ID] [--no-status-bar] [--skip-build] [--port=5640] [--out=DIR]',
+  );
   process.exit(0);
 }
 const PORT = Number(option('port', process.env.SCREENSHOTS_PORT ?? '5640'));
 const OUT = resolve(ROOT, option('out', 'appstore/screenshots'));
 const THEME = option('theme', 'dark') === 'light' ? 'light' : 'dark';
+/** The board theme and piece set (Menu → Board & pieces); an unknown id gives the default, as in the app. */
+const BOARD = option('board', '');
+const PIECES = option('pieces', '');
 const STATUS_BAR = !flag('no-status-bar');
 const ONLY = option('only', '')
   .split(',')
@@ -84,7 +91,7 @@ const BASE_URL = `http://${HOST}:${PORT}/`;
 
 // ------------------------------------------------------------------------------------------------
 // Seed data (localStorage keys and formats from src/game/persistence.ts, src/rating/rating.ts,
-// src/theme.ts, src/native/purchases.ts and src/game/entitlements.ts)
+// src/theme.ts, src/ui/skins.ts, src/native/purchases.ts and src/game/entitlements.ts)
 
 /** The Opera Game (Paris, 1858): public-domain moves with sacrifices and a mate, a good review. */
 const OPERA =
@@ -125,13 +132,15 @@ function savedGame(id, moves, over) {
   };
 }
 
-/** localStorage for a screen: the player, settings and theme, Pro unlocked unless `locked`. */
+/** localStorage for a screen: the player, settings, theme and skins, Pro unlocked unless `locked`. */
 function storage({ game = null, locked = false } = {}) {
   const items = {
     'chesscoach.theme': THEME,
     'chesscoach.settings': JSON.stringify({ version: 1, settings: SETTINGS }),
     'chesscoach.profile': JSON.stringify({ version: 1, profile: PROFILE }),
   };
+  if (BOARD) items['chesscoach.board'] = BOARD;
+  if (PIECES) items['chesscoach.pieces'] = PIECES;
   if (game) items['chesscoach.game'] = JSON.stringify(game);
   if (!locked) {
     items['chesscoach.mockPro'] = '1'; // MOCK_PRO_KEY: the mock store's purchase

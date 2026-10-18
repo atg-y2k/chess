@@ -48,6 +48,7 @@ Plan on 3–6 weeks part-time from enrollment to "live", including one or two re
 | CI build of the iOS app (unsigned) | `.github/workflows/ios-build.yml` |
 | Signed build to TestFlight | `.github/workflows/ios-release.yml` |
 | App Store screenshots | `node scripts/appstore-screenshots.mjs` |
+| Board themes and piece sets (all free) | `src/ui/skins.ts` (the catalog and the credits), `src/ui/skins.css` (the themes' colors and the pieces' art), `public/pieces/<id>/` (each set's files, README and license), `src/ui/SkinsSheet.tsx` (the Menu's Board & pieces picker) |
 | Native project details | `ios/README-native.md` |
 
 ## 0. Decisions to make first
@@ -322,8 +323,9 @@ the move's note). `02`, `03` and `05` show Pro features (the move's note in `05`
 so they carry a "Pro · in-app purchase" tag. It also saves
 `iap-review/paywall.png`, the paywall with its price: that one is **only** the in-app purchase's App
 Review screenshot (section 6), not a product-page screenshot. Options: `--only=coach,hint`,
-`--theme=light`, `--no-status-bar` (it draws a "9:41" status bar by default), `--skip-build`,
-`--port=`, `--out=`. Run it on your Mac so the text uses Apple's system font. The
+`--theme=light`, `--board=wood` and `--pieces=chessnut` (a board theme and piece set other than the
+default green board and Classic pieces), `--no-status-bar` (it draws a "9:41" status bar by default),
+`--skip-build`, `--port=`, `--out=`. Run it on your Mac so the text uses Apple's system font. The
 `appstore/screenshots/` folder ignores its own contents in git.
 
 **Or from the Simulator** (the real app in WKWebView): run the app on an **iPhone 17 Pro Max**
@@ -480,8 +482,51 @@ software package", as long as the full source, or a pointer to it, comes with ev
       version page, which stays editable until approval.
 - [ ] Keep the notices: the GPL text, credits, `THIRD-PARTY-LICENSES.txt` and the engine's license in
       the app (About already shows them), and the source link in the store description.
+- [ ] **Piece sets and board themes** (Menu → Board & pieces, free in every build): a new or changed set
+      must keep the rules below, and `npm test` (tests/app/skins.test.ts) still passes.
 - [ ] Add no restrictions on GPL rights: no terms forbidding copying or modification, no obfuscation
       that hides where the code comes from.
+
+**The board and piece art.** The board themes are drawn by the app itself (CSS colors, and SVG textures
+written in `src/ui/skins.css` for Wood and Marble): no third-party board images, and in particular not
+lichess's board images (`public/images/board` in lila is AGPL). Every piece set ships in every build
+(the App Store app includes them all, so About credits them all) as lila's copies, byte for byte: lila
+prepared the artists' SVG files for the web (minified, with a `color-scheme` style), and the app makes
+no further changes, which each README and `THIRD-PARTY-LICENSES.txt` say (CC BY 4.0 and Apache-2.0
+ask for changes to be noted). Each set has its README (artist, license, source at a pinned commit, the
+upstream commit its license was checked at, the SHA-256 of every file) and, where the license requires
+its text or notice next to the work, a `LICENSE.txt` and the upstream `COPYRIGHT.txt`;
+`THIRD-PARTY-LICENSES.txt` repeats each notice:
+
+| Set | Artist | License | Source |
+|---|---|---|---|
+| Classic (cburnett), the default | Colin M.L. Burnett | GPL-2.0-or-later | chessground's `assets/chessground.cburnett.css` (inlined in the app's CSS) |
+| MPchess | Maxime Chupin | GPL-3.0-only (upstream: "Version 3", no "or later"; lila says GPLv3+) | lila `public/piece/mpchess` ([upstream @720f6e05](https://github.com/chupinmaxime/mpchess-pieces/tree/720f6e050b4ee9b6e68f1ef5d89330a44850d54e)) |
+| Chessnut | Alexis Luengas | Apache-2.0 (its text and "Copyright 2015 Alexis Luengas" ship) | lila `public/piece/chessnut` ([upstream @2b8eaf14](https://github.com/LexLuengas/chessnut-pieces/tree/2b8eaf14a31edad7e9deb53b1473e1d4857868a9)) |
+| Celtic, Fantasy, Spatial | Maurizio Monge | MIT (its notice ships) | lila `public/piece/<set>` ([upstream @d8705d8b](https://github.com/maurimo/chess-art/tree/d8705d8bc9879fef44208de19e2a20c937409e1f)) |
+| RhosGFX | RhosGFX | CC0 1.0 | lila `public/piece/rhosgfx` ([upstream](https://rhosgfx.itch.io/vector-chess-pieces)) |
+| Kiwen Suwi | neverRare | CC BY 4.0 (attribution and the change note in About and the notices) | lila `public/piece/kiwen-suwi` ([upstream @7e8f3e47](https://github.com/neverRare/kiwen-suwi/tree/7e8f3e473f43474baeebed01e76f054cb06c0100)) |
+
+"lila" is lichess.org's repository at commit `cd2656d2787a766ba743da8da1dd3b24975e6329`; its
+`COPYING.md` lists each set's license, and every upstream above was checked at the commit named. Only
+licenses that allow commercial use and fit the app's GPL-3.0 are allowed (`SkinLicense` in
+`src/ui/skins.ts`: GPL-2.0+, GPL-3.0 only or later, MIT, Apache-2.0, CC0, CC BY 4.0, CC BY-SA 4.0).
+MPchess is GPL version 3 only: it fits today's GPL-3.0 app, but check it before ever moving the app to
+a later GPL. Never add a set that is NC, ND, "freeware", "personal use", AGPL, or of unknown license,
+and never take lila's `COPYING.md` row as the only evidence: find the artist's own grant. **Out:**
+
+- **merida**: its artist (Armando H. Marroquin) distributes the Chess Mérida font as "Freeware"
+  (enpassant.dk/chess/fonteng.htm, and the README in his download), the same label lila files his
+  Leipzig set under among its non-free exceptions; lila's GPLv2+ row for it links no grant, and its
+  SVGs are a third party's vectorization of the font. Re-add it only with a written free-license grant
+  from the artist and the vectorizer.
+- **totoy** and **papercut**: lila lists them among its non-free exceptions, with no upstream that
+  states a license.
+- **letter**, **pirouetti** and **pixel**: AGPL. lila's NC sets are out too.
+
+A stored choice of a removed set falls back to the default (`tests/app/skins.test.ts` checks the
+excluded ids). A CC BY-SA set must keep its license name and link, and any modification must be noted
+in its README.
 
 **Once:**
 
@@ -540,7 +585,7 @@ them elsewhere and update `LEGAL_URLS` in `src/native/platform.ts` and the URLs 
       service worker, no install instructions, native share, haptics, status bar and launch screen,
       and no "Available offline" row in the Menu (that is web app only).
 - [ ] **VoiceOver labels** on the main controls.
-- [ ] Credit kept for the cburnett pieces (in About) and for Stockfish.
+- [ ] Credit kept for every piece set (in About and `THIRD-PARTY-LICENSES.txt`) and for Stockfish.
 - [ ] **Audio**: if, on a device, sounds ignore the silent switch or stop music, set the audio session to
       ambient in `AppDelegate.swift` (`AVAudioSession.sharedInstance().setCategory(.ambient,
       options: [.mixWithOthers])`).

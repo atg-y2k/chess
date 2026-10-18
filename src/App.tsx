@@ -33,6 +33,7 @@ import { closeOpenings, openingsLoadFailedText, openingsOpen, openOpenings, popP
 import type { OfflineStatus } from './pwa';
 import { STARTING_LEVELS, formatRatingDelta } from './rating/rating';
 import { applyTheme, loadTheme, saveTheme, watchSystemTheme, type ThemePref } from './theme';
+import { boardTheme, chooseBoardTheme, choosePieceSet, pieceSet } from './ui/skins';
 import { Board } from './ui/Board';
 import { CoachPanel } from './ui/CoachPanel';
 import { ConfirmSheet, assistPrompt } from './ui/ConfirmSheet';
@@ -834,6 +835,7 @@ function Sheets({
         bots={BOTS}
         theme={theme}
         onThemeChange={onTheme}
+        skins={{ board: boardTheme.value, pieces: pieceSet.value, onBoard: chooseBoardTheme, onPieces: choosePieceSet }}
         foldable={foldable}
         onChange={(partial) => c.setSettings(partial)}
         onResign={() => c.resign()}

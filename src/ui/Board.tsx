@@ -6,6 +6,9 @@
  * board is width-driven: it fills its parent's width as a square (rounded down to whole device
  * pixels per square, so at most ~3px narrower), so bound its size from the parent, e.g.
  * `width: min(100cqw - 16px, 100cqh - 300px)`. It works as a flex item next to <EvalBar/> too.
+ *
+ * It is drawn in the chosen skin (src/ui/skins.css, keyed off <html data-board data-pieces>): the
+ * board theme's squares, highlights and coordinates, and the piece set, also in the promotion picker.
  */
 import { h } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
@@ -15,13 +18,13 @@ import type { Config } from '@lichess-org/chessground/config';
 import type { DrawBrush, DrawBrushes, DrawShape } from '@lichess-org/chessground/draw';
 import type { BrushColor, Dests, Key } from '@lichess-org/chessground/types';
 import '@lichess-org/chessground/assets/chessground.base.css';
-import '@lichess-org/chessground/assets/chessground.cburnett.css';
 import type { Arrow, ArrowBrush, MoveClass } from '../analysis/types';
 import type { DrawColor, UserShape } from '../game/drawings';
 import type { PromotionPiece } from '../game/types';
 import { classBadgeSvg } from './ClassIcon';
 import { endGesture, gestureShape, moveGesture, startGesture, type BoardRect, type DrawGesture } from './draw';
 import { IconClose } from './icons';
+import './skins.css';
 import './Board.css';
 
 export type BoardColor = 'white' | 'black';
@@ -69,8 +72,11 @@ export interface BoardProps {
   onMove: (from: string, to: string, promotion?: PromotionPiece) => void;
 }
 
-/** Hex fallbacks for the `--arrow-*` tokens in app.css (the live token values are read at mount). */
-const ARROW_HEX: Record<ArrowBrush, string> = {
+/**
+ * Hex fallbacks for the `--arrow-*` tokens in app.css (the live token values are read at mount;
+ * `--arrow-line` is the board theme's, src/ui/skins.css, and Board.css keeps it current).
+ */
+export const ARROW_HEX: Record<ArrowBrush, string> = {
   best: '#3fa45b',
   alt: '#3f86c4',
   threat: '#d9534f',
@@ -79,7 +85,7 @@ const ARROW_HEX: Record<ArrowBrush, string> = {
 };
 
 /** Stroke width in 1/64ths of a square, and opacity, per arrow kind. */
-const ARROW_STYLE: Record<ArrowBrush, { lineWidth: number; opacity: number }> = {
+export const ARROW_STYLE: Record<ArrowBrush, { lineWidth: number; opacity: number }> = {
   best: { lineWidth: 13, opacity: 0.88 },
   alt: { lineWidth: 10, opacity: 0.62 },
   threat: { lineWidth: 11, opacity: 0.8 },
@@ -93,7 +99,7 @@ const ARROW_STYLE: Record<ArrowBrush, { lineWidth: number; opacity: number }> = 
  * the engine's arrows. Their arrows are also dashed (Board.css, by the `draw-` brush key), so they
  * never look like the engine's, whatever the color.
  */
-const DRAW_HEX: Record<DrawColor, string> = {
+export const DRAW_HEX: Record<DrawColor, string> = {
   green: '#15a34a',
   red: '#e03131',
   blue: '#2563eb',
@@ -101,7 +107,7 @@ const DRAW_HEX: Record<DrawColor, string> = {
 };
 
 /** The player's drawings: a little narrower than the engine's best move, and nearly opaque. */
-const DRAW_STYLE = { lineWidth: 11, opacity: 0.92 };
+export const DRAW_STYLE = { lineWidth: 11, opacity: 0.92 };
 
 /** Draw order: the most important arrow last, so it ends up on top. */
 const ARROW_ORDER: Record<ArrowBrush, number> = { line: 0, alt: 1, played: 2, threat: 3, best: 4 };

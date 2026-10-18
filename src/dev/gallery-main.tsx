@@ -4,16 +4,28 @@
  */
 import { render } from 'preact';
 import '../styles/app.css';
+import '../ui/skins.css';
 import { watchSystemTheme } from '../theme';
+import { applySkins, boardTheme, initSkins, isBoardTheme, isPieceSet, pieceSet } from '../ui/skins';
 
 // Galleries follow the OS colour scheme (emulate it to check both themes); `?theme=dark|light` forces one.
-const forced = new URLSearchParams(location.search).get('theme');
+const params = new URLSearchParams(location.search);
+const forced = params.get('theme');
 watchSystemTheme(() => (forced === 'dark' || forced === 'light' ? forced : 'system'));
+// ... and the app's board theme and piece set (Menu → Board & pieces); `?board=wood&pieces=chessnut` forces them.
+// They are forced for this page only (not stored), on <html> and in the signals the galleries' pickers
+// start from, so a picker shows the forced skin and changing one keeps the other.
+initSkins();
+const board = params.get('board');
+const pieces = params.get('pieces');
+if (isBoardTheme(board)) boardTheme.value = board;
+if (isPieceSet(pieces)) pieceSet.value = pieces;
+applySkins(boardTheme.peek(), pieceSet.peek());
 
 const galleries = import.meta.glob<{ default: () => preact.JSX.Element }>('./*.gallery.tsx');
 
 async function main() {
-  const name = new URLSearchParams(location.search).get('g');
+  const name = params.get('g');
   const root = document.getElementById('app')!;
   const key = `./${name}.gallery.tsx`;
   if (!name || !galleries[key]) {

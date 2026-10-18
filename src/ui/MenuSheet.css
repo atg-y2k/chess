@@ -143,6 +143,11 @@
   background: linear-gradient(135deg, #f4f1ec 0 50%, #1d1c1a 50% 100%);
 }
 
+/* "Board & pieces" under the theme picker: a row with the skin's own thumbnail that opens its sheet. */
+.menu-theme + .menu-skins {
+  margin-top: 10px;
+}
+
 /* ---------------------------------------------------------------- foldable screen */
 
 /* Text-only rows (no icon): the separators run from the text's start. */

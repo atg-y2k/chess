@@ -7,6 +7,7 @@
  *   &empty=1      profile without games (MenuSheet empty state; NewGameSheet "Your level" picker)
  *   &engine=dual|single|forced   MenuSheet Engine row (single = remembered compatibility mode with a date)
  *   &canResign=0  MenuSheet with Resign disabled
+ *   (MenuSheet's Board & pieces sheet changes the page's skin, without storing it; `&board=&pieces=` set the first one)
  *   &sim=0|1      iPhone safe-area simulation (default: on for narrow viewports)
  *   &chrome=0     hide the launcher buttons (for screenshots)
  * Every callback is logged to `window.__sheetEvents` (used by the headless checks).
@@ -21,6 +22,7 @@ import type { GameRecord, PlayerProfile } from '../rating/types';
 import { GameOverSheet, type GameOverSheetProps } from '../ui/GameOverSheet';
 import { MenuSheet, type EngineInfo } from '../ui/MenuSheet';
 import { NewGameSheet } from '../ui/NewGameSheet';
+import { applySkins, isBoardTheme, isPieceSet, type BoardThemeId, type PieceSetId } from '../ui/skins';
 
 declare global {
   interface Window {
@@ -317,7 +319,7 @@ const CSS = `
 .gs-strip i { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-style: normal;
   font-size: 20px; }
 .gs-strip b { font-size: 15px; } .gs-strip span { color: var(--text-faint); font-size: 13px; }
-.gs-board { width: 100%; aspect-ratio: 1; background: repeating-conic-gradient(var(--board-dark) 0 25%, var(--board-light) 0 50%) 0 0 / 25% 25%; }
+.gs-board { width: 100%; aspect-ratio: 1; background: var(--board-texture) 0 0 / 100% 100%, repeating-conic-gradient(var(--board-dark) 0 25%, var(--board-light) 0 50%) 0 0 / 25% 25%; }
 .gs-launch { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; }
 .gs-launch .btn { flex: 1 1 auto; min-height: 40px; padding: 8px 10px; font-size: 13px; }
 .gs-toast { position: fixed; left: 50%; top: calc(var(--safe-top) + 8px); transform: translateX(-50%); z-index: 300;
@@ -343,6 +345,16 @@ export default function SheetsGallery() {
     return { ...DEFAULT_SETTINGS, botId, botElo, adaptive: q.get('adaptive') === '1' };
   });
   const [toast, setToast] = useState('');
+  // The page's skin (gallery-main.tsx: the stored one, or `&board=&pieces=`).
+  const [skin, setSkin] = useState(() => {
+    const { board, pieces } = document.documentElement.dataset;
+    return { board: isBoardTheme(board) ? board : 'green', pieces: isPieceSet(pieces) ? pieces : 'cburnett' } as const;
+  });
+  const pickSkin = (next: { board: BoardThemeId; pieces: PieceSetId }) => {
+    emit('menu:skin', next);
+    setSkin(next);
+    applySkins(next.board, next.pieces);
+  };
   const [profile, setProfile] = useState<PlayerProfile>(() => (q.get('empty') === '1' ? EMPTY_PROFILE : PROFILE));
   const canResign = q.get('canResign') !== '0';
   const engineParam = q.get('engine');
@@ -473,6 +485,12 @@ export default function SheetsGallery() {
         onExportPgn={() => emit('menu:export')}
         onFlip={() => emit('menu:flip')}
         engine={engine}
+        skins={{
+          board: skin.board,
+          pieces: skin.pieces,
+          onBoard: (board) => pickSkin({ ...skin, board }),
+          onPieces: (pieces) => pickSkin({ ...skin, pieces }),
+        }}
         onRetryDualEngines={() => emit('menu:retryDualEngines')}
         levels={STARTING_LEVELS}
         onSetLevel={setLevel('menu')}

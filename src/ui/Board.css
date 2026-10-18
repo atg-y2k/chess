@@ -1,7 +1,8 @@
 /*
- * Board: green chessground theme (squares from --board-light/--board-dark), chess.com-style
- * coordinates inside the edge squares, move hints, coach highlights and the promotion picker.
- * Chessground's brown theme is intentionally not imported.
+ * Board: chessground drawn in the chosen board theme (the --board-* tokens of src/ui/skins.css:
+ * squares, an optional texture, highlights, move dots and coordinates; the pieces are skins.css's
+ * too), chess.com-style coordinates inside the edge squares, move hints, coach highlights and the
+ * promotion picker. Chessground's own brown theme is intentionally not imported.
  */
 
 /* The host takes the parent's width; the board inside snaps down to whole device pixels per square. */
@@ -11,13 +12,6 @@
 }
 
 .board {
-  /* Square highlights, derived from the design tokens. */
-  --board-last: color-mix(in srgb, var(--warning) 52%, transparent);
-  --board-selected: color-mix(in srgb, var(--warning) 62%, transparent);
-  --board-dot: rgba(0, 0, 0, 0.17);
-  --board-hover: color-mix(in srgb, var(--board-light) 40%, transparent);
-  --board-check: var(--danger);
-
   position: relative;
   width: 100%;
   aspect-ratio: 1 / 1;
@@ -35,11 +29,11 @@
   height: 100%;
 }
 
-/* Squares: a 2x2 conic tile repeated 4x4 (a8 and h1 are light). */
+/* Squares: a 2x2 conic tile repeated 4x4 (a8 and h1 are light), under the theme's texture (if any). */
 .board cg-board {
   background-color: var(--board-light);
-  background-image: repeating-conic-gradient(var(--board-dark) 0 25%, var(--board-light) 0 50%);
-  background-size: 25% 25%;
+  background-image: var(--board-texture), repeating-conic-gradient(var(--board-dark) 0 25%, var(--board-light) 0 50%);
+  background-size: 100% 100%, 25% 25%;
 }
 
 .board cg-board square.last-move {
@@ -73,22 +67,36 @@
   );
 }
 
-/* Last move tinted with the classification colour when the coach badge sits on it. */
-.board cg-board square.cls-brilliant { background-color: color-mix(in srgb, var(--cls-brilliant) 55%, transparent); }
-.board cg-board square.cls-great { background-color: color-mix(in srgb, var(--cls-great) 55%, transparent); }
-.board cg-board square.cls-best { background-color: color-mix(in srgb, var(--cls-best) 55%, transparent); }
-.board cg-board square.cls-excellent { background-color: color-mix(in srgb, var(--cls-excellent) 55%, transparent); }
-.board cg-board square.cls-good { background-color: color-mix(in srgb, var(--cls-good) 55%, transparent); }
-.board cg-board square.cls-book { background-color: color-mix(in srgb, var(--cls-book) 55%, transparent); }
-.board cg-board square.cls-forced { background-color: color-mix(in srgb, var(--cls-forced) 55%, transparent); }
-.board cg-board square.cls-inaccuracy { background-color: color-mix(in srgb, var(--cls-inaccuracy) 55%, transparent); }
-.board cg-board square.cls-mistake { background-color: color-mix(in srgb, var(--cls-mistake) 55%, transparent); }
-.board cg-board square.cls-miss { background-color: color-mix(in srgb, var(--cls-miss) 55%, transparent); }
-.board cg-board square.cls-blunder { background-color: color-mix(in srgb, var(--cls-blunder) 55%, transparent); }
+/*
+ * Last move tinted with the classification colour when the coach badge sits on it, in place of
+ * --board-last: the board theme's tint (--board-cls-*, src/ui/skins.css; the class colour at 55%, or
+ * one that shows on that theme's squares).
+ */
+.board cg-board square.cls-brilliant { background-color: var(--board-cls-brilliant); }
+.board cg-board square.cls-great { background-color: var(--board-cls-great); }
+.board cg-board square.cls-best { background-color: var(--board-cls-best); }
+.board cg-board square.cls-excellent { background-color: var(--board-cls-excellent); }
+.board cg-board square.cls-good { background-color: var(--board-cls-good); }
+.board cg-board square.cls-book { background-color: var(--board-cls-book); }
+.board cg-board square.cls-forced { background-color: var(--board-cls-forced); }
+.board cg-board square.cls-inaccuracy { background-color: var(--board-cls-inaccuracy); }
+.board cg-board square.cls-mistake { background-color: var(--board-cls-mistake); }
+.board cg-board square.cls-miss { background-color: var(--board-cls-miss); }
+.board cg-board square.cls-blunder { background-color: var(--board-cls-blunder); }
 
 /* Arrows: opacity comes from the brushes, not the whole layer. */
 .board .cg-wrap .cg-shapes {
   opacity: 1;
+}
+/*
+ * The opening line's guide arrow follows the board theme (--arrow-line: tan, or purple where tan
+ * would not show), also on a board made before the theme changed (its brush has the old color).
+ */
+.board .cg-shapes line[marker-end='url(#arrowhead-line)'] {
+  stroke: var(--arrow-line);
+}
+.board .cg-shapes marker[id='arrowhead-line'] path {
+  fill: var(--arrow-line);
 }
 
 /* Dragged piece: larger on touch screens so it is not hidden under the finger. */
@@ -103,7 +111,7 @@
   opacity: 0.35;
 }
 
-/* Coordinates inside the edge squares, coloured like the opposite square. */
+/* Coordinates inside the edge squares, in the theme's colors (on green: like the opposite square). */
 .board .cg-wrap coords {
   font-family: var(--font);
   font-size: clamp(8px, 2.7cqw, 15px);
@@ -139,10 +147,10 @@
   padding: 0 0.7cqw 0.45cqw 0;
 }
 .board .cg-wrap coord.coord-light {
-  color: var(--board-dark);
+  color: var(--board-coord-on-light);
 }
 .board .cg-wrap coord.coord-dark {
-  color: var(--board-light);
+  color: var(--board-coord-on-dark);
 }
 
 /*

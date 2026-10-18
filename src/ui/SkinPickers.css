@@ -1,0 +1,140 @@
+/*
+ * The "Board & pieces" pickers (src/ui/SkinPickers.tsx). A tile's colors and art come from the skin
+ * it shows: [data-board] / [data-pieces] in skins.css set the --board-* and --piece-* tokens on it.
+ */
+
+.skin-grid {
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+}
+.skin-grid--boards {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.skin-grid--pieces {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.skin-opt {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  padding: 8px 4px 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+/* The choice: a ring (not only a color), a lighter tile and the name in full strength. */
+.skin-opt[aria-checked='true'] {
+  background: var(--surface-3);
+  color: var(--text);
+  box-shadow: inset 0 0 0 2px var(--link);
+}
+.skin-opt:active {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.skin-opt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.skin-name {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skin-opt[aria-checked='true'] .skin-name {
+  font-weight: 700;
+}
+
+/*
+ * A board theme: two of its squares (light, dark). The texture (Wood, Marble) is drawn at the scale
+ * it has on the board, where it spans eight squares: 4 swatch widths across, 8 heights down.
+ */
+.skin-swatch {
+  display: block;
+  width: 100%;
+  max-width: 64px;
+  aspect-ratio: 2 / 1;
+  border-radius: 5px;
+  background:
+    var(--board-texture) 0 0 / 400% 800%,
+    linear-gradient(90deg, var(--board-light) 50%, var(--board-dark) 50%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+/* A piece set: its white knight and black king on two squares of the chosen board (and its texture). */
+.skin-pair {
+  display: flex;
+  width: 100%;
+  max-width: 100px;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+}
+.skin-sq {
+  flex: 1 1 0;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-width: 0;
+}
+.skin-sq--dark {
+  background:
+    var(--board-texture) 30% 40% / 800% 800%,
+    var(--board-dark);
+}
+.skin-sq--light {
+  background:
+    var(--board-texture) 45% 40% / 800% 800%,
+    var(--board-light);
+}
+.skin-sq .piece-art {
+  display: block;
+  width: 94%;
+  height: 94%;
+}
+
+/* The Menu row's icon (the size of the other rows' icons): a 2x2 board with the white knight. */
+.skin-thumb {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    var(--board-texture) 0 0 / 400% 400%,
+    repeating-conic-gradient(var(--board-dark) 0 25%, var(--board-light) 0 50%) 0 0 / 100% 100%;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
+}
+.skin-thumb .piece-art {
+  display: block;
+  width: 26px;
+  height: 26px;
+}
+
+/* The credit: the license name never breaks at its hyphens. */
+.skin-license {
+  white-space: nowrap;
+}
+
+/* Light theme: the group is white, so the choice's tile is a step darker. */
+:root[data-theme='light'] .skin-opt[aria-checked='true'] {
+  background: var(--surface-2);
+}

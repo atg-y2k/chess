@@ -6,7 +6,7 @@
  * Family Sharing on; see src/native/purchases.ts). `FEATURE_TIERS` below is the one place that says
  * which features need it. Everything else is always free and has no gate: every bot at any Elo, the
  * rating, the evaluation bar and graph, move-quality labels and badges, accuracy numbers, takebacks
- * and Retry, and the explorer without its engine.
+ * and Retry, the explorer without its engine, and the board and piece styles (Menu → Board & pieces).
  *
  * `paywallEnabled` (src/native/platform.ts) is true in the App Store app and in a web build made
  * with VITE_PAYWALL=1 (which uses a mock store, for tests). Otherwise, as in the PWA, everything is

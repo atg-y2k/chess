@@ -11,6 +11,7 @@
 import { useCallback, useState } from 'preact/hooks';
 import { APP_NAME, APP_VERSION, LEGAL_URLS, nativeBuild, paywallEnabled } from '../native/platform';
 import { LicenseSheet, fileDoc, type LicenseDoc } from './LicenseSheet';
+import { PIECE_SETS, SKIN_LICENSES, type PieceSet } from './skins';
 import './About.css';
 
 /**
@@ -56,7 +57,7 @@ export const CREDITS: Credit[] = [
   },
   {
     name: 'chessground',
-    what: 'the board, with the cburnett piece set',
+    what: 'the board, and the Classic (cburnett) pieces it ships',
     by: 'lichess.org',
     license: 'GPL-3.0',
     url: 'https://github.com/lichess-org/chessground',
@@ -99,6 +100,18 @@ export const CREDITS: Credit[] = [
   },
 ];
 
+/**
+ * The piece sets (Menu → Board & pieces), every one of them since all ship with the app: who made it,
+ * its license, and where it comes from. The board themes are drawn by the app (src/ui/skins.css).
+ */
+export const PIECE_CREDITS = (PIECE_SETS as readonly PieceSet[]).map((s) => ({
+  name: s.name,
+  // The copyright notice where the license asks to keep it (Chessnut, Apache-2.0), else the artist.
+  by: s.copyright ?? s.author,
+  license: SKIN_LICENSES[s.license],
+  url: s.upstream ?? s.source,
+}));
+
 const BSD_2 = `Copyright (c) 2025, Jeff Hlywa (jhlywa@gmail.com)
 All rights reserved.
 
@@ -110,11 +123,12 @@ Redistribution and use in source and binary forms, with or without modification,
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.`;
 
 /** The MIT-licensed components named in the credits (Workbox only ships with the web app, Capacitor with the iOS app). */
-const MIT_NAMES = `Preact, @preact/signals, ${nativeBuild ? 'Capacitor' : 'Workbox'}`;
+const MIT_NAMES = `Preact, @preact/signals, ${nativeBuild ? 'Capacitor' : 'Workbox'}, the Celtic, Fantasy and Spatial pieces`;
 
 const MIT = `Preact: Copyright (c) 2015-present Jason Miller
 @preact/signals: Copyright (c) 2022-present Preact Team
 ${nativeBuild ? 'Capacitor: Copyright (c) 2017-present Drifty Co.' : 'Workbox: Copyright 2018 Google LLC'}
+The Celtic, Fantasy and Spatial pieces: Copyright (c) Maurizio Monge
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
@@ -202,6 +216,27 @@ export function About() {
             </li>
           ))}
         </ul>
+        <h4 class="about-h">Chess pieces</h4>
+        <ul class="about-credits" data-id="piece-credits">
+          {PIECE_CREDITS.map((c) => (
+            <li key={c.name}>
+              <a href={c.url} target="_blank" rel="noopener noreferrer">
+                {c.name}
+              </a>
+              : {c.by}. License:{' '}
+              <a class="about-license" href={c.license.url} target="_blank" rel="noopener noreferrer">
+                {c.license.name}
+              </a>
+              .
+            </li>
+          ))}
+        </ul>
+        <p class="about-note">
+          The Classic pieces are as chessground ships them; the others are lichess.org’s copies from its
+          lila repository, which lila prepared for the web from the artists’ files, with no further
+          changes. Their notices and license texts are in Third-party licenses. The board themes are
+          drawn by {APP_NAME} itself.
+        </p>
         <h4 class="about-h">chess.js: BSD-2-Clause</h4>
         <pre class="about-text">{BSD_2}</pre>
         <h4 class="about-h">{MIT_NAMES}: MIT</h4>

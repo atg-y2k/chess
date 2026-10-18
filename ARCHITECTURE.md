@@ -22,6 +22,10 @@ src/
                            controller; renders <App/> (or the engine self-test page with ?enginetest), calls boot()
   App.tsx / App.css        screen layout + wiring of store/controller to components (see "App shell")
   theme.ts                 color theme preference (dark default / light / system) -> <html data-theme>
+  ui/skins.ts / skins.css  board themes and piece sets (Menu → Board & pieces, free): the catalogs with credits and licenses,
+                           the stored choice -> <html data-board data-pieces>, the themes' tokens and the pieces' art
+                           (see "Board and piece skins"); ui/SkinsSheet.tsx: the Board & pieces sheet (a live preview over
+                           the pickers of ui/SkinPickers.tsx)
   layout/fold.ts           foldable screens (the iPhone Duo): where the fold is (Viewport Segments API, Device Posture
                            API, else a heuristic from the screen's size), the "Foldable screen" setting, the layout it
                            gives (book / tabletop / none) -> <html data-fold> (see "Screen layout")
@@ -88,7 +92,8 @@ src/
   ui/                      presentational components; each has its own CSS file next to it
                            (SelfTestPage.tsx is the ?enginetest page; draw.ts: Draw mode's pure touch geometry,
                            DrawBar.tsx: its toggle and bar)
-  dev/                     component gallery pages (dev only: /gallery.html?g=<board|panels|sheets|engine>)
+  dev/                     component gallery pages (dev only: /gallery.html?g=<board|panels|sheets|engine>, in the app's
+                           skin or `&board=<id>&pieces=<id>`)
   openings/                the Openings section's data and logic (no DOM; see "Openings section"):
     catalog.ts             every named line (lazy src/data/opening-lines.json), families, search, starter lists
     tree.ts                book moves from a position with names and shares, a line's positions, steering a game
@@ -106,6 +111,8 @@ src/
   ui/PaywallSheet.tsx      the Pro paywall + lock glyphs; ui/LicenseSheet.tsx: in-app viewer for the license texts
   ui/RatingChart.tsx       the Menu's rating history chart (inline SVG); ui/GameViewer.tsx: the game viewer's screen
 ios/                       Xcode project (Capacitor, Swift Package Manager): ios/README-native.md
+public/pieces/<id>/        the piece sets other than the default (12 SVGs as lila ships them, README, LICENSE.txt and COPYRIGHT.txt where needed);
+                           src/ui/pieces/cburnett/: the default set (chessground's art), inlined into the CSS
 public/privacy.html, terms.html, support.html   static pages the App Store listing and the paywall link to
 scripts/appstore-screenshots.mjs                App Store screenshots (Playwright)
 ```
@@ -114,8 +121,9 @@ scripts/appstore-screenshots.mjs                App Store screenshots (Playwrigh
 - Contracts live in `*/types.ts`. Do not change their exported shapes without updating every user.
 - Pure logic (`engine/uci.ts`, `engine/position.ts`, `analysis/*`, `bot/strength.ts`, `rating/rating.ts`) has **no DOM access**. It is unit-tested with Vitest in node (`npm test`).
 - UI components are **presentational**: they take props and emit callbacks, and never import the store or controller.
-- Colors must come from the CSS variables in `src/styles/app.css`. Light-theme overrides are written
-  as `:root[data-theme='light'] …` (never `prefers-color-scheme`), because the theme is a user choice.
+- Colors must come from the CSS variables in `src/styles/app.css` (the board's and the pieces' from
+  `src/ui/skins.css`). Light-theme overrides are written as `:root[data-theme='light'] …` (never
+  `prefers-color-scheme`), because the theme is a user choice; board themes as `[data-board='…']`.
 - User-facing text is in American English.
 
 ## Engine design
@@ -712,7 +720,81 @@ interface BoardProps {
 }
 ```
 The component owns the chessground instance, updates it on prop changes (without re-creating it),
-fills its container as a square, and includes the promotion picker overlay.
+fills its container as a square, and includes the promotion picker overlay. It is drawn in the chosen
+skin without knowing it: the squares, texture, highlights, dots and coordinates are skins.css's
+`--board-*` tokens, the pieces (chessground's `<piece>`, also in the promotion picker) its
+`--piece-*` art, and the opening line's arrow follows `--arrow-line` through Board.css (a CSS `stroke`
+over the brush's attribute), so a theme change needs no new chessground state.
+
+### Board and piece skins (ui/skins.ts, ui/skins.css)
+The board theme and the piece set are two settings, picked in the Menu (Appearance → Board & pieces:
+`SkinsSheet.tsx`, see below) and free in every build. `skins.ts` holds the catalogs (`BOARD_THEMES`,
+`PIECE_SETS` with each set's name, artist, license (`SkinLicense`: only GPL-2.0+/3.0+, MIT,
+Apache-2.0, CC0, CC BY, CC BY-SA), source and upstream), the signals `boardTheme` and `pieceSet`, and
+the stored choice (`chesscoach.board`, `chesscoach.pieces`; an unknown or removed id gives the default:
+`green`, `cburnett`). `applySkins` puts them on `<html data-board data-pieces>`; main.tsx calls
+`initSkins()` before the first render (and again after the App Store app restores its storage), so a
+board never shows the default set first. App passes the signals to the Menu (`skins` prop) and
+`chooseBoardTheme` / `choosePieceSet` store, apply and publish a choice.
+
+`skins.css` keys everything off those attributes; each block also matches any element with the
+attribute (`[data-board='wood']`), so the Menu's tiles preview a skin inside another one.
+- **Board themes** set `--board-light`, `--board-dark`, `--board-texture` (none, or an SVG turbulence
+  texture written in the CSS: Wood's grain, Marble's clouds and veins, drawn once per board size and
+  painted over the squares' conic gradient; its mean color and coverage, about 16% and 14%, are the
+  catalog's `texture`, so the squares as drawn are known), and where the green defaults would not do,
+  `--board-last`, `--board-selected`, `--board-coord-on-light` / `-dark` and `--arrow-line` (and Wood's
+  darker `--board-dot`, which its grain would hide, and Coral's deeper `--board-check`), and
+  `--board-cls-<class>`: the coach's tint of a classified last move (Board.css draws it in place of
+  `--board-last` on both squares), the class color (`--cls-*`) at 55% by default, a stronger or shifted
+  shade of it where that would match a square (Brown's book tint is gold, for one). The defaults
+  (`:root`) are the green board's, exactly as before, with `--board-dot`, `--board-hover` and
+  `--board-check`. tests/app/skins.test.ts checks every theme on its squares as drawn (the texture's
+  mean composited over the tokens): the squares at least 14 apart (CIEDE2000; Ice, the palest, is 14.2),
+  coordinates at least the green board's 2.84:1, last move, selection and check at least 12 from both
+  squares, the last move and selection also 12 from the other square (a highlighted light square must not
+  pass for a dark one), each coach tint at least as far from both squares as on green (up to 12) and 12
+  from the other square, dots 8.5, every arrow and drawing color 9 (the green board's best-move arrow),
+  threat arrows 12. e2e/skins.spec.ts checks that the drawn squares match the catalog's texture means.
+- **Pieces**: one custom property per piece (`--piece-wk` … `--piece-bp`) per set. The default's are
+  chessground's own cburnett SVGs (decoded into `src/ui/pieces/cburnett/`, which the build inlines as
+  data URIs, as before); the others point at `public/pieces/<id>/<file>.svg`, so the browser fetches
+  only the chosen set's files, when a board first shows them. `.cg-wrap piece.<role>.<color>` (every
+  chessground board and the promotion picker) and `.piece-art[data-p='wk']` (the captured pieces in
+  PlayerStrip, `KingGlyph` in the New game and game-over sheets, the Menu's tiles) draw them.
+- **Silhouette sets** (`silhouette` in the catalog, Kiwen Suwi): black pieces with no light detail (the
+  lightest color in them under 2:1 against the dark theme's background; the unit test reads every set's
+  SVGs to keep the flag right). Off the board, on the dark theme's surfaces, a black piece of such a set
+  sits on a light chip (`--piece-chip`, transparent otherwise): the captured-pieces group in PlayerStrip
+  and the black king of `KingGlyph`. The other sets keep the hairline halo they always had.
+- Every set is in the web app's precache (`**/*.svg` under `pieces/`) and in dist-native/, so all work
+  offline; `THIRD-PARTY-LICENSES.txt` (vite.config.ts, from the catalog and each set's LICENSE.txt) and
+  About credit them all.
+
+**The picker** (`SkinsSheet({ open, board, pieces, onBoard, onPieces, onClose })`, opened by the Menu's
+"Board & pieces" row). The row (`data-id="board-pieces"`, under the theme picker) shows `SkinThumb` (a
+2x2 board in the current theme with the current set's white knight) and `skinsSummary` ("Brown board ·
+Chessnut pieces"). MenuSheet owns the open state and renders the sheet beside its own (not inside: a sheet
+is `position: fixed` and the Menu's panel is transformed), so it is a layer over the Menu: Escape, the X,
+a swipe or a tap outside close only it and the focus goes back to the Menu; it closes with the Menu.
+- **Preview** (`data-id="skins-preview"`): the app's own `Board`, read-only and taking no touch
+  (`pointer-events: none`, so a drag on it scrolls or closes the sheet), on `PREVIEW` (the QGD Orthodox
+  after Capablanca's freeing maneuver, 14…Nf6: every kind of piece for both sides, an open center, the last
+  move on a light and a dark square, no check), `role="img"` named by `previewLabel` ("Preview of the Brown
+  board with the Chessnut pieces"); beside it the two names and `pieceCredit` (artist · license). It is sticky
+  at the top of the scrolling body (the hairline moves under it once scrolled); where the sheet is short
+  and wide (`(orientation: landscape) and (max-height: 540px)`, or `data-fold='tabletop'`) it is a column
+  beside the pickers, at most 180 px so the tiles keep 44 px.
+- **Pickers** (`SkinPickers.tsx`): `BoardThemePicker` (5 columns; each tile two squares of its theme, the
+  texture at the board's scale) and `PieceSetPicker` (3 columns; the set's white knight on the current
+  board's light square and its black king on the dark one, the pairing where a set and a board can
+  blend, so a poor match shows before it is picked), radio groups named by their headings ("Board", "Pieces"),
+  each tile a 44 px+ `role="radio"` button named "Brown board" / "Chessnut pieces" (`boardThemeLabel`,
+  `pieceSetLabel`), with a roving tab stop. `stepChoice` (pure, tested) gives the arrow keys' choice
+  (→ ↓ next, ← ↑ previous, wrapping; Home, End), applied and focused. The choice has a ring in `--link`
+  (3:1 or more on both themes' tiles), a lighter tile and its name in bold. A tap calls `onBoard` /
+  `onPieces` (App: `chooseBoardTheme` / `choosePieceSet`), so the preview, the game board behind and
+  every other board change at once. Nothing in the sheet is ever locked.
 
 **Draw mode** (`drawColor` + `onDraw`). Chessground's own drawing needs a right mouse button or a
 modifier key, so the Board draws by touch itself: a layer (`DrawLayer`, `.board-draw`, z-index over
@@ -862,7 +944,8 @@ interface PlayerStripProps {
 - `MenuSheet({ open, settings, profile, canResign, onChange(partial), onResign, onExportPgn, onFlip, onNewGame, onClose, bots?, theme?, onThemeChange?, engine?, onRetryDualEngines?, selfTestHref?, offlineReady?, levels?, onSetLevel? })`:
   action tiles (flip, export, new game, resign with an inline confirmation), in-game toggles (coach, eval bar, best-move
   arrows, rate opponent's moves, sound), the Appearance picker
-  (with `theme` + `onThemeChange`), profile stats with "Set my level" (LevelPicker + confirmation, with `levels` + `onSetLevel`),
+  (with `theme` + `onThemeChange`) and, with `skins: { board, pieces, onBoard, onPieces }`, the "Board &
+  pieces" row that opens `SkinsSheet` over the Menu (see "Board and piece skins"), profile stats with "Set my level" (LevelPicker + confirmation, with `levels` + `onSetLevel`),
   recent games, the Engine section and About. Its callbacks do not close the sheet; App does.
   - `onOpenings?`: an "Openings" row under the action tiles (the Openings section opens over the Menu, which stays open
     under it).
@@ -2044,7 +2127,7 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
 
 ## Tests
 
-- `npm test`: Vitest unit tests in node, about 1,380 tests in 75 files (the one test in
+- `npm test`: Vitest unit tests in node, about 1,425 tests in 77 files (the one test in
   `tests/bot/calibration.slow.test.ts` is skipped unless `CALIBRATE=1`, see `npm run calibrate`). They
   cover pure logic, the engine layer against scripted transports, the controller against a fake
   engine and a scripted bot (`tests/helpers/fakeEngine.ts`), the store's view models, UI helpers, the
@@ -2058,7 +2141,18 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   whole), the layout each setting gives (Automatic's book and tabletop rules, a hinge mask, Keep the board
   off the fold with an assumed fold, and never on the outer display, phones or desktops, Use the whole
   screen, the board on the side away from the system UI, panes too small to split), `watchFold` re-reading
-  the safe areas without a resize, and the setting's storage. `tests/native/` covers src/native (platform flags, haptics,
+  the safe areas without a resize, and the setting's storage. `tests/app/skins.test.ts` covers the board and
+  piece skins: every piece set's 12 SVGs (safe: no scripts, handlers, embedded documents or outside
+  references; byte for byte the files its README's SHA-256 list records) with its README, credit and an
+  allowed license (LICENSE.txt where needed), nothing shipped that the catalog lacks, skins.css against the
+  catalogs, the green board's tokens unchanged, every theme's contrast on its squares as drawn (textures
+  composited; coordinates, dots, highlights, the coach's class tints, arrows; the checkerboard itself),
+  the silhouette flag against each set's SVG colors, the sets excluded for their licenses (never shipped,
+  a stored choice of one falls back), Chessnut's copyright file, the README's provenance (lila's copies,
+  no further changes) and pinned upstream commits, and the stored choice (storage missing or throwing, an
+  unknown id, the round trip, applied before the first render, all sets precached); `tests/ui/skinsSheet.test.ts` the picker (`stepChoice`, the names VoiceOver reads and the
+  Menu row writes, the credit, About's piece credits, the preview's position from its moves, and that no
+  skin is a Pro feature, on the paywall's list or behind a lock). `tests/native/` covers src/native (platform flags, haptics,
   the storage mirror, share, and the purchases contract against a fake Store plugin, including that
   the JavaScript and Swift names match); `tests/game/entitlements.test.ts` and `paywall.test.ts` cover
   Pro's state and the gating in the controller and the view models; `tests/game/explorer.test.ts` the
@@ -2150,9 +2244,10 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   check), the moves that end a game by rule, an engine line cut at a repetition, a disputed MultiPV score, and key
   moments (numbering from any start, the player's first, whose move).
 - `npm run e2e`: Playwright on the production build with the real engine, iPhone 15 Pro emulation,
-  79 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id` and `orientation: any`, iOS
+  84 tests. `e2e/pwa.spec.ts` (7) checks the PWA shell (manifest and its `id` and `orientation: any`, iOS
   tags and the launch images in both orientations, engine MIME
-  types, service worker and precache, offline, license notices served as files, full-screen layout);
+  types, service worker and precache (every piece set too), offline, license notices served as files,
+  full-screen layout);
   `e2e/game.spec.ts` (15) plays through the UI (moves by tapping squares, coach, hint, undo, flip,
   reload, resign, review, a game as Black, a mating promotion, the move list staying on the current
   move when a review starts or the phone is rotated, coach readability at six phone heights, a
@@ -2204,14 +2299,15 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   arrows beside the player's dashed ones), the bar on a short phone and in landscape (inside its strip, clear of the
   board), and the Openings section's Learn board (by position, Escape and the header's Done leaving Draw mode first,
   forgotten when the section closes).
-  `e2e/paywall.spec.ts` (10) runs against a second build made with `VITE_PAYWALL=1` (playwright.config.ts
+  `e2e/paywall.spec.ts` (12) runs against a second build made with `VITE_PAYWALL=1` (playwright.config.ts
   serves it on port 4174) and steers the mock store through `window.__mockStore`: the locked coach,
   Hint and Show best, the paywall and a purchase, cancelled / failed / pending (Ask to Buy) purchases,
   Restore Purchases (also cancelled and offline) and a refund, the locked key moments of Game Review (no Try again
   until Pro is bought),
   the explorer free with its engine locked (the switch's lock and paywall, no question, still rated, Escape closing the
   paywall and not the explorer under it), Draw mode free
-  (no lock or paywall, still rated), the opponent's move ratings (verdict free, explanation locked), About's privacy / terms / support links with Pro locked and unlocked, Escape over stacked sheets, and the Openings section (free browsing and playing, the guides and drills locked).
+  (no lock or paywall, still rated), the opponent's move ratings (verdict free, explanation locked), About's privacy / terms / support links with Pro locked and unlocked, Escape over stacked sheets, the Openings section (free browsing and playing, the guides and drills locked), and Board & pieces (no lock, applied
+  and stored with Pro locked, not on the paywall's list, named in its "Always free" line).
   `e2e/playthrough.spec.ts` (5): Draw mode while browsing (the bar's Back, and Final after the game, on top of
   everything; Report in Game Review ending Draw mode), resigning from the Menu (its cost, the focus in the game-over
   sheet, accuracy, the new rating's note, the X on top), the Menu's tiles at 320 points, the ⓘ on a move off the
@@ -2239,6 +2335,19 @@ Service worker (`vite.config.ts`, Workbox `generateSW`):
   and the game viewer, the self-test page and the centered boot splash, and the narrow windows (the learn,
   explore and drill boards at half the outer display's width in landscape, the step controls in two rows of
   three, Split View, the viewer's header).
+  `e2e/skins.spec.ts` (7): the board and piece skins (the default green board and Classic pieces, inlined;
+  Menu → Board & pieces opening over the Menu, its Wood and Chessnut changing the preview and the game board
+  behind it at once (squares, grain, coordinates, pieces, the last move), the credit, each tile's art (the
+  white knight on the light square, the black king on the dark one), Escape closing only the picker and the
+  Menu row's new summary, the Openings board, and after a reload the first piece drawn already Chessnut's
+  with only Chessnut's files fetched; an unknown stored skin falling back to the defaults), the drawn Wood,
+  Marble and Brown boards matching the catalog's texture means square by square and the coach's tints
+  following the board, Kiwen Suwi's light chip for black pieces on the dark theme only, the shipped license
+  notices (every set, Chessnut's copyright, no excluded set), the picker's accessibility (radio groups and VoiceOver names, one tab stop per group, 44 px
+  tiles, the arrow keys, Home and End applying, storing and focusing, Tab between the groups, the preview
+  staying put while the pickers scroll, Escape twice), and its layout at 375 x 667, in landscape (the
+  preview beside the pickers) and on the iPhone Duo's inner display (in the right-hand segment open like a
+  book, in the bottom half folded on a table; the fold emulated through the DevTools protocol).
   `E2E_REQUIRE_APP_SW=1` makes the PWA tests fail if the app does not register its service worker.
 - The native shell itself (Swift, Xcode project) is only compiled on macOS: `ios-build.yml` in CI, or
   Xcode on a Mac. Runtime checks in WKWebView need a device (see `docs/APP_STORE.md`, "Device

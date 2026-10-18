@@ -6,8 +6,9 @@
  * pending (Ask to Buy) purchases, Restore Purchases (also offline and cancelled), a refund, the
  * locked Game Review, the explorer (free, its engine locked), Draw mode (free), the opponent's move ratings (verdicts
  * free, explanations locked), threat alerts and "Show me" (locked) and an earlier game in the viewer (replay free,
- * comments and key moments locked), the always-reachable privacy policy, Escape over stacked sheets, and the Openings section
- * (browsing, the moves of any line, the move tree and playing free; guide text and drills locked).
+ * comments and key moments locked), the always-reachable privacy policy, Escape over stacked sheets, the Openings section
+ * (browsing, the moves of any line, the move tree and playing free; guide text and drills locked), and the board and
+ * piece styles (free: no lock, and not on the paywall's list).
  */
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
@@ -597,6 +598,40 @@ test.describe('Chess Coach Pro (paywall build)', () => {
     expect(await page.evaluate(() => (window as unknown as Win).__chessCoach.controller.store.isLive.value)).toBe(true);
     await expect(page.locator('.board cg-board piece.queen.white')).toHaveCount(1);
     await expect(page.locator('.app-player--bottom')).not.toContainText('Unrated');
+    expect(errors).toEqual([]);
+  });
+
+  test('board and piece styles are free: no lock, no paywall, and the paywall does not sell them', async ({ page }) => {
+    const errors = await open(page);
+    await page.getByRole('dialog', { name: 'New game' }).getByRole('button', { name: 'Close' }).tap();
+    const menu = await openMenu(page);
+    await expect(menu.locator('[data-id="pro-unlock"]')).toBeVisible(); // Pro is locked here
+    const row = menu.locator('[data-id="board-pieces"]');
+    await row.scrollIntoViewIfNeeded();
+    await expect(row.locator('.locked-icon-badge, [data-locked]')).toHaveCount(0);
+    await row.tap();
+    const picker = page.getByRole('dialog', { name: 'Board & pieces' });
+    await expect(picker).toBeVisible();
+    await expect(picker.locator('.locked-icon, .locked-icon-badge, [data-locked]')).toHaveCount(0);
+    await expect(picker).not.toContainText(/\bPro\b|Unlock/);
+    await picker.getByRole('radio', { name: 'Coral board' }).tap();
+    await picker.getByRole('radio', { name: 'Celtic pieces' }).tap();
+    await expect(page.locator('html')).toHaveAttribute('data-board', 'coral');
+    await expect(page.locator('html')).toHaveAttribute('data-pieces', 'celtic');
+    await expect(paywall(page)).toHaveCount(0);
+    expect(await page.evaluate(() => [localStorage.getItem('chesscoach.board'), localStorage.getItem('chesscoach.pieces')])).toEqual([
+      'coral',
+      'celtic',
+    ]);
+    await page.keyboard.press('Escape');
+    await expect(picker).toBeHidden();
+    // The paywall lists what Pro unlocks without them, and says they are always free.
+    await menu.locator('[data-id="pro-unlock"]').tap();
+    await expect(paywall(page)).toBeVisible();
+    await expect(paywall(page).locator('.paywall-list')).not.toContainText(/board|piece|style|theme/i);
+    await expect(paywall(page).locator('.paywall-free')).toContainText('board and piece styles');
+    await page.keyboard.press('Escape');
+    await expect(paywall(page)).toBeHidden();
     expect(errors).toEqual([]);
   });
 
