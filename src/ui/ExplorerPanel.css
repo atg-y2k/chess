@@ -530,3 +530,15 @@
     visibility: hidden;
   }
 }
+/*
+ * A very narrow column (a squat landscape window, such as the iPhone Duo's outer display on its
+ * side): the tag and the switch alone fit, the switch without its word (its name is still read out).
+ */
+@container panel (max-width: 280px) {
+  .xpanel-head:has(.xpanel-engine) .xpanel-from {
+    display: none;
+  }
+  .xpanel-head .xpanel-engine-word {
+    display: none;
+  }
+}

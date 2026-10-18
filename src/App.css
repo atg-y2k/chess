@@ -3,7 +3,10 @@
  *
  * `.app` is a size container, so the board can be sized from the space actually available:
  * portrait = as wide as the screen unless the height runs out; landscape / desktop = as tall as
- * the screen, with the panels in a column on the right.
+ * the screen, with the panels in a column on the right. Variants for short, wide windows (the
+ * iPhone Duo's outer display, Split View), big portrait screens (its inner display upright,
+ * iPads) and squat landscape ones, and the split along a foldable's fold (`:root[data-fold]`, set
+ * from src/layout/fold.ts), are at the end of the layout sections.
  */
 
 .app {
@@ -45,6 +48,11 @@
 .app[data-graph] {
   --app-graph-h: 38px;
 }
+/* The board with its strips (stage) and the rest (side): boxes of their own only on a split screen. */
+.app-stage,
+.app-side {
+  display: contents;
+}
 
 /* ---------------------------------------------------------------- players */
 
@@ -63,8 +71,14 @@
   grid-area: bottom;
 }
 .app-player .pstrip {
+  min-height: var(--app-strip-h);
   padding-left: 2px;
   padding-right: 2px;
+}
+/* A slimmer strip (short, wide windows) keeps the avatar inside it. */
+.app-player .pstrip-avatar {
+  width: min(36px, var(--app-strip-h) - 6px);
+  height: min(36px, var(--app-strip-h) - 6px);
 }
 
 /* ---------------------------------------------------------------- board */
@@ -298,6 +312,48 @@
     display: none;
   }
 }
+/*
+ * A strip too narrow for the Draw bar in one row (the tabletop layout's strip column, beside the
+ * board): two rows, the colors over Clear and Done, growing upward from the strip.
+ */
+@container player (max-width: 270px) {
+  .app-drawbar {
+    top: auto;
+    bottom: 0;
+  }
+  .app-drawbar .drawbar {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 2px;
+    padding: 4px 6px;
+  }
+  .app-drawbar .drawbar-clear {
+    margin-left: 0;
+  }
+}
+/*
+ * A strip narrower than any phone's (the squat landscape side column, the tabletop layout's column
+ * beside the board): "Unrated" always goes to the second row, so the name keeps its room, and the
+ * explorer's or Try again's tag shows its icon and ✕ alone (the frame around the board and the panel
+ * say the rest).
+ */
+@container player (max-width: 260px) {
+  .app-player .pstrip-top > .pstrip-unrated {
+    display: none;
+  }
+  .app-player .pstrip-caps-unrated {
+    display: block;
+  }
+  .app-explore-tag .app-explore-tag-label {
+    display: none;
+  }
+  .app-player:has(> .app-explore-tag) .pstrip {
+    padding-right: 64px;
+  }
+}
+:root[data-fold='tabletop'] .app-explore-tag .app-explore-tag-label {
+  display: inline;
+}
 /* "You (2000) Unrated" with the chip and the toggle side by side: "Unrated" goes to the second row. */
 @container player (max-width: 440px) {
   .app-player:has(> .app-chip):has(> .app-draw) .pstrip-top > .pstrip-unrated {
@@ -399,9 +455,63 @@
   bottom: 2px;
   z-index: 20;
   min-height: 0;
-  max-height: min(440px, 72cqh);
+  /* Never up over the opponent's strip (a narrow window, such as Split View's third). */
+  max-height: min(440px, 72cqh, 100cqh - var(--app-strip-h) - var(--app-graph-h) - var(--app-moves-h) - var(--app-tools-h) - 8px);
   box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
   animation: app-peek-in 0.22s cubic-bezier(0.3, 0.7, 0.2, 1) both;
+}
+/*
+ * Portrait: the floating summary leaves whole ranks of the board above it (the nearest number:
+ * about 3 on a 6.1" iPhone), or none on a short, wide window (the iPhone Duo's outer display,
+ * Split View), where the room left would be a sliver: it then covers the board up to the
+ * opponent's strip. Never a band of pieces cut in half. Where round() is missing, the max-height
+ * above keeps it under the strip.
+ *
+ * The board's edge, as a length resolved on the panel (registered, so it computes where it is set,
+ * against .app: in the summary, `cqw` would measure the panel, only a column beside the move list
+ * on a big portrait screen), as drawn: snapped down to whole device pixels per square
+ * (snapBoardSize in src/ui/Board.tsx), a step of 8 device px. The summary's top edge: the panel's
+ * top less the bottom strip and the board, plus whole ranks (6px: its bottom and margin). (Not on a
+ * split screen: there the summary keeps to its own segment.)
+ */
+@property --app-board-len {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+@media (aspect-ratio < 5/4) {
+  @supports (top: round(nearest, 10px, 3px)) {
+    :root:not([data-fold]) .app-panel[data-float] {
+      --app-board-len: var(--app-board);
+    }
+    :root:not([data-fold]) .app-panel[data-float] > .review {
+      --app-board-drawn: round(down, var(--app-board-len), var(--app-board-step, 8px));
+      top: calc(
+        -1 * (var(--app-board-drawn) + var(--app-strip-h)) +
+          round(nearest, max(0px, 100% - 6px - min(440px, 72cqh) + var(--app-board-drawn) + var(--app-strip-h)), var(--app-board-drawn) / 8)
+      );
+      margin-top: 0;
+      max-height: none;
+    }
+  }
+}
+@media (min-resolution: 2dppx) {
+  .app {
+    --app-board-step: 4px;
+  }
+}
+@media (min-resolution: 3dppx) {
+  .app {
+    --app-board-step: calc(8px / 3);
+  }
+}
+
+/* A very narrow side column (squat landscape windows): the coach's avatar gives its room to the text. */
+@container panel (max-width: 250px) {
+  .coach:not(.coach--collapsed) > .coach-avatar,
+  .coach:not(.coach--collapsed) > .coach-bubble::before {
+    display: none;
+  }
 }
 
 /* Narrow side column (landscape phones): the review header drops its "Accuracy" captions. */
@@ -499,6 +609,457 @@
     top: calc(-1 * var(--app-strip-h));
     max-height: none;
   }
+  /* The strip it covers stays out of sight (its avatar would peek past the summary's round corner). */
+  :root:not([data-fold]) .app:has(.app-panel[data-float]) .app-player--top {
+    visibility: hidden;
+  }
+}
+
+/* ---------------------------------------------------------------- short, wide portrait windows */
+
+/*
+ * Portrait, but not much taller than wide (the iPhone Duo's outer display, the halves of Split View
+ * on its inner one): the board runs out of height with width to spare. The eval graph moves beside
+ * the move list instead of taking a row of its own, and the strips are a little slimmer, so the
+ * board gets about 45 px more (outer display: 315 → 363). Phones are narrower than 5:8 and keep
+ * their full-width board as it is.
+ */
+@media (aspect-ratio >= 5/8) and (aspect-ratio < 5/4) {
+  .app {
+    --app-strip-h: 40px;
+    /* A small graph (it is the shape that tells), so the moves and the opening's chip keep their room. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 120px);
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'top top'
+      'board board'
+      'bottom bottom'
+      'panel panel'
+      'moves graph'
+      'tools tools';
+  }
+  .app[data-graph] {
+    --app-graph-h: 0px;
+  }
+  .app:not([data-graph]) .app-moves {
+    grid-column: 1 / -1;
+  }
+  /* The slimmer strip holds its two lines (38 px) without its padding: exactly as tall as the board's sum assumes. */
+  .app-player .pstrip {
+    height: var(--app-strip-h);
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .app-graph {
+    align-self: center;
+    padding: 3px 10px 3px 2px;
+  }
+  /* The opening's name whole ("Englund Gambit"), the moves scrolling beside it. */
+  .app-moves > .app-opening-chip {
+    flex-shrink: 0;
+    max-width: 50%;
+  }
+}
+/* ---------------------------------------------------------------- big portrait screens */
+
+/*
+ * A big portrait screen (the iPhone Duo's inner display upright, iPads): the coach and the move list
+ * side by side under the board, so both get real room. On the Duo the board gives up a little
+ * (533 → 455 px, still a third bigger than on a 6.1" iPhone) for a coach that shows its whole
+ * verdict, its explanation and its buttons instead of one folded line.
+ */
+@media (aspect-ratio < 5/4) and (width >= 560px) and (height >= 780px) {
+  .app {
+    --app-strip-h: 44px;
+    /* The move list is beside the coach: no row of its own. The coach row is at least this tall. */
+    --app-moves-h: 0px;
+    --app-coach-min: 176px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, clamp(190px, 38%, 320px));
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'top top'
+      'board board'
+      'bottom bottom'
+      'panel moves'
+      'graph graph'
+      'tools tools';
+  }
+  .app[data-graph] {
+    --app-graph-h: 38px;
+  }
+  .app-graph {
+    align-self: auto;
+    padding: 3px 10px;
+  }
+  /*
+   * Beside the coach the move list wraps into rows and scrolls up and down (MoveList keeps the
+   * current move in view either way), the opening's chip under it; the box keeps its height, so
+   * nothing moves. (The same on a split screen: see "foldable screens".)
+   */
+  .app-moves {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 4px 0 2px;
+  }
+  .app-moves > .mlist {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    padding: 4px 10px 6px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 6px, #000 calc(100% - 10px), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 6px, #000 calc(100% - 10px), transparent 100%);
+  }
+  .app-moves[data-opening] {
+    align-items: stretch;
+  }
+  .app-moves > .app-opening-chip {
+    flex: none;
+    align-self: flex-start;
+    max-width: calc(100% - 20px);
+    margin: 2px 10px 6px;
+  }
+}
+
+/* ---------------------------------------------------------------- squat landscape windows */
+
+/*
+ * Landscape, but hardly wider than tall and short (the iPhone Duo's outer display on its side): a
+ * side column wide enough for the toolbar would leave the board ~235 px. The toolbar runs along the
+ * bottom under both columns instead, so the column can be narrower and the board bigger (≈ 290 px).
+ */
+@media (aspect-ratio >= 5/4) and (aspect-ratio <= 3/2) and (height <= 520px) {
+  .app {
+    --app-side: clamp(236px, 34cqw, 420px);
+    --app-board: min(
+      100cqh - var(--app-tools-h) - 2 * var(--app-edge),
+      100cqw - var(--app-side) - var(--app-bar) - 3 * var(--app-edge) - 12px,
+      900px
+    );
+    grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
+    grid-template-areas:
+      'board top'
+      'board panel'
+      'board graph'
+      'board moves'
+      'board bottom'
+      'tools tools';
+    padding: 0;
+  }
+  .app-board {
+    grid-row: 1 / span 5;
+    padding: var(--app-edge);
+  }
+  .app-tools .toolbar {
+    border-top: 1px solid var(--border);
+  }
+}
+
+/* ---------------------------------------------------------------- foldable screens */
+
+/*
+ * A foldable's inner display (the iPhone Duo) split along its fold (src/layout/fold.ts puts
+ * `data-fold` and the fold's position, `--fold-start` / `--fold-end` in viewport px, on <html>).
+ * Every layout keeps `--fold-clear` clear of the fold on both sides.
+ *
+ * Open like a book (`book`): the board with its strips in one segment (the left one, unless the
+ * system UI is along the left edge: `data-fold-board='end'`), centered and as big as the segment
+ * allows; the coach (or explorer, or review) panel, the eval graph, a move list of several rows and
+ * the toolbar in the other, inside its safe area.
+ *
+ * Half folded (`tabletop`): the board in the top half with the strips beside it, everything else in
+ * the bottom half (the coach and the move list side by side, the graph, the toolbar).
+ */
+:root {
+  --fold-clear: 8px;
+}
+:root[data-fold] .app {
+  padding: 0;
+  column-gap: 0;
+  row-gap: 0;
+  justify-content: stretch;
+  align-content: stretch;
+  /* Board edge, measured in the stage (cq units resolve against it). */
+  --app-board: min(
+    100cqw - 2 * var(--app-edge) - var(--app-bar),
+    100cqh - 2 * var(--app-strip-h) - 2 * var(--app-edge),
+    900px
+  );
+}
+:root[data-fold='book'] .app {
+  --app-strip-h: 44px;
+  grid-template-columns:
+    calc(var(--fold-start) - var(--safe-left) - var(--fold-clear))
+    calc(var(--fold-end) - var(--fold-start) + 2 * var(--fold-clear))
+    minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: 'stage . side';
+}
+:root[data-fold='book'][data-fold-board='end'] .app {
+  grid-template-areas: 'side . stage';
+}
+:root[data-fold='tabletop'] .app {
+  --app-strip-h: 44px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows:
+    calc(var(--fold-start) - var(--safe-top) - var(--fold-clear))
+    calc(var(--fold-end) - var(--fold-start) + 2 * var(--fold-clear))
+    minmax(0, 1fr);
+  grid-template-areas:
+    'stage'
+    '.'
+    'side';
+}
+
+/* The move list in rows (as beside the coach on a big portrait screen). */
+:root[data-fold] .app-moves {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+:root[data-fold] .app-moves > .mlist {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  padding: 4px 10px 6px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 6px, #000 calc(100% - 10px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 6px, #000 calc(100% - 10px), transparent 100%);
+}
+:root[data-fold] .app-moves[data-opening] {
+  align-items: stretch;
+}
+:root[data-fold] .app-moves > .app-opening-chip {
+  flex: none;
+  align-self: flex-start;
+  max-width: calc(100% - 20px);
+  margin: 2px 10px 6px;
+}
+
+/* The stage: the board and its strips. */
+:root[data-fold] .app-stage {
+  grid-area: stage;
+  container: stage / size;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+:root[data-fold='book'] .app-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+:root[data-fold] .app-stage > .app-player {
+  width: calc(var(--app-board) + var(--app-bar));
+  max-width: 100%;
+  justify-self: center;
+}
+:root[data-fold] .app-stage > .app-board {
+  align-self: center;
+  padding: 0 var(--app-edge);
+}
+/* Tabletop: the strips beside the board, at its top and bottom. */
+:root[data-fold='tabletop'] .app {
+  --app-board: min(
+    100cqh - 2 * var(--app-edge),
+    100cqw - var(--app-bar) - 2 * var(--app-edge) - 12px - var(--app-fold-strips),
+    900px
+  );
+  --app-fold-strips: clamp(190px, 34cqw, 300px);
+}
+:root[data-fold='tabletop'] .app-stage {
+  /* Clear of the screen's edge on the strips' side too. */
+  padding-right: var(--app-edge);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'board top'
+    'board .'
+    'board bottom';
+  align-content: center;
+  column-gap: 12px;
+}
+:root[data-fold='tabletop'] .app-stage > .app-board {
+  grid-area: board;
+}
+:root[data-fold='tabletop'] .app-stage > .app-player {
+  width: auto;
+  max-width: none;
+  justify-self: stretch;
+}
+
+/* The side: everything else, in a column (book) or with the coach and the moves side by side (tabletop). */
+:root[data-fold] .app-side {
+  grid-area: side;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+:root[data-fold] .app-side > * {
+  flex: none;
+}
+:root[data-fold] .app-side > .app-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-top: 8px;
+}
+/*
+ * Book: the coach gets a steady box (up to 340 px, so the text never jumps), the move list the rest
+ * (at least three rows and the opening's chip under them); Game Review's report takes what it needs.
+ */
+:root[data-fold='book'] .app-side > .app-panel {
+  flex: 1 1 300px;
+  max-height: 340px;
+}
+:root[data-fold='book'] .app-side > .app-panel[data-review] {
+  flex-grow: 4;
+  max-height: none;
+}
+:root[data-fold='book'] .app-side > .app-moves {
+  flex: 1 1 186px;
+  min-height: 140px;
+}
+:root[data-fold] .app-side > .app-panel > .coach,
+:root[data-fold] .app-side > .app-panel > .xpanel {
+  max-height: none;
+}
+:root[data-fold='tabletop'] .app-side > .app-panel > .coach,
+:root[data-fold='tabletop'] .app-side > .app-panel > .xpanel {
+  max-height: 280px;
+}
+:root[data-fold] .app-tools .toolbar {
+  border-top: 1px solid var(--border);
+}
+:root[data-fold='tabletop'] .app-side {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, clamp(190px, 38%, 320px));
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    'panel moves'
+    'graph graph'
+    'tools tools';
+}
+:root[data-fold='tabletop'] .app-side > .app-panel {
+  grid-area: panel;
+}
+:root[data-fold='tabletop'] .app-side > .app-moves {
+  grid-area: moves;
+  padding-top: 8px;
+}
+:root[data-fold='tabletop'] .app-side > .app-graph {
+  grid-area: graph;
+}
+:root[data-fold='tabletop'] .app-side > .app-tools {
+  grid-area: tools;
+}
+:root[data-fold] .app-graph {
+  align-self: auto;
+  padding: 3px 10px;
+}
+/* On a split screen the review's report keeps to its own segment (it scrolls in its box). */
+:root[data-fold] .app-panel[data-float] > .review {
+  position: relative;
+  top: auto;
+  bottom: auto;
+  max-height: none;
+  box-shadow: none;
+  animation: none;
+}
+/*
+ * Tabletop: the strips are a narrow column beside the board, with room between them. The name keeps
+ * its place (and "Unrated" its second row, above): the explorer's and Try again's tag hangs whole
+ * under the top strip, and the "Back to game" chip sits over the bottom strip, not over the name.
+ */
+:root[data-fold='tabletop'] .app-player:has(> .app-explore-tag) .pstrip {
+  padding-right: 2px;
+}
+:root[data-fold='tabletop'] .app-player:has(> .app-explore-tag) .pstrip-status {
+  display: flex;
+}
+:root[data-fold='tabletop'] .app-player > .app-explore-tag {
+  top: calc(100% + 10px);
+  right: auto;
+  left: 2px;
+  transform: none;
+  animation: app-fade-in 0.2s ease both;
+}
+:root[data-fold='tabletop'] .app-player--bottom > .app-chip {
+  top: auto;
+  bottom: calc(100% + 10px);
+  right: 4px;
+  transform: none;
+  animation: app-fade-in 0.2s ease both;
+}
+/* Tabletop: Draw mode's tip goes above its bar (beside the board, not across the fold). */
+:root[data-fold='tabletop'] .app-drawbar .drawbar-tip {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+:root[data-fold='tabletop'] .app-drawbar .drawbar-tip::before {
+  top: auto;
+  bottom: -5px;
+}
+/* Book: Draw mode's tip goes under its bar again (below the board, not over it). */
+:root[data-fold='book'] .app-drawbar .drawbar-tip {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+:root[data-fold='book'] .app-drawbar .drawbar-tip::before {
+  top: -5px;
+  bottom: auto;
+}
+/*
+ * Messages, the error screen and the Openings section's loader show in the panel's segment, clear
+ * of the fold (tabletop: the loader in the top half, the error with its buttons in the bottom one).
+ * The boot splash stays centered on the whole screen, where the launch screen before it (the App
+ * Store app's, which fades out over it, src/native/statusbar.ts, and the web app's launch images)
+ * shows the mark: it is up for a moment and has nothing to tap, so crossing the fold costs nothing
+ * and moving would make the mark jump sideways.
+ */
+:root[data-fold='book']:not([data-fold-board='end']) :is(.app-toast-host, .app-error) {
+  left: calc(var(--fold-end) + var(--fold-clear));
+}
+:root[data-fold='book'][data-fold-board='end'] :is(.app-toast-host, .app-error) {
+  right: calc(100% - var(--fold-start) + var(--fold-clear));
+}
+/* The toast's edge at the fold needs no safe area (the system UI is along the other one). */
+:root[data-fold='book']:not([data-fold-board='end']) .app-toast-host {
+  padding-left: 16px;
+}
+:root[data-fold='book'][data-fold-board='end'] .app-toast-host {
+  padding-right: 16px;
+}
+:root[data-fold='tabletop'] .app-error {
+  top: calc(var(--fold-end) + var(--fold-clear));
+}
+:root[data-fold='book']:not([data-fold-board='end']) .openings-shell-loading {
+  padding-left: calc(var(--fold-end) + var(--fold-clear));
+}
+:root[data-fold='book'][data-fold-board='end'] .openings-shell-loading {
+  padding-right: calc(100% - var(--fold-start) + var(--fold-clear));
+}
+/*
+ * Tabletop: as tall as the top half, from under the status bar (the shell's padding) to the fold;
+ * not from 100dvh, which iOS standalone mode reports short (src/styles/app.css).
+ */
+:root[data-fold='tabletop'] .openings-shell-loading {
+  flex: none;
+  height: calc(var(--fold-start) - var(--fold-clear) - var(--safe-top));
 }
 
 /* ---------------------------------------------------------------- boot splash */
@@ -691,7 +1252,8 @@
   z-index: 120;
   display: flex;
   justify-content: center;
-  padding: 0 16px;
+  /* Clear of the side safe areas (a landscape phone's Dynamic Island, the Duo's system UI). */
+  padding: 0 calc(var(--safe-right) + 16px) 0 calc(var(--safe-left) + 16px);
   pointer-events: none;
 }
 .app-toast {

@@ -78,8 +78,11 @@ const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\
 const THEME = '#1d1c1a';
 
 /**
- * iOS launch images in public/splash/ (portrait, dark + light), as [CSS width, CSS height, DPR].
- * iOS only shows one whose media query matches the device exactly; others get a plain screen.
+ * iOS launch images in public/splash/ (portrait and landscape, dark + light), as [CSS width, CSS
+ * height, DPR] in portrait. iOS only shows one whose media query matches the device exactly; others
+ * get a plain screen. (The app turns with the device, so a launch in landscape gets its own image:
+ * apple-splash-<scheme>-<height × DPR>x<width × DPR>.png. The iPhone Duo's displays go here once
+ * their point sizes are known; see src/layout/fold.ts. scripts/make-splash.mjs makes the images.)
  */
 const SPLASH_SCREENS: [number, number, number][] = [
   [375, 812, 3], // iPhone X, XS, 11 Pro, 12 mini, 13 mini
@@ -99,18 +102,21 @@ function appleSplashScreens(): Plugin {
       order: 'post',
       handler(_html, ctx): HtmlTagDescriptor[] {
         if (!/(^|[\\/])index\.html$/.test(ctx.filename)) return []; // not the dev gallery page
+        // device-width and device-height are the portrait ones in either orientation.
         return SPLASH_SCREENS.flatMap(([w, h, dpr]) =>
-          (['dark', 'light'] as const).map((scheme) => ({
-            tag: 'link',
-            injectTo: 'head' as const,
-            attrs: {
-              rel: 'apple-touch-startup-image',
-              href: `${base}splash/apple-splash-${scheme}-${w * dpr}x${h * dpr}.png`,
-              media:
-                `(device-width: ${w}px) and (device-height: ${h}px) and (-webkit-device-pixel-ratio: ${dpr}) ` +
-                `and (orientation: portrait) and (prefers-color-scheme: ${scheme})`,
-            },
-          })),
+          (['portrait', 'landscape'] as const).flatMap((orientation) =>
+            (['dark', 'light'] as const).map((scheme) => ({
+              tag: 'link',
+              injectTo: 'head' as const,
+              attrs: {
+                rel: 'apple-touch-startup-image',
+                href: `${base}splash/apple-splash-${scheme}-${orientation === 'portrait' ? `${w * dpr}x${h * dpr}` : `${h * dpr}x${w * dpr}`}.png`,
+                media:
+                  `(device-width: ${w}px) and (device-height: ${h}px) and (-webkit-device-pixel-ratio: ${dpr}) ` +
+                  `and (orientation: ${orientation}) and (prefers-color-scheme: ${scheme})`,
+              },
+            })),
+          ),
         );
       },
     },
@@ -243,6 +249,8 @@ function sourceMatchesBuild(): Plugin {
  * version from package.json. Rewrites PRODUCT_BUNDLE_IDENTIFIER and MARKETING_VERSION in
  * ios/App/App.xcodeproj/project.pbxproj and CFBundleDisplayName in ios/App/App/Info.plist when they
  * differ (and says so), so a rename or a version bump is one edit plus `npm run build:native`.
+ * Nothing else is touched: the orientations, multitasking and launch screen settings in Info.plist
+ * (see ios/README-native.md, "Orientations, multitasking and the iPhone Duo") stay as they are.
  */
 function nativeProjectSettings(): Plugin {
   /** The App target's build configurations (Debug, Release) in project.pbxproj. */
@@ -360,7 +368,9 @@ export default defineConfig({
         start_url: '.',
         scope: '.',
         display: 'standalone',
-        orientation: 'portrait',
+        // The layout follows the window in any orientation (phones in landscape, the iPhone Duo's
+        // displays, Split View): see src/App.css.
+        orientation: 'any',
         theme_color: THEME,
         background_color: THEME,
         icons: [

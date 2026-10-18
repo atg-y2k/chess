@@ -329,6 +329,23 @@
     padding-bottom: 7px;
   }
 }
+/* The same in the bottom half of a screen split along its fold (tabletop: about 400 px tall). */
+:root[data-fold='tabletop'] .paywall-mark {
+  width: 52px;
+  height: 52px;
+  border-radius: 13px;
+}
+:root[data-fold='tabletop'] .paywall-title {
+  margin-top: 12px;
+  font-size: 22px;
+}
+:root[data-fold='tabletop'] .paywall-list {
+  margin-top: 12px;
+}
+:root[data-fold='tabletop'] .paywall-item {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
 
 :root[data-theme='light'] .paywall-mark {
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);

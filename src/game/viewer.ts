@@ -259,6 +259,8 @@ export interface ViewerView {
 /** What the view model needs besides the viewer. */
 export interface ViewerContext {
   locked: ReadonlySet<ProFeature>;
+  /** Now (ms since the epoch: the controller's clock), for the date in the facts ("Today"); default: the real clock. */
+  now?: number;
   /** The Draw bar's color (the app's, kept for the session). */
   drawColor: DrawColor;
   /**
@@ -316,7 +318,7 @@ export function viewerView(v: GameViewer, ctx: ViewerContext): ViewerView {
   // Once every move is checked, the report's own figure (the record may hold an older one).
   const accuracy = summary?.accuracy[human] ?? r.accuracy ?? null;
   const facts = [
-    formatGameDate(r.date),
+    formatGameDate(r.date, ctx.now != null ? new Date(ctx.now) : undefined),
     r.reason,
     accuracy != null ? `Accuracy ${Math.round(accuracy)}%` : '',
     gameKind(v) ?? '',

@@ -221,6 +221,24 @@
     padding-right: 0;
   }
 }
+/* Portrait: the floating summary stops under the header and the opponent's strip (App.css). */
+@media (aspect-ratio < 5/4) {
+  .viewer-app .app-panel[data-float] > .review {
+    max-height: min(
+      440px,
+      72cqh,
+      100cqh - var(--viewer-head-h) - var(--app-strip-h) - var(--app-graph-h) - var(--app-moves-h) - var(--app-tools-h) - 8px
+    );
+  }
+}
+/* Whole ranks of the board above it, or none (App.css sets its top, from the board's). */
+@media (aspect-ratio < 5/4) {
+  @supports (top: round(nearest, 10px, 3px)) {
+    :root:not([data-fold]) .viewer-app .app-panel[data-float] > .review {
+      max-height: none;
+    }
+  }
+}
 /* Not the game: a frame in the link color around the board (like the explorer's and Try again's). */
 .viewer-app .app-board-cell > .board-host > .board {
   box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--link) 70%, transparent);
@@ -231,4 +249,138 @@
 }
 .viewer-app[data-drawing] .viewer-board {
   touch-action: none;
+}
+
+/*
+ * The game screen's layout variants (App.css), with the header: short, wide portrait windows (the
+ * graph beside the moves), big portrait screens (the comment and the moves side by side), squat
+ * landscape ones (the toolbar along the bottom), and a screen split along its fold (the header heads
+ * the panel's side; tabletop: the bottom half).
+ */
+@media (aspect-ratio >= 5/8) and (aspect-ratio < 5/4) {
+  .app.viewer-app {
+    grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'head head'
+      'top top'
+      'board board'
+      'bottom bottom'
+      'panel panel'
+      'moves graph'
+      'tools tools';
+  }
+}
+@media (aspect-ratio < 5/4) and (width >= 560px) and (height >= 780px) {
+  .app.viewer-app {
+    grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'head head'
+      'top top'
+      'board board'
+      'bottom bottom'
+      'panel moves'
+      'graph graph'
+      'tools tools';
+  }
+}
+@media (aspect-ratio >= 5/4) and (aspect-ratio <= 3/2) and (height <= 520px) {
+  .app.viewer-app {
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto auto;
+    grid-template-areas:
+      'board head'
+      'board top'
+      'board panel'
+      'board graph'
+      'board moves'
+      'board bottom'
+      'tools tools';
+  }
+  .viewer-app .app-board {
+    grid-row: 1 / span 6;
+  }
+  /*
+   * The header in the narrow side column (236 px), two lines between Back and the share button: the
+   * title across the top, so "Won against Rocco" keeps one line; under it the facts on one line
+   * (cut with "…" when long: the date shows first) and the rating badge. About 50 px tall, so the
+   * coach's comment keeps its room.
+   */
+  .viewer-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      'back main main share'
+      'back facts rating share';
+    align-content: center;
+    column-gap: 4px;
+    row-gap: 1px;
+    min-height: 50px;
+    padding: 3px 0;
+  }
+  .viewer-title {
+    display: contents;
+  }
+  .viewer-back {
+    grid-area: back;
+  }
+  .viewer-title-main {
+    grid-area: main;
+    align-self: end;
+    font-size: 15px;
+  }
+  .viewer-facts {
+    grid-area: facts;
+    display: block;
+    align-self: start;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .viewer-fact:not(:last-child)::after {
+    margin-right: 6px;
+  }
+  .viewer-share {
+    grid-area: share;
+    align-self: center;
+  }
+  .viewer-rating {
+    grid-area: rating;
+    flex-direction: row;
+    align-items: baseline;
+    align-self: start;
+    gap: 3px;
+    min-width: 0;
+    padding-right: 0;
+  }
+  .viewer-delta {
+    font-size: 13px;
+  }
+  .viewer-rating,
+  .viewer-facts {
+    line-height: 16px;
+  }
+}
+:root[data-fold='book'] .app.viewer-app {
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    'stage . head'
+    'stage . side';
+}
+:root[data-fold='book'][data-fold-board='end'] .app.viewer-app {
+  grid-template-areas:
+    'head . stage'
+    'side . stage';
+}
+:root[data-fold='tabletop'] .app.viewer-app {
+  grid-template-rows:
+    calc(var(--fold-start) - var(--safe-top) - var(--fold-clear))
+    calc(var(--fold-end) - var(--fold-start) + 2 * var(--fold-clear))
+    auto
+    minmax(0, 1fr);
+  grid-template-areas:
+    'stage'
+    '.'
+    'head'
+    'side';
 }

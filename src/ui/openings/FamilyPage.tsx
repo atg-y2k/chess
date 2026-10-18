@@ -22,7 +22,7 @@ export const VARIATIONS_SHOWN = 8;
 export function FamiliesPage({ ctx, page }: { ctx: PageContext; page: FamiliesPageState }) {
   // In the page's entry, so Back from an opening returns to the same list (and scroll position).
   const filter = page.side ?? 'all';
-  const setFilter = (v: 'all' | 'w' | 'b') => updatePage('families', (p) => ({ ...p, side: v === 'all' ? undefined : v }));
+  const setFilter = (v: 'all' | 'w' | 'b') => updatePage('families', (p) => ({ ...p, side: v === 'all' ? undefined : v }), page.key);
   const list = families().filter((f) => filter === 'all' || f.side === filter);
   return (
     <div class="op-families">
@@ -314,7 +314,7 @@ function FamilyBody({ ctx, page, family: f }: { ctx: PageContext; page: FamilyPa
             class="op-more"
             data-id="show-all"
             aria-expanded={page.showAll ? 'true' : 'false'}
-            onClick={() => updatePage('family', (p) => ({ ...p, showAll: !p.showAll }))}
+            onClick={() => updatePage('family', (p) => ({ ...p, showAll: !p.showAll }), page.key)}
           >
             {page.showAll ? 'Show fewer' : `Show all ${lines.length}`}
           </button>

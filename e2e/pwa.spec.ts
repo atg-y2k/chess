@@ -114,7 +114,8 @@ test.describe('PWA shell', () => {
     expect(manifest.short_name).toBe('Chess Coach');
     expect(manifest.description.length).toBeGreaterThan(20);
     expect(manifest.display).toBe('standalone');
-    expect(manifest.orientation).toBe('portrait');
+    // Any orientation: the layout follows the window (phones in landscape, foldables, Split View).
+    expect(manifest.orientation).toBe('any');
     expect(manifest.theme_color).toBe('#1d1c1a');
     expect(manifest.background_color).toBe('#1d1c1a');
 
@@ -162,17 +163,24 @@ test.describe('PWA shell', () => {
       expect(res.headers()['content-type']).toMatch(/image\/(svg\+xml|x-icon|vnd\.microsoft\.icon)/);
     }
 
-    // Launch images: one per device size and colour scheme, sized device-width x DPR.
+    // Launch images: one per device size, orientation and colour scheme, sized device-width x DPR
+    // (turned for landscape: device-width and device-height are the portrait ones either way).
     const splashes = await page
       .locator('link[rel="apple-touch-startup-image"]')
       .evaluateAll((els) => els.map((e) => ({ href: e.getAttribute('href') ?? '', media: e.getAttribute('media') ?? '' })));
-    expect(splashes.some((s) => s.media.includes('(device-width: 393px) and (device-height: 852px)'))).toBe(true);
+    for (const orientation of ['portrait', 'landscape']) {
+      expect(
+        splashes.some((s) => s.media.includes('(device-width: 393px) and (device-height: 852px)') && s.media.includes(`(orientation: ${orientation})`)),
+        orientation,
+      ).toBe(true);
+    }
     for (const { href, media } of splashes) {
       const [, w, h, dpr] = /device-width: (\d+)px\) and \(device-height: (\d+)px\) and \(-webkit-device-pixel-ratio: (\d)/.exec(media) ?? [];
       const res = await page.request.get(new URL(href, page.url()).href);
       expect(res.status(), href).toBe(200);
       const info = pngInfo(await res.body());
-      expect([info.width, info.height], href).toEqual([Number(w) * Number(dpr), Number(h) * Number(dpr)]);
+      const size = [Number(w) * Number(dpr), Number(h) * Number(dpr)];
+      expect([info.width, info.height], href).toEqual(media.includes('(orientation: landscape)') ? size.reverse() : size);
     }
   });
 

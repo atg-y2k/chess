@@ -5,11 +5,18 @@
  * app, which have no browser back gesture) a swipe from the left edge to go back.
  *
  * Pages: Home, All openings, a family, a line (Learn), Explore by moves, a drill. See their files.
+ *
+ * On a screen split along a foldable's fold (the iPhone Duo's inner display, src/layout/fold.ts),
+ * the text pages show two at a time, one per segment: the list (Home, All openings) and the page it
+ * opened beside it, each in a pane with its own bar and scroll; a choice in the list replaces the
+ * page beside it. The board pages keep one page, with the board in the first segment (Openings.css).
  */
+import type { JSX, RefObject } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { AnalysisService } from '../../engine/AnalysisService';
 import type { Entitlements } from '../../game/entitlements';
 import type { Color, GameSettings } from '../../game/types';
+import type { FoldLayoutKind } from '../../layout/fold';
 import { isNative } from '../../native/platform';
 import { findLine, getFamily, search } from '../../openings/catalog';
 import {
@@ -22,13 +29,15 @@ import {
   openingsLoadFailedText,
   openOpenings,
   pushPage,
+  pushPageOver,
   rememberScroll,
   replacePage,
+  type NavDirection,
   setOpeningsShown,
   takeNamedTarget,
   type OpeningsPage,
 } from '../../openings/session';
-import { IconChevronLeft } from '../icons';
+import { IconBook, IconChevronLeft } from '../icons';
 import { DrillPage } from './DrillPage';
 import { FamiliesPage, FamilyPage } from './FamilyPage';
 import { HomePage } from './HomePage';
@@ -56,6 +65,11 @@ export interface OpeningsViewProps {
   onClose: () => void;
   /** The section is the topmost layer (for keys). */
   isTop: () => boolean;
+  /**
+   * How the screen is split along a foldable's fold (src/layout/fold.ts): 'book' (side by side) or
+   * 'tabletop' (top and bottom) shows the text pages two at a time, one per segment. Default 'none'.
+   */
+  split?: FoldLayoutKind;
 }
 
 /** The page's title in the navigation bar. */
@@ -185,7 +199,24 @@ export function OpeningsLoading({ failed, onRetry }: { failed: boolean; onRetry:
   );
 }
 
-function NavBar({ title, onBack, backLabel, onClose }: { title: string; onBack: (() => void) | null; backLabel?: string; onClose: () => void }) {
+/**
+ * The bar over a page: Back (with the previous page's title), the title, Done. On a split screen each
+ * pane has one (the list's: Back and its title; the page beside it: its title and Done, or Done on
+ * the list's bar when the panes are stacked); `main` marks the title of the page on top.
+ */
+function NavBar({
+  title,
+  main = true,
+  onBack,
+  backLabel,
+  onClose,
+}: {
+  title: string | null;
+  main?: boolean;
+  onBack: (() => void) | null;
+  backLabel?: string;
+  onClose: (() => void) | null;
+}) {
   return (
     <header class="op-nav">
       <div class="op-nav-side">
@@ -196,14 +227,22 @@ function NavBar({ title, onBack, backLabel, onClose }: { title: string; onBack: 
           </button>
         )}
       </div>
-      <h1 class="op-nav-title" data-id="openings-title">
-        {title}
-      </h1>
+      {title === null ? (
+        <div class="op-nav-title" />
+      ) : main ? (
+        <h1 class="op-nav-title" data-id="openings-title">
+          {title}
+        </h1>
+      ) : (
+        <h2 class="op-nav-title">{title}</h2>
+      )}
       <div class="op-nav-side op-nav-side--end">
         {/* In Draw mode (Learn, Tree) it leaves Draw mode first, as Escape does: the Draw bar has its own Done. */}
-        <button type="button" class="op-nav-done" data-id="openings-done" onClick={() => leaveSectionDraw() || onClose()}>
-          Done
-        </button>
+        {onClose && (
+          <button type="button" class="op-nav-done" data-id="openings-done" onClick={() => leaveSectionDraw() || onClose()}>
+            Done
+          </button>
+        )}
       </div>
     </header>
   );
@@ -221,32 +260,84 @@ export function boardsMoved(): void {
 /** The installed web app and the App Store app have no browser back gesture: the section adds one. */
 const edgeSwipe = (): boolean => isNative || (navigator as Navigator & { standalone?: boolean }).standalone === true;
 
-function Section({ entitlements, analysis, evalHidden = false, setup, onStartGame, onBack, onClose, isTop }: OpeningsViewProps) {
+/** The text pages: on a split screen the list and the page it opened show side by side. */
+const isTextPage = (p: OpeningsPage): boolean => p.kind === 'home' || p.kind === 'families' || p.kind === 'family';
+
+/**
+ * The panes of a split screen, as indexes into the page stack: the list (the page under the top one
+ * when both are text pages, else the top one itself) and the page beside it (null: nothing chosen
+ * yet). Null when one page shows: no split, or a board page on top.
+ */
+export function panesFor(pages: readonly OpeningsPage[], split: FoldLayoutKind): { list: number; detail: number | null } | null {
+  const top = pages.length - 1;
+  if (split === 'none' || top < 0 || !isTextPage(pages[top])) return null;
+  return top > 0 && isTextPage(pages[top - 1]) ? { list: top - 1, detail: top } : { list: top, detail: null };
+}
+
+/**
+ * Each page's scroll offset as last seen, by its key: a page that moves to the other pane of a split
+ * screen, or shows again after a fold or an unfold, keeps its place.
+ */
+const scrolls = new Map<number, number>();
+const scrollOf = (p: OpeningsPage): number => scrolls.get(p.key ?? -1) ?? p.scroll ?? 0;
+
+function Section({ entitlements, analysis, evalHidden = false, setup, onStartGame, onBack, onClose, isTop, split = 'none' }: OpeningsViewProps) {
   const pages = openingsPages.value;
   const page = currentPage.value;
   const dir = navDirection.value;
   const locked = entitlements.locked.value;
+  const view = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  const pageRef = useRef<HTMLDivElement>(null);
   const [progressVersion, setProgressVersion] = useState(0);
   const [play, setPlay] = useState<{ lineId: string; mode: 'steer' | 'skip'; color?: Color; open: boolean; setup: PlaySetup } | null>(null);
+
+  // On a split screen, the text pages two at a time: the list (the page under the top one, or the
+  // top one itself with nothing opened from it yet) and the page beside it.
+  const panes = panesFor(pages, split);
+  const two = !!panes;
+  const listAt = panes?.list ?? -1;
+  const list = panes ? pages[panes.list] : null;
+  const detail = panes ? (panes.detail === null ? null : pages[panes.detail]) : page;
+  const twoRef = useRef(two);
+  twoRef.current = two;
+
+  // The control in use keeps the focus when the tree around it is re-created (a page change gives
+  // the bar new buttons; a fold or an unfold moves a page in or out of a pane): the one with the
+  // same data-id in the new tree takes it. (The page on top keeps its own elements through a fold:
+  // see the single-page Pane below, so a search being typed keeps its field and its keyboard.)
+  const focusId = useRef<string | null>(null);
+  const active = document.activeElement;
+  focusId.current = active instanceof HTMLElement && view.current?.contains(active) ? (active.dataset.id ?? null) : null;
+  useLayoutEffect(() => {
+    const id = focusId.current;
+    const el = view.current;
+    if (!id || !el || el.contains(document.activeElement)) return;
+    el.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+  });
 
   // Reopened (from a game) before this view went away: complete its target too.
   useEffect(() => resolveTargets(), [pages]);
 
-  // A page pushed back on top comes back at its scroll position.
+  // Forget the offsets of pages that have left the stack.
+  useEffect(() => {
+    const keys = new Set(pages.map((p) => p.key));
+    for (const k of scrolls.keys()) if (!keys.has(k)) scrolls.delete(k);
+  }, [pages]);
+
+  // A page pushed back on top comes back at its scroll position (also after a fold or an unfold).
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = page?.scroll ?? 0;
-  }, [page?.key]);
+    if (el && page) el.scrollTop = scrollOf(page);
+  }, [page?.key, two]);
 
   const remember = () => {
     if (scroller.current) rememberScroll(scroller.current.scrollTop);
   };
-  const ctx: PageContext = {
+  /** The context of a page whose choices open pages over it with `open`. */
+  const context = (open: (p: OpeningsPage) => void): PageContext => ({
     go: (p) => {
       remember();
-      pushPage(p);
+      open(p);
     },
     replace: (p) => replacePage(p),
     back: onBack,
@@ -258,7 +349,7 @@ function Section({ entitlements, analysis, evalHidden = false, setup, onStartGam
       const line = resolveLine(lineId);
       if (!line) return;
       remember();
-      pushPage(drillPage(lineId, line.side));
+      open(drillPage(lineId, line.side));
     },
     play: (lineId, mode = 'steer', color) => setPlay({ lineId, mode, ...(color ? { color } : {}), open: true, setup: setup() }),
     analysis: evalHidden ? null : analysis,
@@ -266,18 +357,26 @@ function Section({ entitlements, analysis, evalHidden = false, setup, onStartGam
     progressVersion,
     progressChanged: () => setProgressVersion((v) => v + 1),
     isTop,
-  };
+  });
+  const ctx = context(pushPage);
+  // The list's choices replace the page beside it (Back still leads back to the list).
+  const listKey = list?.key ?? -1;
+  const listCtx = list && list !== page ? context((p) => pushPageOver(listKey, p)) : ctx;
 
-  // Swipe right from the left edge: back (where there is no browser gesture for it).
+  // Swipe right from the left edge: back (where there is no browser gesture for it). Not on a split
+  // screen's list, whose own pane is what the edge is.
   useEffect(() => {
-    const el = pageRef.current?.parentElement;
+    const el = view.current;
     if (!el || !edgeSwipe()) return;
     let start: { x: number; y: number; t: number } | null = null;
     let dx = 0;
-    const content = () => pageRef.current;
+    const content = () => (twoRef.current ? null : (scroller.current?.firstElementChild as HTMLElement | null));
     const onStart = (e: TouchEvent) => {
       const t = e.touches[0];
-      start = e.touches.length === 1 && t.clientX < 24 && openingsPages.peek().length > 1 ? { x: t.clientX, y: t.clientY, t: performance.now() } : null;
+      start =
+        e.touches.length === 1 && t.clientX < 24 && openingsPages.peek().length > 1 && !twoRef.current && !!scroller.current?.contains(e.target as Node)
+          ? { x: t.clientX, y: t.clientY, t: performance.now() }
+          : null;
       dx = 0;
     };
     const onMove = (e: TouchEvent) => {
@@ -318,38 +417,140 @@ function Section({ entitlements, analysis, evalHidden = false, setup, onStartGam
   if (!page) return null;
   const prev = pages.length > 1 ? pages[pages.length - 2] : null;
   const playLine = play ? resolveLine(play.lineId) : null;
+  const sheet = play && (
+    <PlaySheet
+      open={play.open}
+      line={playLine?.playable ? playLine : null}
+      mode={play.mode}
+      {...(play.color ? { color: play.color } : {})}
+      setup={play.setup}
+      onStart={(settings, opening) => {
+        setPlay((p) => (p ? { ...p, open: false } : p));
+        onStartGame(settings, opening);
+      }}
+      onClose={() => setPlay((p) => (p ? { ...p, open: false } : p))}
+      onBackToGame={() => {
+        setPlay((p) => (p ? { ...p, open: false } : p));
+        onClose();
+      }}
+    />
+  );
 
-  return (
-    <div class="op-view" data-page={page.kind}>
-      <NavBar title={pageTitle(page)} onBack={prev ? onBack : null} backLabel={prev ? pageTitle(prev) : undefined} onClose={onClose} />
-      <div class="op-scroll" ref={scroller}>
-        <div class="op-page" key={page.key} ref={pageRef} data-dir={dir} data-kind={page.kind} onAnimationEnd={(e) => e.target === e.currentTarget && boardsMoved()}>
-          {page.kind === 'home' && <HomePage ctx={ctx} page={page} />}
-          {page.kind === 'families' && <FamiliesPage ctx={ctx} page={page} />}
-          {page.kind === 'family' && <FamilyPage ctx={ctx} page={page} />}
-          {page.kind === 'line' && <LinePage ctx={ctx} page={page} />}
-          {page.kind === 'tree' && <TreePage ctx={ctx} page={page} />}
-          {page.kind === 'drill' && <DrillPage ctx={ctx} page={page} />}
-        </div>
-      </div>
-      {play && (
-        <PlaySheet
-          open={play.open}
-          line={playLine?.playable ? playLine : null}
-          mode={play.mode}
-          {...(play.color ? { color: play.color } : {})}
-          setup={play.setup}
-          onStart={(settings, opening) => {
-            setPlay((p) => (p ? { ...p, open: false } : p));
-            onStartGame(settings, opening);
-          }}
-          onClose={() => setPlay((p) => (p ? { ...p, open: false } : p))}
-          onBackToGame={() => {
-            setPlay((p) => (p ? { ...p, open: false } : p));
-            onClose();
-          }}
+  if (list) {
+    // Done on the bar at the top: the second pane's (side by side), or the list's (stacked).
+    const doneOnList = split === 'tabletop';
+    const back = listAt > 0 ? pages[listAt - 1] : null;
+    return (
+      <div class="op-view" ref={view} data-page={page.kind} data-panes={split}>
+        <Pane
+          key={list.key}
+          slot="list"
+          page={list}
+          ctx={listCtx}
+          dir={dir}
+          nav={
+            <NavBar
+              title={pageTitle(list)}
+              main={!detail}
+              onBack={back ? onBack : null}
+              {...(back ? { backLabel: pageTitle(back) } : {})}
+              onClose={doneOnList ? onClose : null}
+            />
+          }
         />
-      )}
+        {detail ? (
+          <Pane
+            key={detail.key}
+            slot="detail"
+            page={detail}
+            ctx={ctx}
+            dir={dir}
+            nav={<NavBar title={pageTitle(detail)} onBack={null} onClose={doneOnList ? null : onClose} />}
+          />
+        ) : (
+          <section class="op-pane op-pane--empty" aria-label="Nothing chosen yet">
+            {/* Side by side, the bars meet as one across the fold (Done at its end); stacked, none. */}
+            {!doneOnList && <NavBar title={null} onBack={null} onClose={onClose} />}
+            <div class="op-pane-empty" data-id="openings-empty">
+              <IconBook size={30} />
+              <p class="op-pane-empty-title">Choose an opening</p>
+              <p class="op-note">Pick one from the list to see its moves and its variations here.</p>
+            </div>
+          </section>
+        )}
+        {sheet}
+      </div>
+    );
+  }
+
+  // One page: in the same keyed Pane as the list of a split screen, so a fold or an unfold keeps the
+  // page on top (and the field being typed in) instead of re-creating it.
+  return (
+    <div class="op-view" ref={view} data-page={page.kind}>
+      <Pane
+        key={page.key}
+        slot="list"
+        single
+        page={page}
+        ctx={ctx}
+        dir={dir}
+        scrollRef={scroller}
+        nav={<NavBar title={pageTitle(page)} onBack={prev ? onBack : null} backLabel={prev ? pageTitle(prev) : undefined} onClose={onClose} />}
+      />
+      {sheet}
+    </div>
+  );
+}
+
+/**
+ * A page with its bar and its own scroll: on a split screen, one of the two panes, kept as the page
+ * moves from one to the other (the list's page becomes the list when it opens another text page);
+ * else (`single`) the whole view, the same element, so a fold or an unfold doesn't re-create it.
+ */
+function Pane({
+  page,
+  ctx,
+  dir,
+  nav,
+  slot,
+  single = false,
+  scrollRef,
+}: {
+  page: OpeningsPage;
+  ctx: PageContext;
+  dir: NavDirection;
+  nav: JSX.Element;
+  slot: 'list' | 'detail';
+  single?: boolean;
+  /** The single page's scroller, for the view's own scroll restore and edge swipe. */
+  scrollRef?: RefObject<HTMLDivElement>;
+}) {
+  const own = useRef<HTMLDivElement>(null);
+  const ref = scrollRef ?? own;
+  useLayoutEffect(() => {
+    if (ref.current) ref.current.scrollTop = scrollOf(page);
+  }, [slot, single]);
+  return (
+    <section class="op-pane" data-slot={single ? undefined : slot} aria-label={single ? undefined : pageTitle(page)}>
+      {nav}
+      <div class="op-scroll" ref={ref} onScroll={(e) => scrolls.set(page.key ?? -1, e.currentTarget.scrollTop)}>
+        <PageBody page={page} ctx={ctx} dir={dir} />
+      </div>
+    </section>
+  );
+}
+
+/** One page, sliding in the way the navigation went (when it first shows). */
+function PageBody({ page, ctx, dir }: { page: OpeningsPage; ctx: PageContext; dir: NavDirection }) {
+  const [enter] = useState(dir);
+  return (
+    <div class="op-page" data-dir={enter} data-kind={page.kind} onAnimationEnd={(e) => e.target === e.currentTarget && boardsMoved()}>
+      {page.kind === 'home' && <HomePage ctx={ctx} page={page} />}
+      {page.kind === 'families' && <FamiliesPage ctx={ctx} page={page} />}
+      {page.kind === 'family' && <FamilyPage ctx={ctx} page={page} />}
+      {page.kind === 'line' && <LinePage ctx={ctx} page={page} />}
+      {page.kind === 'tree' && <TreePage ctx={ctx} page={page} />}
+      {page.kind === 'drill' && <DrillPage ctx={ctx} page={page} />}
     </div>
   );
 }

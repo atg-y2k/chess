@@ -346,6 +346,9 @@ export function Board(props: BoardProps) {
       lastSize = size;
       boardEl.style.width = `${size}px`;
       if (first) return;
+      // A new size (a rotation, a fold or an unfold, a resized window) ends a drag or a selection the
+      // user had started on the old one: the squares are not where they were under the finger.
+      if (cg.state.selected || cg.state.draggable.current) cg.cancelMove();
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => cg.redrawAll());
     };
@@ -519,6 +522,12 @@ function DrawLayer({ cg, color, orientation, position, fen, onDraw }: DrawLayerP
   // A new position, side or session (a move in the game, Flip) ends a gesture in progress, and its
   // preview goes with the render that changed the board; so does leaving Draw mode.
   useLayoutEffect(() => cancel, [position, orientation]);
+
+  // So does a resize (a rotation, a fold or an unfold): the squares move under the finger.
+  useEffect(() => {
+    window.addEventListener('resize', cancel);
+    return () => window.removeEventListener('resize', cancel);
+  }, []);
 
   const down = (e: PointerEvent) => {
     e.preventDefault(); // no compatibility mouse events, focus or text selection

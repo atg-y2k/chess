@@ -47,8 +47,11 @@ optional one-time "Pro" purchase for the coaching features. See [iOS app](#ios-a
 - **Takebacks, board flip and PGN export** (with evaluations and move marks) through the iOS share
   sheet or the clipboard.
 - **Made for the iPhone:** full screen when installed, fits around the Dynamic Island and the home
-  indicator, dark theme by default (Light and Automatic in the Menu), sounds that follow the silent
-  switch, and your game is kept if iOS closes the app.
+  indicator, in portrait and landscape (the App Store app stays in portrait on a regular iPhone), dark
+  theme by default (Light and Automatic in the Menu), sounds that follow the silent switch, and your
+  game is kept if iOS closes the app.
+- **Ready for the iPhone Duo:** on its big inner display the board stays clear of the fold, with the
+  coach on the other side (see [On the iPhone Duo](#on-the-iphone-duo)).
 
 ## Install it on your iPhone
 
@@ -300,6 +303,51 @@ and Explore by moves).
   position, as the "Back to game" chip under it does.
 - Drawing is free (also in the App Store app) and never makes a game unrated: it is your own thinking,
   not the computer's.
+
+## On the iPhone Duo
+
+Chess Coach lays itself out for both displays of the iPhone Duo, Apple's foldable, in the web app (the
+installed one, and Safari) and in the App Store app:
+
+- **Open like a book:** the board takes the left half of the inner display, clear of the fold, with
+  your opponent above it and you below. The coach (or the explorer, or Game Review), the evaluation
+  graph, your moves in rows and the buttons take the right half, next to the phone's own controls.
+  With the phone turned the other way round, the board takes the half away from them. Sheets (the
+  Menu, New game…) and messages open on the coach's half, never across the fold.
+- **Half folded, standing on a table:** with **Keep the board off the fold** (Menu → Foldable
+  screen), the board is in the top half, with the two players beside it, and the coach, the moves and
+  the buttons are in the bottom half. Automatic does this by itself only where the browser says the
+  phone is half folded, which Safari and the App Store app didn't as of mid-2026.
+- **Open flat and upright (portrait):** the board is a little smaller than it could be, so the coach
+  shows its whole comment, with its buttons, and the move list sits beside it.
+- **The outer display:** the board is bigger than a phone's portrait layout would make it on this
+  short, wide screen (a small evaluation graph sits beside the move list). In landscape the buttons
+  run along the bottom, under the board and the coach.
+- **Split View:** the layout follows the window, as on a phone or a tablet.
+- **The other screens follow suit.** Game Review, Try again and the game viewer keep the board on its
+  half, with the report, the comment and the moves on the other. The **Openings** section shows two
+  pages at a time, one on each half: the list (Start here, a search, All openings) and the opening
+  you picked from it, which another pick replaces; Learn, Explore by moves and the drills keep the
+  board on one half and the moves and notes on the other (half folded, the board stays in the top
+  half while the rest scrolls below it). The engine self-test page puts its log on the other half.
+  The start screen stays centered, where the launch screen shows the app's mark, so it doesn't jump.
+  Text never runs wider than a comfortable line, and nothing you read or tap sits across the fold.
+- Folding, unfolding or turning the phone never loses anything: the game, an open sheet, the explorer,
+  Draw mode and the Openings page you are on (and a search you are typing) stay as they were.
+
+**Menu → Foldable screen** (shown where the screen can be split: the inner display, or any screen
+whose browser reports a fold) changes this: **Automatic** (the default), **Keep the board off the
+fold** (always split, also when the browser doesn't say where the fold is: open like a book or half
+folded) or **Use the whole screen** (one layout across the fold, with the biggest board). The outer
+display, Split View and regular iPhones have no fold to keep off: they don't show the setting and
+never split, whatever was chosen on the inner display.
+
+The iPhone Duo's exact screen sizes and whether Safari will say where its fold is were not published
+when this was written. Where the browser reports the fold, the screen splits along it whatever the
+posture. Where it doesn't, the app recognizes the inner display by its size (an iPhone with a big,
+nearly square screen) and assumes the fold runs across the middle of its long side: held like a book
+in the installed app, the App Store app and a Safari tab; upright only in the installed apps (in a
+Safari tab the toolbars would move the fold within the window).
 
 ## Openings
 
@@ -647,6 +695,9 @@ labels stay, and the coach says why:
   and Rate opponent’s moves (each asks first in a rated game, then makes it unrated; either answer
   brings you back to the Menu) and Sound.
 - **Appearance:** Dark, Light or Automatic (follows iOS).
+- **Foldable screen** (where the screen can be split, such as the iPhone Duo's inner display):
+  Automatic, Keep the board off the fold, or Use the whole screen (see
+  [On the iPhone Duo](#on-the-iphone-duo)).
 - **Your stats:** rating, peak, games, wins/draws/losses, **Set my level** and the **rating chart**
   (see [Your games](#your-games)); then your **Recent games** (the last 10): tap one to open it.
 - **Engine:** "Stockfish 19" with "2 workers", or "1 worker (compatibility mode, until …)";
@@ -716,7 +767,7 @@ Requires Node 24 (chessground declares `engines.node >= 24`).
 ```sh
 npm ci                 # install
 npm run dev            # dev server with hot reload (http://localhost:5173)
-npm test               # unit tests (Vitest: about 1,360 tests in 74 files; the calibration test is skipped)
+npm test               # unit tests (Vitest: about 1,380 tests in 75 files; the calibration test is skipped)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + production build into dist/
 npm run build:source   # add the committed source (dist/chess-coach-source.tar.gz) for hosting
@@ -747,7 +798,8 @@ works offline from the first launch and updates only through the App Store: no s
 update logic, no web manifest. It adds native touches: a haptic with each game sound, the iOS share
 sheet for PGN export, a status bar that follows the theme, a launch screen, and a backup of your
 rating, games and settings in the app's own settings storage (iOS may clear a web view's storage when
-the device runs low on space). iPhone only, portrait, iOS 16.4 or later.
+the device runs low on space). iPhone only, iOS 16.4 or later; portrait on a regular iPhone, as
+before, and every orientation on the iPhone Duo's nearly square displays.
 
 **Free and Pro.** The App Store app is a free download with one in-app purchase, **Pro**: one-time
 (non-consumable), shared through Family Sharing, and bought and checked on the device with StoreKit 2
@@ -783,7 +835,9 @@ npm run cap:sync       # copy dist-native/ into the Xcode project in ios/App
 npm run ios:open       # open it in Xcode; pick your team under Signing & Capabilities, then Run
 ```
 
-Run `build:native` and `cap:sync` again after every change to the web app.
+Run `build:native` and `cap:sync` again after every change to the web app. To check the layout on the
+iPhone Duo, build with the Xcode that has the iOS 27 SDK and run it in the Duo's simulator (see
+`ios/README-native.md`, "Orientations, multitasking and the iPhone Duo").
 
 - [`ios/README-native.md`](ios/README-native.md): the Xcode project, where each setting lives (bundle
   ID, name, version, minimum iOS), the StoreKit plugin, and testing purchases in Xcode, in the sandbox
