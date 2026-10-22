@@ -1,4 +1,5 @@
 import { PIECE_NAMES } from '../chess/utils';
+import './skins.css';
 import './PlayerStrip.css';
 
 export interface PlayerStripProps {
@@ -106,7 +107,7 @@ export function PlayerStrip({
           {groups.map(({ piece, count }) => (
             <span key={piece} class="pstrip-group" data-piece={piece} title={PIECE_NAMES[piece]}>
               {Array.from({ length: count }, (_, i) => (
-                <i key={i} class="pstrip-piece" data-p={capturedColor + piece} />
+                <i key={i} class="pstrip-piece piece-art" data-p={capturedColor + piece} />
               ))}
             </span>
           ))}

@@ -29,9 +29,7 @@
   --danger: #d9534f;
   --warning: #f0b43c;
 
-  /* Board */
-  --board-light: #eeeed2;
-  --board-dark: #769656;
+  /* Board: the squares, highlights, coordinates and pieces are the skin's (src/ui/skins.css). */
   --arrow-best: #3fa45b;
   --arrow-alt: #3f86c4;
   --arrow-threat: #d9534f;

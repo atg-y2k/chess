@@ -11,7 +11,7 @@
 import { Chessground } from '@lichess-org/chessground';
 import type { Api as CgApi } from '@lichess-org/chessground/api';
 import '@lichess-org/chessground/assets/chessground.base.css';
-import '@lichess-org/chessground/assets/chessground.cburnett.css';
+import '../ui/skins.css';
 import { Chess } from 'chess.js';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -749,8 +749,8 @@ const CSS = `
 .gal-boardrow { display: flex; gap: 0; }
 .gal-board { flex: 1; aspect-ratio: 1; position: relative; }
 .gal-board .cg-wrap { position: absolute; inset: 0; width: 100%; height: 100%; }
-.gal-board cg-board { background: repeating-conic-gradient(var(--board-dark) 0 25%, var(--board-light) 0 50%) 0 0 / 25% 25%; }
-.gal-board cg-board square.last-move { background-color: rgba(240, 180, 60, 0.42); }
+.gal-board cg-board { background: var(--board-texture) 0 0 / 100% 100%, repeating-conic-gradient(var(--board-dark) 0 25%, var(--board-light) 0 50%) 0 0 / 25% 25%; }
+.gal-board cg-board square.last-move { background-color: var(--board-last); }
 .gal-evalbar { position: relative; flex: none; width: 14px; background: var(--eval-black); overflow: hidden; }
 .gal-evalbar-fill { position: absolute; left: 0; right: 0; bottom: 0; background: var(--eval-white);
   transition: height 0.4s ease; }

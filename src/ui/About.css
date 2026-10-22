@@ -47,6 +47,13 @@
 .about-credits li + li {
   margin-top: 4px;
 }
+/* A license name (GPL-2.0-or-later) never breaks at its hyphens. */
+.about-license {
+  white-space: nowrap;
+}
+.about-note {
+  margin: 0 0 8px !important;
+}
 .about-h {
   margin: 10px 0 4px;
   font-size: 12px;

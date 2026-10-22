@@ -1,0 +1,465 @@
+/*
+ * Board and piece skins (src/ui/skins.ts): the board themes' tokens and the piece sets' art, keyed
+ * off <html data-board data-pieces>. The same selectors without :root let any element preview a
+ * skin (the Menu's swatches: <span data-board="wood">, <span data-pieces="chessnut">).
+ *
+ * Board tokens (every theme sets the colors; the rest fall back to the defaults below):
+ *   --board-light / --board-dark    the squares (h1 and a8 are light)
+ *   --board-texture                 a layer painted over the squares (none, or an SVG drawn here; its
+ *                                   mean color and coverage are skins.ts's `texture`, which the
+ *                                   contrast test composites over both squares)
+ *   --board-last / --board-selected the last move and the selected piece's square (over the square)
+ *   --board-dot                     move dots and capture rings (over the square)
+ *   --board-hover                   the square under a dragged piece
+ *   --board-check                   the king in check
+ *   --board-coord-on-light / -dark  coordinates on a light / dark edge square
+ *   --arrow-line                    the opening line's guide arrow (src/ui/Board.tsx), where the
+ *                                   default tan would not show (brown-ish boards)
+ *   --board-cls-<class>             the coach's tint of the last move (both squares) by its class:
+ *                                   the class color (app.css --cls-*) at 55%, or, where that would
+ *                                   match a square, a stronger or shifted shade of it
+ * Contrast, on the squares as drawn (a texture's mean composited over them): the squares >= 14
+ * (CIEDE2000) apart; coordinates >= 2.84:1 (the green board's) on their square; last move, selection
+ * and check >= 12 from both squares, and the last move and selection >= 12 from the other square
+ * too; each coach tint at least as far from both squares as on green (up to 12), and >= 12 from the
+ * other square; move dots >= 8.5, every arrow and drawing color >= 9 (the green board's best-move
+ * arrow) and threat arrows >= 12. tests/app/skins.test.ts checks them.
+ *
+ * Pieces: --piece-wk, --piece-wq … --piece-bp, one url() each. The default (cburnett, chessground's
+ * art) is inlined by the build; the other sets are files in public/pieces/<id>/, downloaded only when
+ * shown. `.cg-wrap piece` (chessground's boards and the promotion picker) and `.piece-art[data-p]`
+ * (captured pieces, the king avatars, the Menu's previews) draw them.
+ */
+
+/* Green: the default (the board the app always had). */
+:root,
+[data-board='green'] {
+  --board-light: #eeeed2;
+  --board-dark: #769656;
+  --board-texture: none;
+  --board-last: color-mix(in srgb, var(--warning) 52%, transparent);
+  --board-selected: color-mix(in srgb, var(--warning) 62%, transparent);
+  --board-dot: rgba(0, 0, 0, 0.17);
+  --board-hover: color-mix(in srgb, var(--board-light) 40%, transparent);
+  --board-check: var(--danger);
+  --board-coord-on-light: var(--board-dark);
+  --board-coord-on-dark: var(--board-light);
+  --arrow-line: #c8a27a;
+  /* The coach's tint of the last move, by the move's class (Board.css), where its badge sits. */
+  --board-cls-brilliant: color-mix(in srgb, var(--cls-brilliant) 55%, transparent);
+  --board-cls-great: color-mix(in srgb, var(--cls-great) 55%, transparent);
+  --board-cls-best: color-mix(in srgb, var(--cls-best) 55%, transparent);
+  --board-cls-excellent: color-mix(in srgb, var(--cls-excellent) 55%, transparent);
+  --board-cls-good: color-mix(in srgb, var(--cls-good) 55%, transparent);
+  --board-cls-book: color-mix(in srgb, var(--cls-book) 55%, transparent);
+  --board-cls-forced: color-mix(in srgb, var(--cls-forced) 55%, transparent);
+  --board-cls-inaccuracy: color-mix(in srgb, var(--cls-inaccuracy) 55%, transparent);
+  --board-cls-mistake: color-mix(in srgb, var(--cls-mistake) 55%, transparent);
+  --board-cls-miss: color-mix(in srgb, var(--cls-miss) 55%, transparent);
+  --board-cls-blunder: color-mix(in srgb, var(--cls-blunder) 55%, transparent);
+}
+
+/* Brown: classic wood colors; a yellow-green last move, which shows better than yellow on brown. */
+:root[data-board='brown'],
+[data-board='brown'] {
+  --board-light: #f0d9b5;
+  --board-dark: #b58863;
+  --board-texture: none;
+  --board-last: rgba(205, 210, 106, 0.75);
+  --board-selected: rgba(205, 210, 106, 0.85);
+  --board-coord-on-light: #8f6440;
+  --board-coord-on-dark: #ffffff;
+  --arrow-line: #8b6fc4;
+  /*
+   * Coach tints (Board.css): the brown book color would vanish into the dark square; inaccuracy,
+   * mistake and miss a little stronger.
+   */
+  --board-cls-book: rgba(176, 137, 14, 0.55);
+  --board-cls-inaccuracy: rgba(245, 191, 43, 0.6);
+  --board-cls-mistake: rgba(242, 137, 2, 0.7);
+  --board-cls-miss: rgba(253, 117, 94, 0.6);
+}
+
+/*
+ * Wood: warmer browns with a wood grain (horizontal turbulence, drawn once per board size): streaks
+ * of dark brown (alpha 1.8 x noise - 0.78, about 16% over a square on average), over squares a little
+ * lighter than the look they make together (#e5c99c / #ad7948, skins.ts's `texture`). The grain
+ * competes with the move dots, so they are a little darker here.
+ */
+:root[data-board='wood'],
+[data-board='wood'] {
+  --board-light: #f6dcb0;
+  --board-dark: #b47d4c;
+  --board-texture: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256' viewBox='0 0 256 256' preserveAspectRatio='none'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.004 0.2' numOctaves='3' seed='7'/%3E%3CfeColorMatrix values='0 0 0 0 0.25 0 0 0 0 0.13 0 0 0 0 0.03 0 0 0 1.8 -0.78'/%3E%3C/filter%3E%3Crect width='256' height='256' filter='url(%23g)'/%3E%3C/svg%3E");
+  --board-last: rgba(205, 210, 106, 0.75);
+  --board-selected: rgba(205, 210, 106, 0.85);
+  --board-dot: rgba(0, 0, 0, 0.22);
+  --board-coord-on-light: #8a5a30;
+  --board-coord-on-dark: #ffffff;
+  --arrow-line: #8b6fc4;
+  /*
+   * Coach tints (Board.css): book in the same gold as Brown's; inaccuracy and mistake a little
+   * stronger.
+   */
+  --board-cls-book: rgba(176, 137, 14, 0.7);
+  --board-cls-inaccuracy: rgba(251, 193, 15, 0.6);
+  --board-cls-mistake: rgba(246, 141, 14, 0.75);
+}
+
+/* Blue: steel blue; coordinates in deeper blues. */
+:root[data-board='blue'],
+[data-board='blue'] {
+  --board-light: #e2e8ee;
+  --board-dark: #8aa4bc;
+  --board-texture: none;
+  --board-coord-on-light: #56799a;
+  --board-coord-on-dark: #2f4f6e;
+  /*
+   * Coach tints (Board.css): great in a deeper blue, forced in dark slate (the blue and gray ones
+   * would match the squares).
+   */
+  --board-cls-great: rgba(31, 95, 168, 0.8);
+  --board-cls-forced: rgba(78, 88, 96, 0.75);
+}
+
+/* Ice: pale blues; coordinates in deep blues on both squares. */
+:root[data-board='ice'],
+[data-board='ice'] {
+  --board-light: #f0f6f9;
+  --board-dark: #a9cad9;
+  --board-texture: none;
+  --board-coord-on-light: #5b8aa3;
+  --board-coord-on-dark: #33637c;
+  /*
+   * Coach tints (Board.css): great and forced stronger (a pale great would look like an Ice dark
+   * square).
+   */
+  --board-cls-great: rgba(81, 142, 201, 0.75);
+  --board-cls-forced: rgba(147, 153, 158, 0.9);
+}
+
+/* Slate: neutral blue-gray. */
+:root[data-board='slate'],
+[data-board='slate'] {
+  --board-light: #dde1e5;
+  --board-dark: #7d8996;
+  --board-texture: none;
+  --board-coord-on-light: #5f6b77;
+  --board-coord-on-dark: #f4f6f8;
+  /*
+   * Coach tints (Board.css): great in a brighter blue, forced in a lighter gray (the defaults
+   * match the squares).
+   */
+  --board-cls-great: rgba(46, 140, 246, 0.55);
+  --board-cls-forced: rgba(164, 173, 174, 0.9);
+}
+
+/*
+ * Marble: light and gray stone, faint clouds and thin veins (turbulence contours), about 14% over a
+ * square on average; the dark square a little darker than the look it makes (#a1a5a9).
+ */
+:root[data-board='marble'],
+[data-board='marble'] {
+  --board-light: #ecebe8;
+  --board-dark: #989ca0;
+  --board-texture: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256' viewBox='0 0 256 256' preserveAspectRatio='none'%3E%3Cfilter id='c' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='3' seed='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.2 0'/%3E%3C/filter%3E%3Cfilter id='v' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.007 0.012' numOctaves='4' seed='5'/%3E%3CfeColorMatrix values='0 0 0 0 0.24 0 0 0 0 0.26 0 0 0 0 0.3 1 0 0 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='table' tableValues='0 0 0 0 0.35 0 0 0 0 0 0.3 0 0 0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='256' height='256' filter='url(%23c)'/%3E%3Crect width='256' height='256' filter='url(%23v)'/%3E%3C/svg%3E");
+  --board-coord-on-light: #686e74;
+  --board-coord-on-dark: #3f4448;
+  /*
+   * Coach tints (Board.css): great a little brighter, forced in dark slate (the default gray
+   * matches the squares).
+   */
+  --board-cls-great: rgba(74, 142, 207, 0.55);
+  --board-cls-forced: rgba(78, 88, 96, 0.8);
+}
+
+/* Purple: lavender; coordinates in the other square's color, as on green. */
+:root[data-board='purple'],
+[data-board='purple'] {
+  --board-light: #ebe3f2;
+  --board-dark: #9174b0;
+  --board-texture: none;
+}
+
+/* Coral: warm pink-orange; coordinates in deep coral; check in a deeper red, which the coral would soften. */
+:root[data-board='coral'],
+[data-board='coral'] {
+  --board-light: #f7e7dc;
+  --board-dark: #e0957b;
+  --board-texture: none;
+  --board-check: #b81d24;
+  --board-coord-on-light: #b0634a;
+  --board-coord-on-dark: #7a3524;
+  --arrow-line: #8b6fc4;
+  /*
+   * Coach tints (Board.css): book and blunder stronger, miss in pink and mistake in a purer orange
+   * (the defaults match the coral squares).
+   */
+  --board-cls-book: rgba(163, 131, 89, 0.7);
+  --board-cls-mistake: rgba(242, 137, 2, 0.55);
+  --board-cls-miss: rgba(255, 80, 106, 0.55);
+  --board-cls-blunder: rgba(211, 59, 52, 0.75);
+}
+
+/* Olive: yellow-green; a stronger last move. */
+:root[data-board='olive'],
+[data-board='olive'] {
+  --board-light: #eeecc9;
+  --board-dark: #a3a35d;
+  --board-texture: none;
+  --board-last: color-mix(in srgb, var(--warning) 62%, transparent);
+  --board-selected: color-mix(in srgb, var(--warning) 72%, transparent);
+  --board-coord-on-light: #727236;
+  --board-coord-on-dark: #4a4a1f;
+  --arrow-line: #8b6fc4;
+  /* Coach tints (Board.css): excellent, book, forced and inaccuracy a little stronger. */
+  --board-cls-excellent: rgba(143, 193, 71, 0.65);
+  --board-cls-book: rgba(171, 131, 95, 0.65);
+  --board-cls-forced: rgba(146, 161, 169, 0.6);
+  --board-cls-inaccuracy: rgba(239, 192, 78, 0.75);
+}
+
+/* Classic (cburnett): the default, chessground's own art, inlined into this stylesheet by the build. */
+:root,
+[data-pieces='cburnett'] {
+  --piece-wk: url('./pieces/cburnett/wK.svg');
+  --piece-wq: url('./pieces/cburnett/wQ.svg');
+  --piece-wr: url('./pieces/cburnett/wR.svg');
+  --piece-wb: url('./pieces/cburnett/wB.svg');
+  --piece-wn: url('./pieces/cburnett/wN.svg');
+  --piece-wp: url('./pieces/cburnett/wP.svg');
+  --piece-bk: url('./pieces/cburnett/bK.svg');
+  --piece-bq: url('./pieces/cburnett/bQ.svg');
+  --piece-br: url('./pieces/cburnett/bR.svg');
+  --piece-bb: url('./pieces/cburnett/bB.svg');
+  --piece-bn: url('./pieces/cburnett/bN.svg');
+  --piece-bp: url('./pieces/cburnett/bP.svg');
+}
+
+/* The other sets: files in public/pieces/<id>/ (fetched when first shown, precached for offline). */
+:root[data-pieces='mpchess'],
+[data-pieces='mpchess'] {
+  --piece-wk: url('/pieces/mpchess/wK.svg');
+  --piece-wq: url('/pieces/mpchess/wQ.svg');
+  --piece-wr: url('/pieces/mpchess/wR.svg');
+  --piece-wb: url('/pieces/mpchess/wB.svg');
+  --piece-wn: url('/pieces/mpchess/wN.svg');
+  --piece-wp: url('/pieces/mpchess/wP.svg');
+  --piece-bk: url('/pieces/mpchess/bK.svg');
+  --piece-bq: url('/pieces/mpchess/bQ.svg');
+  --piece-br: url('/pieces/mpchess/bR.svg');
+  --piece-bb: url('/pieces/mpchess/bB.svg');
+  --piece-bn: url('/pieces/mpchess/bN.svg');
+  --piece-bp: url('/pieces/mpchess/bP.svg');
+}
+
+:root[data-pieces='chessnut'],
+[data-pieces='chessnut'] {
+  --piece-wk: url('/pieces/chessnut/wK.svg');
+  --piece-wq: url('/pieces/chessnut/wQ.svg');
+  --piece-wr: url('/pieces/chessnut/wR.svg');
+  --piece-wb: url('/pieces/chessnut/wB.svg');
+  --piece-wn: url('/pieces/chessnut/wN.svg');
+  --piece-wp: url('/pieces/chessnut/wP.svg');
+  --piece-bk: url('/pieces/chessnut/bK.svg');
+  --piece-bq: url('/pieces/chessnut/bQ.svg');
+  --piece-br: url('/pieces/chessnut/bR.svg');
+  --piece-bb: url('/pieces/chessnut/bB.svg');
+  --piece-bn: url('/pieces/chessnut/bN.svg');
+  --piece-bp: url('/pieces/chessnut/bP.svg');
+}
+
+:root[data-pieces='celtic'],
+[data-pieces='celtic'] {
+  --piece-wk: url('/pieces/celtic/wK.svg');
+  --piece-wq: url('/pieces/celtic/wQ.svg');
+  --piece-wr: url('/pieces/celtic/wR.svg');
+  --piece-wb: url('/pieces/celtic/wB.svg');
+  --piece-wn: url('/pieces/celtic/wN.svg');
+  --piece-wp: url('/pieces/celtic/wP.svg');
+  --piece-bk: url('/pieces/celtic/bK.svg');
+  --piece-bq: url('/pieces/celtic/bQ.svg');
+  --piece-br: url('/pieces/celtic/bR.svg');
+  --piece-bb: url('/pieces/celtic/bB.svg');
+  --piece-bn: url('/pieces/celtic/bN.svg');
+  --piece-bp: url('/pieces/celtic/bP.svg');
+}
+
+:root[data-pieces='fantasy'],
+[data-pieces='fantasy'] {
+  --piece-wk: url('/pieces/fantasy/wK.svg');
+  --piece-wq: url('/pieces/fantasy/wQ.svg');
+  --piece-wr: url('/pieces/fantasy/wR.svg');
+  --piece-wb: url('/pieces/fantasy/wB.svg');
+  --piece-wn: url('/pieces/fantasy/wN.svg');
+  --piece-wp: url('/pieces/fantasy/wP.svg');
+  --piece-bk: url('/pieces/fantasy/bK.svg');
+  --piece-bq: url('/pieces/fantasy/bQ.svg');
+  --piece-br: url('/pieces/fantasy/bR.svg');
+  --piece-bb: url('/pieces/fantasy/bB.svg');
+  --piece-bn: url('/pieces/fantasy/bN.svg');
+  --piece-bp: url('/pieces/fantasy/bP.svg');
+}
+
+:root[data-pieces='spatial'],
+[data-pieces='spatial'] {
+  --piece-wk: url('/pieces/spatial/wK.svg');
+  --piece-wq: url('/pieces/spatial/wQ.svg');
+  --piece-wr: url('/pieces/spatial/wR.svg');
+  --piece-wb: url('/pieces/spatial/wB.svg');
+  --piece-wn: url('/pieces/spatial/wN.svg');
+  --piece-wp: url('/pieces/spatial/wP.svg');
+  --piece-bk: url('/pieces/spatial/bK.svg');
+  --piece-bq: url('/pieces/spatial/bQ.svg');
+  --piece-br: url('/pieces/spatial/bR.svg');
+  --piece-bb: url('/pieces/spatial/bB.svg');
+  --piece-bn: url('/pieces/spatial/bN.svg');
+  --piece-bp: url('/pieces/spatial/bP.svg');
+}
+
+:root[data-pieces='rhosgfx'],
+[data-pieces='rhosgfx'] {
+  --piece-wk: url('/pieces/rhosgfx/wK.svg');
+  --piece-wq: url('/pieces/rhosgfx/wQ.svg');
+  --piece-wr: url('/pieces/rhosgfx/wR.svg');
+  --piece-wb: url('/pieces/rhosgfx/wB.svg');
+  --piece-wn: url('/pieces/rhosgfx/wN.svg');
+  --piece-wp: url('/pieces/rhosgfx/wP.svg');
+  --piece-bk: url('/pieces/rhosgfx/bK.svg');
+  --piece-bq: url('/pieces/rhosgfx/bQ.svg');
+  --piece-br: url('/pieces/rhosgfx/bR.svg');
+  --piece-bb: url('/pieces/rhosgfx/bB.svg');
+  --piece-bn: url('/pieces/rhosgfx/bN.svg');
+  --piece-bp: url('/pieces/rhosgfx/bP.svg');
+}
+
+:root[data-pieces='kiwen-suwi'],
+[data-pieces='kiwen-suwi'] {
+  --piece-wk: url('/pieces/kiwen-suwi/wK.svg');
+  --piece-wq: url('/pieces/kiwen-suwi/wQ.svg');
+  --piece-wr: url('/pieces/kiwen-suwi/wR.svg');
+  --piece-wb: url('/pieces/kiwen-suwi/wB.svg');
+  --piece-wn: url('/pieces/kiwen-suwi/wN.svg');
+  --piece-wp: url('/pieces/kiwen-suwi/wP.svg');
+  --piece-bk: url('/pieces/kiwen-suwi/bK.svg');
+  --piece-bq: url('/pieces/kiwen-suwi/bQ.svg');
+  --piece-br: url('/pieces/kiwen-suwi/bR.svg');
+  --piece-bb: url('/pieces/kiwen-suwi/bB.svg');
+  --piece-bn: url('/pieces/kiwen-suwi/bN.svg');
+  --piece-bp: url('/pieces/kiwen-suwi/bP.svg');
+}
+
+/*
+ * Sets whose black pieces are flat dark silhouettes (skins.ts `silhouette`): off the board, on the dark
+ * theme's surfaces, a black piece sits on a light chip, as on a light square (--piece-chip, read by
+ * PlayerStrip.css and NewGameSheet.css). Elsewhere the chip is transparent: the other sets' black
+ * pieces have light detail, which the surfaces' hairline halo is enough for.
+ */
+:root {
+  --piece-chip: transparent;
+}
+:root:not([data-theme='light'])[data-pieces='kiwen-suwi'] {
+  --piece-chip: color-mix(in srgb, var(--text) 82%, transparent);
+}
+
+/* Every piece the board draws (chessground's <piece class="pawn white">, also in the promotion picker). */
+.cg-wrap piece.king.white {
+  background-image: var(--piece-wk);
+}
+
+.cg-wrap piece.queen.white {
+  background-image: var(--piece-wq);
+}
+
+.cg-wrap piece.rook.white {
+  background-image: var(--piece-wr);
+}
+
+.cg-wrap piece.bishop.white {
+  background-image: var(--piece-wb);
+}
+
+.cg-wrap piece.knight.white {
+  background-image: var(--piece-wn);
+}
+
+.cg-wrap piece.pawn.white {
+  background-image: var(--piece-wp);
+}
+
+.cg-wrap piece.king.black {
+  background-image: var(--piece-bk);
+}
+
+.cg-wrap piece.queen.black {
+  background-image: var(--piece-bq);
+}
+
+.cg-wrap piece.rook.black {
+  background-image: var(--piece-br);
+}
+
+.cg-wrap piece.bishop.black {
+  background-image: var(--piece-bb);
+}
+
+.cg-wrap piece.knight.black {
+  background-image: var(--piece-bn);
+}
+
+.cg-wrap piece.pawn.black {
+  background-image: var(--piece-bp);
+}
+
+/* Piece art outside the board: <i class="piece-art" data-p="wk"> (color + piece letter, lowercase). */
+.piece-art {
+  background: no-repeat center / contain;
+}
+
+.piece-art[data-p='wk'] {
+  background-image: var(--piece-wk);
+}
+
+.piece-art[data-p='wq'] {
+  background-image: var(--piece-wq);
+}
+
+.piece-art[data-p='wr'] {
+  background-image: var(--piece-wr);
+}
+
+.piece-art[data-p='wb'] {
+  background-image: var(--piece-wb);
+}
+
+.piece-art[data-p='wn'] {
+  background-image: var(--piece-wn);
+}
+
+.piece-art[data-p='wp'] {
+  background-image: var(--piece-wp);
+}
+
+.piece-art[data-p='bk'] {
+  background-image: var(--piece-bk);
+}
+
+.piece-art[data-p='bq'] {
+  background-image: var(--piece-bq);
+}
+
+.piece-art[data-p='br'] {
+  background-image: var(--piece-br);
+}
+
+.piece-art[data-p='bb'] {
+  background-image: var(--piece-bb);
+}
+
+.piece-art[data-p='bn'] {
+  background-image: var(--piece-bn);
+}
+
+.piece-art[data-p='bp'] {
+  background-image: var(--piece-bp);
+}

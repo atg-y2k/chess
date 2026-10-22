@@ -1,8 +1,9 @@
 /**
  * PWA shell smoke tests against the production build (see playwright.config.ts): manifest and
- * iOS tags, service worker + precache, engine files, offline reload, and the full-screen shell.
+ * iOS tags, service worker + precache (the piece sets too), engine files, offline reload, and the full-screen shell.
  * They deliberately avoid the app UI itself.
  */
+import { readdirSync } from 'node:fs';
 import { expect, test, type APIResponse, type Page } from '@playwright/test';
 
 const ENGINE_JS = 'engine/stockfish-19-lite-single.js';
@@ -225,6 +226,10 @@ test.describe('PWA shell', () => {
     }
     expect(cached.some((p) => /\/assets\/.+\.js$/.test(p))).toBe(true);
     expect(cached.some((p) => /\/assets\/.+\.css$/.test(p))).toBe(true);
+    // Every piece set (Menu → Board & pieces), with its notices, so any of them works offline.
+    for (const set of readdirSync('public/pieces')) {
+      for (const file of readdirSync(`public/pieces/${set}`)) expect(cached, file).toContain(`${base}pieces/${set}/${file}`);
+    }
   });
 
   test('works offline after the first visit, engine included', async ({ page, context }, testInfo) => {

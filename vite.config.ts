@@ -8,6 +8,7 @@ import { defineConfig, type HtmlTagDescriptor, type Plugin } from 'vite';
 import preact from '@preact/preset-vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { APP_ID, APP_NAME } from './capacitor.config.js';
+import { LILA_COMMIT, PIECE_SETS, SKIN_LICENSES } from './src/ui/skins.js';
 
 /**
  * VITE_NATIVE=1 (`npm run build:native`, into dist-native/): the App Store app (Capacitor, see
@@ -152,9 +153,10 @@ function immutableEngineFiles(): Plugin {
 
 /**
  * Completes Vite's `build.license` file: a note on Chess Coach's own licence and source, the engine
- * (public/engine/ has its own README and licence text), and Workbox, whose service-worker runtime is
- * built outside the Vite bundle so Vite does not list it. The native build has no service worker;
- * instead it lists Capacitor's native iOS code, which is not part of the JavaScript bundle either.
+ * (public/engine/ has its own README and licence text), the chess piece sets (src/ui/skins.ts; art,
+ * not packages, so Vite does not list them), and Workbox, whose service-worker runtime is built
+ * outside the Vite bundle so Vite does not list it. The native build has no service worker; instead
+ * it lists Capacitor's native iOS code, which is not part of the JavaScript bundle either.
  */
 function thirdPartyLicenses(): Plugin {
   const header = `${APP_NAME}: licences of the software it includes
@@ -169,10 +171,11 @@ its source is, and engine/COPYING-stockfish.txt is the GPL-3.0 text (it applies 
 
 ${
   native
-    ? `The app's JavaScript includes the packages below. The iOS app around it is built with Capacitor:
-its native code (@capacitor/ios and the native parts of the @capacitor plugins below) is listed last.`
-    : `The app's JavaScript includes the packages below. The service worker (sw.js, workbox-*.js) is
-built from the Workbox packages listed last.`
+    ? `The app's JavaScript includes the packages below, then come the chess piece sets. The iOS app
+around it is built with Capacitor: its native code (@capacitor/ios and the native parts of the
+@capacitor plugins below) is listed last.`
+    : `The app's JavaScript includes the packages below, then come the chess piece sets. The service
+worker (sw.js, workbox-*.js) is built from the Workbox packages listed last.`
 }
 `;
   const packageDir = (name: string): string => dirname(createRequire(import.meta.url).resolve(`${name}/package.json`));
@@ -182,6 +185,49 @@ built from the Workbox packages listed last.`
     const { version } = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version: string };
     const license = readFileSync(join(dir, 'LICENSE'), 'utf8').trim();
     return `\n## workbox-core, workbox-precaching, workbox-routing, workbox-strategies - ${version} (MIT)\n\n${license}\n`;
+  };
+  const pieceSetsNotice = (): string => {
+    // Every piece set ships with the app (public/pieces/<id>/, each with its README and, where its
+    // license needs them, LICENSE.txt and the upstream COPYRIGHT.txt; the default set is inlined in
+    // the CSS): its credit, copyright notice, license and source, and the license text where the
+    // license requires it (identical texts once).
+    const texts = new Map<string, string>();
+    const sections = PIECE_SETS.map((set) => {
+      const license = SKIN_LICENSES[set.license];
+      const lines = [
+        `### ${set.name} - ${set.author} - ${license.name}`,
+        '',
+        'inline' in set
+          ? `The default set, as chessground ships it (assets/chessground.cburnett.css): ${set.source}`
+          : `pieces/${set.id}/ (12 SVG files): lichess.org's copies in its lila repository at commit ${LILA_COMMIT}, ` +
+            `whose COPYING.md lists the license: ${set.source}. lila prepares the artist's SVG files for the web ` +
+            `(minified, with a color-scheme style it adds); ${APP_NAME} made no further changes.`,
+      ];
+      if ('upstream' in set) {
+        lines.push(`The art's home: ${set.upstream}${'upstreamCommit' in set ? ` (license checked at commit ${set.upstreamCommit})` : ''}`);
+      }
+      if ('copyright' in set) lines.push(`${set.copyright}${'copyrightFile' in set ? ` (pieces/${set.id}/COPYRIGHT.txt)` : ''}`);
+      if (set.license === 'GPL-3.0-only') {
+        lines.push(`License: ${license.name} (${license.url}), version 3 of the GPL, whose text is engine/COPYING-stockfish.txt.`);
+      } else if (set.license.startsWith('GPL-')) {
+        lines.push(`License: ${license.name} (${license.url}); distributed under GPL-3.0-or-later, whose text is engine/COPYING-stockfish.txt.`);
+      } else if ('licenseFile' in set) {
+        const text = readFileSync(fileURLToPath(new URL(`./public/pieces/${set.id}/LICENSE.txt`, import.meta.url)), 'utf8').trim();
+        const first = texts.get(text);
+        if (first) lines.push(`License: ${license.name}, the same text as ${first} above (also in pieces/${set.id}/LICENSE.txt).`);
+        else {
+          texts.set(text, set.name);
+          lines.push(`License: ${license.name} (also in pieces/${set.id}/LICENSE.txt):`, '', text);
+        }
+      } else {
+        lines.push(`License: ${license.name}, ${license.url}`);
+      }
+      return lines.join('\n');
+    });
+    return (
+      `\n## Chess pieces (Menu → Board & pieces)\n\nThe board themes are drawn by ${APP_NAME} itself (CSS colors and SVG textures). ` +
+      `Every piece set ships with the app:\n\n${sections.join('\n\n')}\n`
+    );
   };
   const capacitorNotice = (): string => {
     const dir = packageDir('@capacitor/ios');
@@ -213,7 +259,10 @@ built from the Workbox packages listed last.`
         const text = typeof file.source === 'string' ? file.source : new TextDecoder().decode(file.source);
         // Replace Vite's generic heading with ours; keep its per-package sections.
         file.source =
-          header + text.replace(/^# Licenses\s+The app bundles[^\n]*\n/, '') + (native ? capacitorNotice() : workboxNotice());
+          header +
+          text.replace(/^# Licenses\s+The app bundles[^\n]*\n/, '') +
+          pieceSetsNotice() +
+          (native ? capacitorNotice() : workboxNotice());
       },
     },
   };

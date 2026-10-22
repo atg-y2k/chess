@@ -16,6 +16,7 @@ import { ClassIcon } from '../ui/ClassIcon';
 import { EvalBar } from '../ui/EvalBar';
 import { EvalGraph } from '../ui/EvalGraph';
 import { IconFlip } from '../ui/icons';
+import { BOARD_THEMES, PIECE_SETS, applySkins, boardTheme, pieceSet, type BoardThemeId, type PieceSetId } from '../ui/skins';
 
 /* Sample game: Stockfish 19 (depth 10) self-play with noise, evaluated at depth 14 (White POV). */
 const SAMPLE_SANS = (
@@ -255,6 +256,16 @@ export default function BoardGallery() {
     setCursor(i);
   };
 
+  // From the signals, which gallery-main sets to the stored skin or the URL's `&board=` / `&pieces=`.
+  const [skin, setSkin] = useState({ board: boardTheme.peek(), pieces: pieceSet.peek() });
+  const pickSkin = (next: { board: BoardThemeId; pieces: PieceSetId }) => {
+    setSkin(next);
+    boardTheme.value = next.board;
+    pieceSet.value = next.pieces;
+    applySkins(next.board, next.pieces);
+    write(`skin ${next.board} ${next.pieces}`);
+  };
+
   const pickScenario = (s: Scenario) => {
     setScenario(s);
     setBadgeOverride(null);
@@ -347,6 +358,31 @@ export default function BoardGallery() {
                   {m === 'coach' ? 'Coach' : m === 'all' ? 'All brushes' : 'None'}
                 </button>
               ))}
+            </div>
+            <h2 class="bg-h">Skin (not saved; the app's is Menu → Board & pieces)</h2>
+            <div class="bg-row">
+              <select
+                aria-label="Board theme"
+                value={skin.board}
+                onChange={(e) => pickSkin({ ...skin, board: (e.currentTarget as HTMLSelectElement).value as BoardThemeId })}
+              >
+                {BOARD_THEMES.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="Pieces"
+                value={skin.pieces}
+                onChange={(e) => pickSkin({ ...skin, pieces: (e.currentTarget as HTMLSelectElement).value as PieceSetId })}
+              >
+                {PIECE_SETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
             </div>
             <h2 class="bg-h">Badge</h2>
             <div class="bg-classes">

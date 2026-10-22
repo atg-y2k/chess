@@ -32,6 +32,9 @@ import { ASSIST_MENU_DESCRIPTION, RATE_OPPONENT_MENU_DESCRIPTION, THREAT_ALERTS_
 import { IconLock } from './PaywallSheet';
 import { RatingChart } from './RatingChart';
 import { Sheet } from './Sheet';
+import { SkinThumb } from './SkinPickers';
+import { skinsSummary, type BoardThemeId, type PieceSetId } from './skins';
+import { SKINS_TITLE, SkinsSheet } from './SkinsSheet';
 import { Toggle } from './Toggle';
 import './MenuSheet.css';
 
@@ -56,6 +59,11 @@ export interface MenuSheetProps {
   /** Colour theme preference; with `onThemeChange` an "Appearance" picker is shown. */
   theme?: ThemePref;
   onThemeChange?: (theme: ThemePref) => void;
+  /**
+   * The board theme and piece set (src/ui/skins.ts): a "Board & pieces" row under Appearance that
+   * opens their sheet (SkinsSheet) over the Menu (omitted: no row). Free everywhere: never locked.
+   */
+  skins?: SkinsMenuInfo;
   /**
    * The "Foldable screen" setting (src/layout/fold.ts), under Appearance: offered where a fold is
    * reported or can be assumed, so the setting can act (omitted: no section). `postureReported`: the
@@ -96,6 +104,14 @@ export interface MenuSheetProps {
    * rating chart's games (omitted: neither opens anything).
    */
   onOpenGame?: (id: string) => void;
+}
+
+/** The Menu's "Board & pieces": the skins in use and where a choice goes. */
+export interface SkinsMenuInfo {
+  board: BoardThemeId;
+  pieces: PieceSetId;
+  onBoard: (id: BoardThemeId) => void;
+  onPieces: (id: PieceSetId) => void;
 }
 
 /** The Menu's Pro section. */
@@ -186,6 +202,7 @@ export function MenuSheet({
   bots,
   theme,
   onThemeChange,
+  skins,
   foldable,
   engine,
   onRetryDualEngines,
@@ -206,17 +223,22 @@ export function MenuSheet({
   const confirmId = useId();
   const themeLabelId = useId();
   const foldLabelId = useId();
+  /** The "Board & pieces" sheet is open over the Menu (it closes with the Menu). */
+  const [skinsOpen, setSkinsOpen] = useState(false);
 
   // Never reopen in the confirm state; leave it if resigning becomes impossible.
   useEffect(() => {
     if (!open || !canResign) setConfirming(false);
   }, [open, canResign]);
+  useEffect(() => {
+    if (!open) setSkinsOpen(false);
+  }, [open]);
 
   const recent = profile.history.slice(0, RECENT_GAMES);
   const arrowsLocked = !!pro?.arrowsLocked;
   const threatsLocked = !!pro?.threatsLocked;
 
-  return (
+  const menu = (
     <Sheet open={open} onClose={onClose} title="Menu" class="menu">
       <section class="sheet-section">
         <div class="menu-actions">
@@ -370,12 +392,32 @@ export function MenuSheet({
         </div>
       </section>
 
-      {theme && onThemeChange && (
-        <section class="sheet-section">
+      {((theme && onThemeChange) || skins) && (
+        <section class="sheet-section" data-id="appearance">
           <h3 class="sheet-label" id={themeLabelId}>
             Appearance
           </h3>
-          <ThemePicker labelledBy={themeLabelId} value={theme} onChange={onThemeChange} />
+          {theme && onThemeChange && <ThemePicker labelledBy={themeLabelId} value={theme} onChange={onThemeChange} />}
+          {skins && (
+            <div class="sheet-group menu-skins">
+              <button
+                type="button"
+                class="menu-row menu-row--link"
+                data-id="board-pieces"
+                aria-haspopup="dialog"
+                onClick={() => setSkinsOpen(true)}
+              >
+                <SkinThumb />
+                <span class="menu-row-text">
+                  <span class="menu-row-label">{SKINS_TITLE}</span>
+                  <span class="menu-row-desc" data-id="skins-summary">
+                    {skinsSummary(skins.board, skins.pieces)}
+                  </span>
+                </span>
+                <IconChevronRight size={18} class="menu-row-chevron" />
+              </button>
+            </div>
+          )}
         </section>
       )}
 
@@ -479,6 +521,22 @@ export function MenuSheet({
         <About />
       </section>
     </Sheet>
+  );
+  if (!skins) return menu;
+  // The "Board & pieces" sheet goes beside the Menu's, not in it (a sheet is position: fixed, and the
+  // Menu's panel is transformed); opened later, it is over the Menu and first for Escape.
+  return (
+    <>
+      {menu}
+      <SkinsSheet
+        open={open && skinsOpen}
+        board={skins.board}
+        pieces={skins.pieces}
+        onBoard={skins.onBoard}
+        onPieces={skins.onPieces}
+        onClose={() => setSkinsOpen(false)}
+      />
+    </>
   );
 }
 
